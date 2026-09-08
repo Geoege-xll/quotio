@@ -53,6 +53,42 @@ final class CPAUsageHistoricalDetailTests: XCTestCase {
         XCTAssertEqual(Set(result.models.map(\.id)), Set(["m", "other"]))
     }
 
+    func testRequestPagesContainTwentyRowsWhileMetricsCoverAllMatches() async throws {
+        let ledger = try historicalLedger([])
+        _ = try await ledger.ingest((0..<45).map { record("event-\($0)") }, collectedAt: day.addingTimeInterval(7200))
+        var seen: Set<String> = []
+        // 真实请求直接由数据库 LIMIT/OFFSET 分页，每一页的摘要都必须覆盖全部 45 次请求。
+        for (page, count) in [(1, 20), (2, 20), (3, 5)] {
+            let result = try await ledger.queryEvents(CPAUsageQuery(page: page, pageSize: CPAUsageTablePage.size))
+            XCTAssertEqual(result.events.count, count)
+            XCTAssertEqual(result.metrics.requests, 45)
+            XCTAssertEqual(result.metrics.tokens, 45 * 120)
+            XCTAssertEqual(result.totalPages, 3)
+            seen.formUnion(result.events.map(\.id))
+        }
+        XCTAssertEqual(seen.count, 45)
+    }
+
+    func testHistoricalAndPricePaginationPreserveCompleteTotals() async throws {
+        let ledger = try historicalLedger((0..<45).map { record("history-\($0)", model: "model-\($0)") })
+        for index in 0..<45 {
+            try await ledger.savePrice(CPAModelPrice(model: "model-\(index)", input: 1, output: 1))
+        }
+        let history = try await ledger.queryEvents(CPAUsageQuery())
+        let pricing = try await ledger.queryPricing(CPAUsageQuery())
+        // 这两类结果已经按模型／日期聚合；只切展示行，完整历史总量与费用仍取原查询结果。
+        for (page, count) in [(1, 20), (2, 20), (3, 5)] {
+            let range = CPAUsageTablePage(totalCount: 45, number: page)
+            XCTAssertEqual(range.rows(from: history.historicalBuckets).count, count)
+            XCTAssertEqual(range.rows(from: pricing.rows).count, count)
+        }
+        XCTAssertEqual(history.historicalRequests, 45)
+        XCTAssertEqual(pricing.summary.metrics.requests, 45)
+        XCTAssertEqual(pricing.summary.metrics.tokens, 45 * 120)
+        XCTAssertEqual(pricing.pricedRequests, 45)
+        XCTAssertEqual(try XCTUnwrap(pricing.estimatedCost), 45 * 0.00012, accuracy: 0.000000001)
+    }
+
     func testHistoryCoverageDistinguishesUnsupportedFiltersFromNoMatch() async throws {
         let ledger = try historicalLedger([record("old-a"), record("old-b")])
         for query in [CPAUsageQuery(source: "known-source"), CPAUsageQuery(apiKey: "known-key"),

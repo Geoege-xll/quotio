@@ -219,7 +219,9 @@ generate_appcast() {
     local zip_size
     local sign_output
     local signature
-    local channel=""
+    # 与 UpdaterService 的允许通道一致；旧 Intel 客户端会忽略新的 arm64 专属条目。
+    local channel="            <sparkle:channel>arm64</sparkle:channel>"
+    local minimum_system
     local existing_appcast
     local existing_items=""
     local new_item
@@ -241,14 +243,19 @@ generate_appcast() {
 
     zip_name="$(basename "${zip_file}")"
     zip_size="$(stat -f%z "${zip_file}")"
+    # 使用实际产物元数据，按 Sparkle 文档补齐三段版本，避免更新检查低于安装包要求。
+    minimum_system="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "${APP_PATH}/Contents/Info.plist")"
+    if [[ "${minimum_system}" =~ ^[0-9]+\.[0-9]+$ ]]; then minimum_system="${minimum_system}.0"; fi
+    [[ "${minimum_system}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Invalid minimum macOS version"
     case "${version}" in
-        *-alpha*|*-beta*|*-rc*) channel="            <sparkle:channel>beta</sparkle:channel>" ;;
+        *-alpha*|*-beta*|*-rc*) channel="            <sparkle:channel>arm64-beta</sparkle:channel>" ;;
     esac
 
     new_item="        <item>
             <title>Version ${version}</title>
             <sparkle:version>${build_number}</sparkle:version>
-            <sparkle:shortVersionString>${version}</sparkle:shortVersionString>"
+            <sparkle:shortVersionString>${version}</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>${minimum_system}</sparkle:minimumSystemVersion>"
     if [ -n "${channel}" ]; then
         new_item="${new_item}
 ${channel}"
@@ -377,6 +384,8 @@ ARCHIVE_ARGS=(
     -archivePath "${ARCHIVE_PATH}"
     -derivedDataPath "${DERIVED_DATA}"
     -destination "generic/platform=macOS"
+    # 发布范围已统一为 Apple Silicon，归档不受构建机当前架构或本地配置影响。
+    ARCHS=arm64
     SKIP_INSTALL=NO
     BUILD_LIBRARY_FOR_DISTRIBUTION=YES
     CODE_SIGN_IDENTITY="-"
@@ -396,6 +405,12 @@ xcodebuild "${ARCHIVE_ARGS[@]}" 2>&1 | tee "${BUILD_DIR}/release-build.log"
 ARCHIVED_APP="${ARCHIVE_PATH}/Products/Applications/${PROJECT_NAME}.app"
 [ -d "${ARCHIVED_APP}" ] || fail "archive did not contain ${PROJECT_NAME}.app"
 cp -R "${ARCHIVED_APP}" "${APP_PATH}"
+# 在签名和封装之前验证真实产物，防止配置漂移生成 Intel 包或错误的最低系统要求。
+APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${APP_PATH}/Contents/Info.plist")"
+[ "$(/usr/bin/lipo -archs "${APP_PATH}/Contents/MacOS/${APP_EXECUTABLE}")" = arm64 ] || fail "Release must contain arm64 only"
+[ "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "${APP_PATH}/Contents/Info.plist")" = 15.0 ] || fail "Release must require macOS 15.0"
+MACHO_MINIMUM_SYSTEM="$(xcrun vtool -show-build "${APP_PATH}/Contents/MacOS/${APP_EXECUTABLE}" | awk '/minos/ {print $2; exit}')"
+[ "${MACHO_MINIMUM_SYSTEM}" = 15.0 ] || fail "Mach-O deployment target must be macOS 15.0"
 if [ "${DISTRIBUTION}" = true ]; then
     sign_app_for_distribution
     notarize_app

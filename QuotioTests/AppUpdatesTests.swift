@@ -52,6 +52,21 @@ final class AppUpdatesTests: XCTestCase {
         XCTAssertTrue(AppReleaseConfiguration.isValidPublicKey(Data(repeating: 1, count: 32).base64EncodedString()))
     }
 
+    func testAppleSiliconChannelsDoNotMatchLegacyIntelClients() {
+        let stable = UpdaterService.releaseChannels(for: "stable")
+        let beta = UpdaterService.releaseChannels(for: "beta")
+        XCTAssertEqual(stable, ["arm64"])
+        XCTAssertEqual(beta, ["arm64", "arm64-beta"])
+        XCTAssertEqual(UpdaterService.releaseChannels(for: "unknown"), stable)
+        // Sparkle 对带 channel 的条目按允许集合匹配；旧稳定集合为空，旧测试集合只有 beta。
+        XCTAssertTrue(stable.isDisjoint(with: Set<String>()))
+        XCTAssertTrue(beta.isDisjoint(with: ["beta"]))
+    }
+
+    func testBuiltApplicationRequiresMacOS15() {
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "LSMinimumSystemVersion") as? String, "15.0")
+    }
+
     func testUpdaterImplementsSparkleCompletionSelector() {
         // 可选 Objective-C 委托方法拼写错误也能编译，因此同时验证协议 selector 和实际方法注册。
         // 只检查类型信息，不初始化服务、访问用户偏好或启动更新器。

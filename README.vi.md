@@ -80,7 +80,7 @@ Quotio có thể tự động cấu hình các công cụ sau:
 ## 🚀 Cài đặt
 
 ### Yêu cầu
-- macOS 14.0 (Sonoma) trở lên
+- Apple Silicon (arm64, M1+) — macOS 15.0 (Sequoia) trở lên
 - Kết nối internet để xác thực OAuth
 
 ### Homebrew (Khuyến nghị)

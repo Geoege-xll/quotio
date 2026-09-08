@@ -13,8 +13,9 @@
 			</array>
 		</dict>
 	</array>
+	<!-- 最低系统要求跟随构建配置，避免安装检查与编译目标不一致。 -->
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>PostHogHost</key>
 	<string>$(POSTHOG_HOST)</string>
 	<key>PostHogProjectToken</key>

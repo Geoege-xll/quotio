@@ -77,6 +77,40 @@ jobs:
       # ===========================================
       # 4. Build release artifacts
       # ===========================================
+      - name: Verify macOS 15 Apple Silicon compatibility
+        run: |
+          set -euo pipefail
+          # macos-15 标准 runner 使用 Apple Silicon；在真实最低系统大版本上先验证再封装。
+          # 同时验证镜像身份，防止 runner 标签变化后把其他系统上的结果当作 macOS 15 回归。
+          [[ "$(uname -m)" == arm64 ]]
+          [[ "$(sw_vers -productVersion)" == 15.* ]]
+          sw_vers -productVersion
+          mkdir -p build
+          xcodebuild -project Quotio.xcodeproj -scheme Quotio -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' -derivedDataPath build/CompatibilityDerivedData \
+            -resultBundlePath build/CompatibilityTests.xcresult -parallel-testing-enabled NO \
+            -only-testing:QuotioTests/CPAUsageDetailLayoutTests \
+            -only-testing:QuotioTests/CPAUsageTablePageTests \
+            -only-testing:QuotioTests/CPAUsageHistoricalDetailTests \
+            -only-testing:QuotioTests/CPAUsageDashboardTests \
+            -only-testing:QuotioTests/AppUpdatesTests \
+            -only-testing:QuotioTests/UsageStatisticsChartRenderingTests \
+            -only-testing:QuotioTests/UsageTrendPlotDataTests \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 60 CODE_SIGNING_ALLOWED=NO test \
+            2>&1 | tee build/compatibility-test.log
+
+      - name: Save compatibility test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-15-arm64-compatibility
+          path: |
+            build/CompatibilityTests.xcresult
+            build/compatibility-test.log
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Install create-dmg
         run: brew install create-dmg
 

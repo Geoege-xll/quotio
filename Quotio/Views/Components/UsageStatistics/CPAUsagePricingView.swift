@@ -8,6 +8,8 @@ struct CPAUsagePricingView: View {
     @State private var model = CPAUsagePricingViewModel()
     @State private var editedRow: CPAUsagePriceRow?
     @State private var refreshID = UUID()
+    @State private var page = 1
+    @State private var showsUnitPrices = false
     @Environment(\.scenePhase) private var scenePhase
 
     init(store: UsageStatisticsStore, selection: CPAUsageSelection) {
@@ -20,45 +22,66 @@ struct CPAUsagePricingView: View {
         let active: Bool
     }
     private var query: Query { .init(selection: selection, refreshID: refreshID, active: scenePhase == .active) }
+    private var tablePage: CPAUsageTablePage {
+        CPAUsageTablePage(totalCount: model.result?.rows.count ?? 0, number: page)
+    }
 
     var body: some View {
-        VStack(spacing: 16) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    CPAUsageFilterBar(selection: $selection, options: model.result?.summary).quotioCard()
-                    if let result = model.result {
-                        HStack(spacing: 20) {
-                            summary("usage.pricing.estimated", CPAUsagePriceFormatting.money(result.estimatedCost, isPartial: result.hasPartialEstimate))
-                            // 精确筛选若无法纳入旧日桶，就缺少总体分母；已知部分全已定价也不能显示 100%。
-                            summary("usage.pricing.coverage", result.omittedHistoricalRequests == 0 && result.summary.metrics.requests > 0
-                                ? String(format: "%.1f%%", Double(result.pricedRequests) / Double(result.summary.metrics.requests) * 100) : "—")
-                            summary("usage.pricing.pricedRequests", result.pricedRequests.formatted())
-                            summary("usage.cpa.requests", result.omittedHistoricalRequests > 0
-                                ? (result.summary.metrics.requests > 0 ? "≥ " + result.summary.metrics.requests.formatted() : "—")
-                                : result.summary.metrics.requests.formatted())
-                        }.quotioCard()
-                    }
-                }.padding(.horizontal, 24).padding(.top, 20)
-            }.frame(height: 280)
-            // 覆盖说明属于当前结果的必要上下文，放在固定表头外，避免被筛选区域的滚动高度遮住。
-            pricingNotes.padding(.horizontal, 24)
-            priceTable
-                .overlay {
-                    if model.result == nil && model.errorKey == nil { ProgressView() }
-                    else if let key = model.errorKey, model.result == nil {
-                        ContentUnavailableView(key.localized(), systemImage: "exclamationmark.triangle")
-                    }
-                    else if model.result?.rows.isEmpty == true {
-                        ContentUnavailableView("usage.empty.title".localized(), systemImage: "dollarsign.circle",
-                            description: Text("usage.records.noMatches".localized()))
+        CPAUsageDetailPage {
+            VStack(alignment: .leading, spacing: 14) {
+                CPAUsageFilterBar(selection: $selection, options: model.result?.summary).quotioCard()
+                if let result = model.result {
+                    // 四项摘要与请求明细采用相同的内嵌指标卡，窄窗口按两列排布。
+                    CPAUsageAdaptiveGrid(maximumColumns: 4, minimumColumnWidth: 130) {
+                        summary("usage.pricing.estimated", CPAUsagePriceFormatting.money(result.estimatedCost, isPartial: result.hasPartialEstimate))
+                        // 精确筛选若无法纳入旧日桶，就缺少总体分母；已知部分全已定价也不能显示 100%。
+                        summary("usage.pricing.coverage", result.omittedHistoricalRequests == 0 && result.summary.metrics.requests > 0
+                            ? String(format: "%.1f%%", Double(result.pricedRequests) / Double(result.summary.metrics.requests) * 100) : "—")
+                        summary("usage.pricing.pricedRequests", result.pricedRequests.formatted())
+                        summary("usage.cpa.requests", result.omittedHistoricalRequests > 0
+                            ? (result.summary.metrics.requests > 0 ? "≥ " + result.summary.metrics.requests.formatted() : "—")
+                            : result.summary.metrics.requests.formatted())
                     }
                 }
-                .padding(.horizontal, 24)
-            Text("usage.pricing.formula".localized())
-                .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 24).padding(.bottom, 20)
+                // 完整口径随筛选与摘要一起滚动，不再作为强制撑高窗口的固定说明块。
+                pricingNotes
+            }
+        } content: {
+            // 历史说明或价格覆盖说明会改变行高；把当前页是否含第二行文字传给测量器。
+            CPAUsageTableCard(layoutIdentity: [showsUnitPrices] + tablePage.rows(from: model.result?.rows ?? []).map {
+                $0.historicalRequests > 0 || $0.price == nil || $0.hasPartialEstimate
+            }) {
+                HStack(spacing: 10) {
+                    Label("usage.pricing.title".localized(), systemImage: "dollarsign.circle")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 8)
+                    if showsUnitPrices {
+                        Text("usage.pricing.unit".localized()).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            } content: {
+                priceTable
+                    .overlay {
+                        if model.result == nil && model.errorKey == nil { ProgressView() }
+                        else if let key = model.errorKey, model.result == nil {
+                            ContentUnavailableView(key.localized(), systemImage: "exclamationmark.triangle")
+                        } else if model.result?.rows.isEmpty == true {
+                            ContentUnavailableView("usage.empty.title".localized(), systemImage: "dollarsign.circle",
+                                description: Text("usage.records.noMatches".localized()))
+                        }
+                    }
+            } footer: {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("usage.pricing.formula".localized()).font(.caption2)
+                    CPAUsageTablePagination(page: tablePage, isLoading: model.result == nil && model.errorKey == nil) {
+                        page = $0
+                    }
+                }
+            }
+            // 默认窗口优先展示模型、请求数、Tokens 和费用；宽度充足时才展开两列单价。
+            // 只把跨过阈值的布尔变化存入状态，拖动窗口的每一个像素不会触发数据查询。
+            .onGeometryChange(for: Bool.self) { $0.size.width >= 820 } action: { showsUnitPrices = $0 }
         }
-        .quotioPage()
         .navigationTitle("usage.pricing.title".localized())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -86,45 +109,62 @@ struct CPAUsagePricingView: View {
         .sheet(item: $editedRow) { row in
             CPAModelPriceEditor(store: store, row: row) { refreshID = UUID() }
         }
+        .onChange(of: selection) { _, _ in page = 1 }
+        .onChange(of: model.result?.rows.count) { _, count in
+            // 后台结果减少时回到仍存在的最后一页；临时加载态不丢失当前页码。
+            guard let count else { return }
+            page = CPAUsageTablePage(totalCount: count, number: page).number
+        }
     }
 
     private var priceTable: some View {
-        Table(model.result?.rows ?? []) {
+        Table(tablePage.rows(from: model.result?.rows ?? [])) {
             TableColumn("usage.model".localized()) { row in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(row.model.isEmpty ? "usage.records.unknown".localized() : row.model)
-                        .lineLimit(1).truncationMode(.middle).help(row.model)
-                    HStack(spacing: 8) {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(row.model.isEmpty ? "usage.records.unknown".localized() : row.model)
+                            .fontWeight(.medium).lineLimit(1).truncationMode(.middle).help(row.model)
                         if row.historicalRequests > 0 {
                             Text(String(format: "usage.pricing.historyRow".localized(), row.historicalRequests.formatted()))
-                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                .font(.caption2).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                         }
-                        Spacer(minLength: 0)
-                        // 编辑入口固定在模型列内，即使右侧价格指标需要横向滚动，也能立即为该模型定价。
-                        Button { editedRow = row } label: {
-                            if row.price == nil { Text("usage.pricing.configurePrice".localized()) }
-                            else { Image(systemName: "pencil") }
-                        }
-                        .buttonStyle(.borderless).font(.caption).fixedSize()
-                        .help("usage.pricing.edit".localized()).accessibilityLabel("usage.pricing.edit".localized())
-                        .disabled(row.model.isEmpty)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // 编辑入口与模型同行且统一使用图标，避免“配置价格”文字挤占模型列。
+                    // 未配置的价格仍由费用列的明确文字说明，完整四类单价都可在编辑面板查看。
+                    Button { editedRow = row } label: {
+                        Image(systemName: row.price == nil ? "plus" : "pencil")
+                    }
+                    .buttonStyle(.quotioMicroCapsule).fixedSize()
+                    .help("usage.pricing.edit".localized()).accessibilityLabel("usage.pricing.edit".localized())
+                    .disabled(row.model.isEmpty)
+                }
+                .padding(.vertical, 6)
+            }.width(min: 150, ideal: 210)
+            TableColumn("usage.cpa.requests".localized()) { row in Text(row.requests.formatted()).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing) }.width(64)
+            TableColumn("Tokens") { row in Text(row.tokens.formattedCompact).monospacedDigit().help(row.tokens.formatted()).frame(maxWidth: .infinity, alignment: .trailing) }.width(72)
+            TableColumn("usage.pricing.estimated".localized()) { row in
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(CPAUsagePriceFormatting.money(row.estimatedCost, isPartial: row.hasPartialEstimate))
+                        .monospacedDigit().fontWeight(.medium).lineLimit(1)
+                    // 覆盖率不再单独占一列：只对未定价／部分估算行显示说明，精确行保留悬停详情。
+                    if row.price == nil {
+                        Text("usage.pricing.unconfigured".localized()).font(.caption2).foregroundStyle(.secondary)
+                    } else if row.hasPartialEstimate {
+                        Text(String(format: "usage.pricing.rowCoverage".localized(), row.pricedRequests, row.requests))
+                            .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
                     }
                 }
-            }.width(min: 170, ideal: 230)
-            TableColumn("usage.cpa.requests".localized()) { row in Text(row.requests.formatted()).monospacedDigit() }.width(85)
-            TableColumn("Tokens") { row in Text(row.tokens.formattedCompact).monospacedDigit() }.width(90)
-            TableColumn("usage.pricing.estimated".localized()) { row in
-                Text(CPAUsagePriceFormatting.money(row.estimatedCost, isPartial: row.hasPartialEstimate)).monospacedDigit()
-                    .help(row.price == nil ? "usage.pricing.unpricedRow".localized()
-                        : (row.hasPartialEstimate ? "usage.pricing.partialNotice".localized() : "usage.pricing.formula".localized()))
-            }.width(min: 100, ideal: 125)
-            TableColumn("usage.pricing.inputPrice".localized()) { row in Text(CPAUsagePriceFormatting.rate(row.price?.input)).monospacedDigit() }.width(90)
-            TableColumn("usage.pricing.outputPrice".localized()) { row in Text(CPAUsagePriceFormatting.rate(row.price?.output)).monospacedDigit() }.width(90)
-            TableColumn("usage.pricing.coverage".localized()) { row in
-                Text(String(format: "usage.pricing.rowCoverage".localized(), row.pricedRequests, row.requests))
-                    .monospacedDigit().help(row.price == nil ? "usage.pricing.unconfigured".localized() : "usage.pricing.incomplete".localized())
-            }.width(90)
-
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .help(CPAUsagePriceFormatting.money(row.estimatedCost, isPartial: row.hasPartialEstimate)
+                    + "\n" + (row.price == nil ? "usage.pricing.unpricedRow".localized()
+                    : String(format: "usage.pricing.rowCoverage".localized(), row.pricedRequests, row.requests)
+                        + "\n" + (row.hasPartialEstimate ? "usage.pricing.partialNotice".localized() : "usage.pricing.formula".localized())))
+            }.width(110)
+            if showsUnitPrices {
+                TableColumn("usage.pricing.inputPrice".localized()) { row in Text(CPAUsagePriceFormatting.rate(row.price?.input)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing) }.width(90)
+                TableColumn("usage.pricing.outputPrice".localized()) { row in Text(CPAUsagePriceFormatting.rate(row.price?.output)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing) }.width(90)
+            }
         }
     }
     /// 历史存在、筛选遗漏、费用下界和读取错误分别保留明确文字，不用颜色替代统计口径。
@@ -155,7 +195,7 @@ struct CPAUsagePricingView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(key.localized()).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.title3.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(maxWidth: .infinity, alignment: .leading).quotioInsetCard()
     }
 }
 

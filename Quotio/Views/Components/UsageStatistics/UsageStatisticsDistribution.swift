@@ -1,7 +1,6 @@
 // Copyright 2026 AIUsage contributors. Licensed under Apache-2.0.
 // 参考 ProxyStatsView 的摘要与分布布局（bdb83bbe）；修改为客户端 Token 口径并补足完整分布与无障碍读取。
 import SwiftUI
-import Charts
 
 /// 饼图与明细表复用完整排名。仅饼图把第六名之后合并为「其他」，
 /// 合并值仍参加扇区和图例，避免参考代码直接 prefix(6) 导致图形漏计。
@@ -44,21 +43,9 @@ struct UsageStatisticsInsights: View {
                 Text("usage.tokens".localized()).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
             }
             if total > 0 {
-                Chart(slices) { slice in
-                    SectorMark(angle: .value("usage.tokens".localized(), slice.tokens),
-                               innerRadius: .ratio(0.55), angularInset: 1.5)
-                        .foregroundStyle(slice.color).cornerRadius(4)
-                        .annotation(position: .overlay) {
-                            if Double(slice.tokens) / Double(total) >= 0.1 {
-                                Text((Double(slice.tokens) / Double(total)).formatted(.percent.precision(.fractionLength(0))))
-                                    .font(.system(size: 10, weight: .semibold)).monospacedDigit().foregroundStyle(.primary)
-                                    .padding(.horizontal, 5).padding(.vertical, 2)
-                                    .background(QuotioTheme.Colors.cardBackground(for: colorScheme), in: Capsule())
-                            }
-                        }
-                        .accessibilityLabel(slice.name)
-                        .accessibilityValue(slice.tokens.formatted())
-                }
+                // 环形图只有最多六个扇区，使用固定几何绘制并独立放置比例标签，
+                // 避免 SectorMark.annotation 的锚点测量反复触发布局事务。
+                UsageDistributionDonut(slices: slices, total: total)
                 .frame(height: 225)
                 .overlay {
                     VStack(spacing: 2) {
@@ -81,6 +68,9 @@ struct UsageStatisticsInsights: View {
                         Text(share(slice.tokens, total: total)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
+                    // 圆环本身不重复播报；图例显式提供完整数值，避免缩写丢失「其他」分组的精确用量。
+                    .accessibilityLabel(slice.name)
+                    .accessibilityValue(slice.tokens.formatted() + " Tokens · " + share(slice.tokens, total: total))
                 }
             }
         }
@@ -241,15 +231,8 @@ struct UsageStatisticsInsights: View {
     }
 
     private func sparkline(_ points: [UsageStatisticsDay], color: Color) -> some View {
-        Chart(points) { point in
-            LineMark(x: .value("usage.day".localized(), point.day), y: .value("Tokens", point.totals.totalTokens))
-                .foregroundStyle(color).lineStyle(StrokeStyle(lineWidth: 1.5))
-            if points.count == 1 {
-                PointMark(x: .value("usage.day".localized(), point.day), y: .value("Tokens", point.totals.totalTokens))
-                    .foregroundStyle(color).symbolSize(10)
-            }
-        }
-        .chartXAxis(.hidden).chartYAxis(.hidden).accessibilityHidden(true)
+        // 26pt 的行内趋势没有坐标轴或交互，不需要为每个模型创建完整 Charts 布局图。
+        UsageStatisticsSparkline(points: points, color: color).equatable()
     }
 
     private func sparklineMap(models: [UsageStatisticsModel]) -> [String: [UsageStatisticsDay]] {
@@ -296,6 +279,106 @@ private struct UsageDistributionSlice: Identifiable {
     let name: String
     let tokens: Int
     let color: Color
+}
+
+/// 扇区与比例标签都只依赖既定画布，不通过 Charts annotation 反向测量锚点。
+/// 扇区总量和「其他」分组沿用原投影；图例保留完整可访问名称和数值。
+private struct UsageDistributionDonut: View {
+    let slices: [UsageDistributionSlice]
+    let total: Int
+    @Environment(\.colorScheme) private var colorScheme
+
+    private struct Segment: Identifiable {
+        let slice: UsageDistributionSlice
+        let start: Double
+        let end: Double
+        var id: String { slice.id }
+    }
+
+    private var segments: [Segment] {
+        guard total > 0 else { return [] }
+        var start = 0.0
+        return slices.map { slice in
+            let end = min(1, start + Double(slice.tokens) / Double(total))
+            defer { start = end }
+            return Segment(slice: slice, start: start, end: end)
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let radius = min(geometry.size.width, geometry.size.height) / 2
+            let thickness = radius * 0.45
+            let middleRadius = radius - thickness / 2
+            let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
+            ZStack {
+                ForEach(segments) { segment in
+                    UsageDistributionArc(start: segment.start, end: segment.end, hasGap: slices.count > 1)
+                        .stroke(segment.slice.color, style: StrokeStyle(lineWidth: thickness, lineCap: .butt))
+                    // 比例阈值直接使用原始数量，避免累计角度相减让恰好 10% 的扇区跌到阈值以下。
+                    if Double(segment.slice.tokens) / Double(total) >= 0.1 {
+                        let angle = ((segment.start + segment.end) / 2 * 360 - 90) * .pi / 180
+                        Text((Double(segment.slice.tokens) / Double(total)).formatted(.percent.precision(.fractionLength(0))))
+                            .font(.system(size: 10, weight: .semibold)).monospacedDigit().foregroundStyle(.primary)
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(QuotioTheme.Colors.cardBackground(for: colorScheme), in: Capsule())
+                            .position(x: center.x + middleRadius * cos(angle), y: center.y + middleRadius * sin(angle))
+                    }
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct UsageDistributionArc: Shape {
+    let start: Double
+    let end: Double
+    let hasGap: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let outerRadius = min(rect.width, rect.height) / 2
+        // 极小扇区按自身宽度缩小间隔，不能因统一间隔产生反向或接近整圈的假扇区。
+        let gap = hasGap ? min(0.75, (end - start) * 360 / 4) : 0
+        var path = Path()
+        path.addArc(center: CGPoint(x: rect.midX, y: rect.midY), radius: outerRadius * 0.775,
+                    startAngle: .degrees(start * 360 - 90 + gap),
+                    endAngle: .degrees(end * 360 - 90 - gap), clockwise: false)
+        return path
+    }
+}
+
+/// 小趋势图用单次 Canvas 绘制有界折线，模型行悬停与展开不再驱动多套 Charts 锚点布局。
+struct UsageStatisticsSparkline: View, Equatable {
+    let points: [UsageStatisticsDay]
+    let color: Color
+
+    var body: some View {
+        let sampled = UsageTrendPlotData.sampled(points, maximumPoints: 64)
+        Canvas { context, size in
+            guard let first = sampled.first, let last = sampled.last else { return }
+            let plot = CGRect(origin: .zero, size: size).insetBy(dx: 2, dy: 2)
+            guard plot.width > 0, plot.height > 0 else { return }
+            let span = last.day.timeIntervalSince(first.day)
+            let maximum = Double(max(1, sampled.map { $0.totals.totalTokens }.max() ?? 0))
+            func position(_ day: UsageStatisticsDay) -> CGPoint {
+                let fraction = span > 0 ? day.day.timeIntervalSince(first.day) / span : 0.5
+                return CGPoint(x: plot.minX + plot.width * fraction,
+                               y: plot.maxY - plot.height * Double(day.totals.totalTokens) / maximum)
+            }
+            if sampled.count == 1 {
+                let point = position(first)
+                context.fill(Path(ellipseIn: CGRect(x: point.x - 1.75, y: point.y - 1.75, width: 3.5, height: 3.5)), with: .color(color))
+            } else {
+                var path = Path()
+                path.move(to: position(first))
+                for day in sampled.dropFirst() { path.addLine(to: position(day)) }
+                context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+            }
+        }
+        .accessibilityHidden(true)
+    }
 }
 
 /// 模型行属于可交互的胶囊控件；展开明细另用内嵌槽，不再靠分割线表达层次。

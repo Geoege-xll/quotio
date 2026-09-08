@@ -40,7 +40,7 @@ Client Token usage, CPA gateway requests, and tool calls measure different thing
 
 ## Installation
 
-Requires **macOS 14 or later**. Download `Quotio-1.0.0.dmg` or the ZIP from this repository's [Releases](https://github.com/Geoege-xll/quotio/releases). The app's display name is **QuotioPlus**. Release builds support both Apple Silicon and Intel Macs.
+Requires **macOS 15 or later and an Apple Silicon Mac (M1 or later)**. Download `Quotio-1.0.0.dmg` or the ZIP from this repository's [Releases](https://github.com/Geoege-xll/quotio/releases). The app's display name is **QuotioPlus**. Release builds contain arm64 only; Intel Macs are no longer supported.
 
 Each release states whether it has Developer ID signing and Apple notarization. Builds made without distribution credentials use ad-hoc signing and may require additional confirmation from macOS. Automatic update installation is enabled only when this project's Sparkle signing configuration is complete; other builds provide manual updates through this repository's release page.
 

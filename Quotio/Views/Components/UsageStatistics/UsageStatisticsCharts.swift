@@ -55,12 +55,7 @@ struct UsageStatisticsSummary: View {
 struct UsageStatisticsTrend: View {
     let days: [UsageStatisticsDay]
     var accent: Color = QuotioTheme.Colors.info
-    @State private var selectedDate: Date?
-
-    private var selectedDay: UsageStatisticsDay? {
-        guard let selectedDate else { return nil }
-        return days.min { abs($0.day.timeIntervalSince(selectedDate)) < abs($1.day.timeIntervalSince(selectedDate)) }
-    }
+    @State private var hoverState = UsageTrendHoverState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -70,57 +65,12 @@ struct UsageStatisticsTrend: View {
                 Spacer()
                 Text("usage.tokens".localized()).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
             }
-            Chart {
-                ForEach(days) { day in
-                    AreaMark(x: .value("usage.day".localized(), day.day),
-                             y: .value("usage.tokens".localized(), day.totals.totalTokens))
-                        .foregroundStyle(LinearGradient(colors: [accent.opacity(0.22), accent.opacity(0.02)], startPoint: .top, endPoint: .bottom))
-                    LineMark(x: .value("usage.day".localized(), day.day),
-                             y: .value("usage.tokens".localized(), day.totals.totalTokens))
-                        .foregroundStyle(accent).lineStyle(StrokeStyle(lineWidth: 2))
-                    PointMark(x: .value("usage.day".localized(), day.day),
-                              y: .value("usage.tokens".localized(), day.totals.totalTokens))
-                        .foregroundStyle(accent).symbolSize(days.count < 32 ? 20 : 5)
-                        .accessibilityLabel(day.day.formatted(date: .abbreviated, time: .omitted))
-                        .accessibilityValue(day.totals.totalTokens.formatted())
-                }
-                if let selectedDay {
-                    RuleMark(x: .value("usage.day".localized(), selectedDay.day))
-                        .foregroundStyle(.secondary.opacity(0.5)).lineStyle(StrokeStyle(dash: [4]))
-                }
-            }
-            .chartXSelection(value: $selectedDate)
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
-                    Rectangle().fill(.clear).contentShape(Rectangle())
-                        .onContinuousHover { phase in
-                            switch phase {
-                            case .active(let location):
-                                // ChartProxy 的 x 坐标相对绘图区，不包含左侧坐标轴留白。
-                                // 仅在真实绘图区内显示悬停值，离开图表或移入坐标轴立即清除。
-                                guard let anchor = proxy.plotFrame else { selectedDate = nil; return }
-                                let plot = geometry[anchor]
-                                guard plot.contains(location) else { selectedDate = nil; return }
-                                selectedDate = proxy.value(atX: location.x - plot.minX, as: Date.self)
-                            case .ended:
-                                selectedDate = nil
-                            }
-                        }
-                }
-            }
-            .chartYAxis { AxisMarks(position: .leading) }
-            .chartXAxis { AxisMarks(values: .automatic(desiredCount: 7)) }
-            .frame(height: 220)
-            HStack {
-                if let selectedDay {
-                    Text(selectedDay.day, format: .dateTime.year().month().day())
-                    Spacer()
-                    Text(selectedDay.totals.totalTokens.formatted() + " Tokens").monospacedDigit()
-                } else {
-                    Text("usage.replica.hoverHint".localized()).foregroundStyle(.secondary)
-                }
-            }
-            .font(.caption).frame(height: 18)
+            // 图表只依赖真实数据与色彩。鼠标状态由独立覆盖层和读数行观察，
+            // 不向 ChartContent 动态插入 RuleMark，也不同时使用系统选择与鼠标两条写入路径。
+            UsageStatisticsTrendPlot(days: days, accent: accent, hoverState: hoverState)
+                .equatable()
+                .frame(height: 220)
+            UsageTrendReadout(days: days, state: hoverState)
             DisclosureGroup("usage.dailyDetails".localized()) {
                 LazyVStack(spacing: 8) {
                     ForEach(days) { day in
@@ -138,6 +88,112 @@ struct UsageStatisticsTrend: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(UsageAnalyticsSurface())
+    }
+}
+
+/// 独立的悬停状态仅在命中日期改变时发布；图表、坐标轴和页面均不读取它的选中值。
+@MainActor @Observable
+final class UsageTrendHoverState {
+    private(set) var date: Date?
+
+    func select(_ date: Date?) {
+        guard self.date != date else { return }
+        self.date = date
+    }
+}
+
+/// 用值语义比较隔离采集进度与父页面刷新，避免没有数据变化时重新创建 Chart 的布局图。
+struct UsageStatisticsTrendPlot: View, Equatable {
+    let days: [UsageStatisticsDay]
+    let accent: Color
+    let hoverState: UsageTrendHoverState
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.days == rhs.days && lhs.accent == rhs.accent && lhs.hoverState === rhs.hoverState
+    }
+
+    var body: some View {
+        let points = UsageTrendPlotData.sampled(days)
+        let maximum = max(1, points.map { $0.totals.totalTokens }.max() ?? 0)
+        Chart(points) { day in
+            AreaMark(x: .value("usage.day".localized(), day.day), y: .value("usage.tokens".localized(), day.totals.totalTokens))
+                .foregroundStyle(LinearGradient(colors: [accent.opacity(0.22), accent.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+            LineMark(x: .value("usage.day".localized(), day.day), y: .value("usage.tokens".localized(), day.totals.totalTokens))
+                .foregroundStyle(accent).lineStyle(StrokeStyle(lineWidth: 2))
+                .symbol(.circle).symbolSize(points.count < 32 ? 20 : 0)
+                .accessibilityLabel(day.day.formatted(date: .abbreviated, time: .omitted))
+                .accessibilityValue(day.totals.totalTokens.formatted())
+        }
+        .chartYScale(domain: 0...maximum)
+        .chartYAxis { AxisMarks(position: .leading) }
+        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 7)) }
+        .chartOverlay { proxy in
+            UsageTrendHoverLayer(days: days, state: hoverState, proxy: proxy)
+        }
+        // 过滤和模型行展开的祖先动画不能重新插值图表锚点；提示线在覆盖层单独绘制。
+        .transaction { $0.animation = nil }
+        .onChange(of: days) { _, _ in hoverState.select(nil) }
+        .onDisappear { hoverState.select(nil) }
+    }
+}
+
+/// 只在覆盖层解析绘图区坐标，悬停线不参与图表标记、坐标域或锚点的尺寸测量。
+private struct UsageTrendHoverLayer: View {
+    let days: [UsageStatisticsDay]
+    let state: UsageTrendHoverState
+    let proxy: ChartProxy
+
+    var body: some View {
+        GeometryReader { geometry in
+            if let anchor = proxy.plotFrame {
+                let plot = geometry[anchor]
+                ZStack(alignment: .topLeading) {
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location): select(at: location, plot: plot)
+                            case .ended: state.select(nil)
+                            }
+                        }
+                        .onTapGesture { location in select(at: location, plot: plot) }
+                    if let date = state.date, let x = proxy.position(forX: date), x >= 0, x <= plot.width {
+                        Path { path in
+                            path.move(to: CGPoint(x: plot.minX + x, y: plot.minY))
+                            path.addLine(to: CGPoint(x: plot.minX + x, y: plot.maxY))
+                        }
+                        .stroke(.secondary.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [4]))
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
+            }
+        }
+    }
+
+    private func select(at location: CGPoint, plot: CGRect) {
+        guard plot.contains(location), let date = proxy.value(atX: location.x - plot.minX, as: Date.self) else {
+            state.select(nil)
+            return
+        }
+        state.select(UsageTrendPlotData.nearest(to: date, in: days)?.day)
+    }
+}
+
+/// 读数使用完整日明细，不用抽样值代替某一天的真实用量；该行更新不重建图表。
+private struct UsageTrendReadout: View {
+    let days: [UsageStatisticsDay]
+    let state: UsageTrendHoverState
+
+    var body: some View {
+        HStack {
+            if let date = state.date, let selectedDay = UsageTrendPlotData.nearest(to: date, in: days) {
+                Text(selectedDay.day, format: .dateTime.year().month().day())
+                Spacer()
+                Text(selectedDay.totals.totalTokens.formatted() + " Tokens").monospacedDigit()
+            } else {
+                Text("usage.replica.hoverHint".localized()).foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption).frame(height: 18)
     }
 }
 

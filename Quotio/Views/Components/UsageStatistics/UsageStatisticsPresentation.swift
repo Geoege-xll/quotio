@@ -28,7 +28,7 @@ nonisolated enum UsageStatisticsPeriod: String, CaseIterable, Identifiable {
     }
 }
 
-nonisolated struct UsageStatisticsDay: Identifiable {
+nonisolated struct UsageStatisticsDay: Identifiable, Equatable, Sendable {
     let day: Date
     let totals: UsageTotals
     var id: Date { day }

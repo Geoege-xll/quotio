@@ -19,7 +19,9 @@ struct CPAUsageOverviewSection: View {
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
 
-            CPAUsageAdaptiveGrid(maximumColumns: 4, minimumColumnWidth: 145) {
+            // 主指标优先四等分；降低原 145pt 的列宽门槛，让默认窗口能够一行展示四张卡。
+            // 宽度不足仍沿用共享布局的两列／单列回退，卡片文字、数值和紧凑处理保持原样。
+            CPAUsageAdaptiveGrid(maximumColumns: 4, minimumColumnWidth: 120) {
                 CPAUsageOverviewMetric(metric: presentation.requests, icon: "network", tint: .blue)
                 CPAUsageOverviewMetric(metric: presentation.tokens, icon: "number", tint: .purple)
                 CPAUsageOverviewMetric(metric: presentation.successRate, icon: "checkmark.seal", tint: .green)
@@ -70,12 +72,14 @@ private struct CPAUsageOverviewMetric: View {
 }
 
 /// 次级指标共享一个轻量底面，按四组紧凑清单排布；组内名称和值同行，避免空值占据大块高度。
-/// 宽窗口四列，中等宽度两列，极窄时单列；沿用现有 Layout 测量，不增加几何状态或查询计算。
+/// 默认窗口四列，宽度不足时两列，极窄时单列；沿用现有 Layout 测量，不增加几何状态或查询计算。
 struct CPAUsageOverviewDetails: View {
     let presentation: CPAUsageOverviewPresentation
 
     var body: some View {
-        CPAUsageAdaptiveGrid(maximumColumns: 4, minimumColumnWidth: 135, spacing: 16) {
+        // 次级底面还有左右各 12pt 内边距：原 135pt 列宽要求外层至少 612pt，默认约 560pt 会退成两列。
+        // 改为 120pt 后，外层达到 552pt 即可四等分；更窄时仍按原布局换行，不改组内文字和数值处理。
+        CPAUsageAdaptiveGrid(maximumColumns: 4, minimumColumnWidth: 120, spacing: 16) {
             CPAUsageOverviewGroup(titleKey: "usage.dashboard.tokenUsage",
                 metrics: Array(presentation.tokenAndCache.prefix(3)))
             CPAUsageOverviewGroup(titleKey: "usage.dashboard.cache",

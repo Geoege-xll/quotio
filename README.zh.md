@@ -40,7 +40,7 @@
 
 ## 安装
 
-要求 **macOS 14 或更新版本**。从本仓库的 [Releases](https://github.com/Geoege-xll/quotio/releases) 下载 `Quotio-1.0.0.dmg` 或 ZIP，应用显示名称为 **QuotioPlus**，发布构建同时支持 Apple Silicon 和 Intel Mac。
+要求 **macOS 15 或更新版本，以及 Apple Silicon Mac（M1 或更新芯片）**。从本仓库的 [Releases](https://github.com/Geoege-xll/quotio/releases) 下载 `Quotio-1.0.0.dmg` 或 ZIP，应用显示名称为 **QuotioPlus**，发布构建仅包含 arm64，不再支持 Intel Mac。
 
 每个发行版会注明是否经过 Developer ID 签名及 Apple 公证。未配置发布证书时，安装包使用临时签名，macOS 可能要求额外确认。自动安装更新仅在本项目的 Sparkle 签名配置完整时启用；其他构建通过本仓库发布页手动更新。
 

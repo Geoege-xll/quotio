@@ -59,6 +59,13 @@ final class UpdaterService: NSObject {
     nonisolated static func automaticCheckPreference(defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
     }
+
+    /// Sparkle 2.8 的旧客户端没有硬件架构过滤。新包使用 arm64 专属通道，防止原来的
+    /// Intel 安装把仅含 Apple Silicon 的包当成可用更新；用户的稳定／测试偏好保持原值。
+    /// 旧 Apple Silicon 安装需要手动安装本次包一次，之后继续沿用这组通道检查更新。
+    nonisolated static func releaseChannels(for channel: String) -> Set<String> {
+        channel == "beta" ? ["arm64", "arm64-beta"] : ["arm64"]
+    }
     
     /// Last time updates were checked
     // 只在检查完成时发布一次；不依赖每秒变化的相对时间迫使视图重新读取 Sparkle 属性。
@@ -184,7 +191,7 @@ extension UpdaterService: SPUUpdaterDelegate {
     
     nonisolated func allowedChannels(for updater: SPUUpdater) -> Set<String> {
         let channel = UserDefaults.standard.string(forKey: "updateChannel") ?? "stable"
-        return channel == "beta" ? Set(["beta"]) : Set()
+        return Self.releaseChannels(for: channel)
     }
     
     // 实现 Sparkle 的三参数可选委托方法；检查成功、关闭或跳过更新时都会结束检查状态。
