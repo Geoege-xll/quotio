@@ -287,4 +287,74 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertFalse(loadedFromRemote)
         XCTAssertTrue(viewModel.availableModels.isEmpty)
     }
+    // MARK: - 完整分组与异步会话回归
+
+    func testGroupsKeepEveryRawIDWithoutInventingRouting() {
+        let input = [ModelCatalogEntry(id: "custom/Very-Long-ID", owner: " Anthropic "),
+                     ModelCatalogEntry(id: "gpt-unowned", owner: nil)]
+        let groups = ModelCatalog.groups(input)
+        XCTAssertEqual(groups.first?.owner, "Anthropic")
+        XCTAssertNil(groups.last?.owner)
+        XCTAssertEqual(Set(groups.flatMap(\.entries).map(\.id)), Set(input.map(\.id)))
+    }
+
+    func testGroupsDeduplicateIDsBeforeGroupingAndKeepUnknownOwnerSeparate() {
+        let input = [ModelCatalogEntry(id: "same", owner: "first"),
+                     ModelCatalogEntry(id: "same", owner: "second"),
+                     ModelCatalogEntry(id: "unknown", owner: " ")]
+        let groups = ModelCatalog.groups(input)
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].owner, "first")
+        XCTAssertNil(groups[1].owner)
+        XCTAssertEqual(groups.flatMap(\.entries).count, 2)
+    }
+
+    func testExpansionIncludesEveryDeduplicatedModelAcrossAllOwners() {
+        // 两个大组和缺失归属组共同参与计数；重复 ID 必须先去重，展开不能遗漏其它归属。
+        let input = (1...4).map { ModelCatalogEntry(id: "first-\($0)", owner: "first") }
+            + (1...5).map { ModelCatalogEntry(id: "second-\($0)", owner: "second") }
+            + [ModelCatalogEntry(id: "unknown", owner: nil),
+               ModelCatalogEntry(id: "first-1", owner: "duplicate")]
+        let groups = ModelCatalog.groups(input)
+        let collapsed = groups.flatMap { $0.visibleEntries(expanded: false) }
+        let expanded = groups.flatMap { $0.visibleEntries(expanded: true) }
+        XCTAssertEqual(collapsed.count, 7)
+        XCTAssertEqual(expanded.count, 10)
+        XCTAssertEqual(Set(expanded.map(\.id)), Set(input.map(\.id)))
+        XCTAssertTrue(groups.allSatisfy { $0.visibleEntries(expanded: false).count <= 3 })
+    }
+
+    func testStoppedCatalogRejectsLateResponseAndFailure() {
+        var state = ModelCatalogState()
+        let oldRequest = state.beginLoading()
+        state.reset()
+        state.complete(entries: entries("obsolete"), fetchedAt: fetchedAt, requestID: oldRequest)
+        state.fail(requestID: oldRequest)
+        XCTAssertEqual(state, ModelCatalogState(), "停止后的响应不得重新出现或转成加载失败")
+    }
+
+    func testOlderRequestCannotOverwriteNewSessionResult() {
+        var state = ModelCatalogState()
+        let oldRequest = state.beginLoading()
+        state.reset()
+        let currentRequest = state.beginLoading()
+        state.complete(entries: entries("current"), fetchedAt: laterFetchedAt, requestID: currentRequest)
+        state.complete(entries: entries("obsolete"), fetchedAt: fetchedAt, requestID: oldRequest)
+        state.fail(requestID: oldRequest)
+        XCTAssertEqual(state.entries.map(\.id), ["current"])
+        XCTAssertEqual(state.freshness, .live(fetchedAt: laterFetchedAt))
+    }
+
+    func testNewRefreshSupersedesOlderInflightRequest() {
+        var state = ModelCatalogState()
+        let first = state.beginLoading()
+        let second = state.beginLoading()
+        state.complete(entries: entries("obsolete"), fetchedAt: fetchedAt, requestID: first)
+        XCTAssertTrue(state.isLoading)
+        XCTAssertTrue(state.entries.isEmpty)
+        state.complete(entries: entries("latest"), fetchedAt: laterFetchedAt, requestID: second)
+        XCTAssertFalse(state.isLoading)
+        XCTAssertEqual(state.entries.map(\.id), ["latest"])
+    }
+
 }

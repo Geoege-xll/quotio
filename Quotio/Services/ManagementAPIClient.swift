@@ -84,7 +84,7 @@ actor ManagementAPIClient {
         session.invalidateAndCancel()
     }
     
-    private func makeRequest(_ endpoint: String, method: String = "GET", body: Data? = nil, retryCount: Int = 0) async throws -> Data {
+    private func makeRequest(_ endpoint: String, method: String = "GET", body: Data? = nil, retryCount: Int = 0, contentType: String = "application/json") async throws -> Data {
         let requestId = String(UUID().uuidString.prefix(6))
         let activeCount = Self.incrementActiveRequests()
         let startTime = Date()
@@ -105,7 +105,7 @@ actor ManagementAPIClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.addValue("Bearer \(authKey)", forHTTPHeaderField: "Authorization")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue(contentType, forHTTPHeaderField: "Content-Type")
         // Force new connection to avoid stale connection issues after idle periods
         request.addValue("close", forHTTPHeaderField: "Connection")
         
@@ -138,7 +138,7 @@ actor ManagementAPIClient {
                 
                 // Exponential backoff delay
                 try? await Task.sleep(nanoseconds: UInt64(backoffSeconds * 1_000_000_000))
-                return try await makeRequest(endpoint, method: method, body: body, retryCount: retryCount + 1)
+                return try await makeRequest(endpoint, method: method, body: body, retryCount: retryCount + 1, contentType: contentType)
             }
             throw APIError.connectionError(error.localizedDescription)
         } catch {
@@ -204,6 +204,33 @@ actor ManagementAPIClient {
         _ = try await makeRequest("/auth-files/status", method: "PATCH", body: body)
     }
     
+    /// 新版 CPA 用量队列是“读取即移除”。使用单次网络请求，不能沿用 makeRequest 的自动重试：
+    /// 超时不代表后端没有弹出记录，盲目重试会消费下一批并掩盖前一批的传输缺口。
+    func fetchUsageQueue(count: Int = 500) async throws -> UsageQueueBatch {
+        guard let url = URL(string: baseURL + "/usage-queue?count=" + String(max(1, min(count, 500)))) else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer " + authKey, forHTTPHeaderField: "Authorization")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        guard (200...299).contains(response.statusCode) else { throw APIError.httpError(response.statusCode) }
+        return try JSONDecoder().decode(UsageQueueBatch.self, from: data)
+    }
+
+    func getUsageStatisticsEnabled() async throws -> Bool {
+        struct Response: Decodable { let enabled: Bool
+            enum CodingKeys: String, CodingKey { case enabled = "usage-statistics-enabled" }
+        }
+        return try JSONDecoder().decode(Response.self, from: await makeRequest("/usage-statistics-enabled")).enabled
+    }
+
+    func setUsageStatisticsEnabled(_ enabled: Bool) async throws {
+        let body = try JSONEncoder().encode(["value": enabled])
+        _ = try await makeRequest("/usage-statistics-enabled", method: "PUT", body: body)
+    }
+
     func fetchUsageStats() async throws -> UsageStats {
         let data = try await makeRequest("/usage")
         return try JSONDecoder().decode(UsageStats.self, from: data)
@@ -231,12 +258,18 @@ actor ManagementAPIClient {
         return try JSONDecoder().decode(OAuthStatusResponse.self, from: data)
     }
     
-    func fetchLogs(after: Int? = nil) async throws -> LogsResponse {
-        var endpoint = "/logs"
-        if let after = after {
-            endpoint += "?after=\(after)"
+    func fetchLogs(after: Int? = nil, cursor: String? = nil, limit: Int = 2000) async throws -> LogsResponse {
+        // CPA 新版本使用文件游标，避免秒级时间戳遗漏同一秒内后写入的日志。
+        // URLQueryItem 负责编码不透明游标，旧版本仍可忽略新增查询参数。
+        var components = URLComponents()
+        components.path = "/logs"
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        if let cursor, !cursor.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
+        } else if let after {
+            components.queryItems?.append(URLQueryItem(name: "after", value: String(after)))
         }
-        let data = try await makeRequest(endpoint)
+        let data = try await makeRequest(components.string ?? "/logs")
         return try JSONDecoder().decode(LogsResponse.self, from: data)
     }
     
@@ -299,6 +332,49 @@ actor ManagementAPIClient {
     func fetchConfig() async throws -> ProxyConfig {
         let data = try await makeRequest("/config")
         return try JSONDecoder().decode(ProxyConfig.self, from: data)
+    }
+
+    // MARK: - CPA 模型别名
+
+    /// 必须读取完整 YAML，而非裁剪后的 ProxyConfig，防止保存时丢失凭据或未知配置。
+    /// 内容只交给配置服务解析，不输出到日志或界面。
+    func fetchModelAliasYAML() async throws -> String {
+        let data = try await makeRequest("/config.yaml")
+        guard let text = String(data: data, encoding: .utf8) else { throw APIError.invalidResponse }
+        return text
+    }
+
+    func saveModelAliasYAML(_ text: String) async throws {
+        _ = try await makeRequest("/config.yaml", method: "PUT", body: Data(text.utf8), contentType: "application/yaml")
+    }
+
+    /// 与官方客户端相同，OAuth 别名必须经过专用接口，才能及时更新模型目录与请求路由。
+    func replaceOAuthModelAliases(_ data: Data) async throws {
+        _ = try await makeRequest("/oauth-model-alias", method: "PUT", body: data)
+    }
+
+    func fetchModelAliasDefinitions(channel: String) async throws -> Data {
+        guard ["vertex", "aistudio", "antigravity", "claude", "codex", "kimi", "xai"].contains(channel) else {
+            throw APIError.invalidURL
+        }
+        return try await makeRequest("/model-definitions/\(channel)")
+    }
+
+    /// /v1/models 使用代理客户端 API Key，不把管理密钥误当成业务凭据，也不从模型名猜测来源。
+    func fetchModelAliasCatalog() async throws -> [String] {
+        let keys = try await fetchAPIKeys()
+        guard let key = keys.first(where: { !$0.isEmpty }),
+              var components = URLComponents(string: baseURL) else { throw APIError.invalidResponse }
+        components.path = "/v1/models"
+        components.query = nil
+        guard let url = components.url else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse, 200...299 ~= response.statusCode,
+              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = root["data"] as? [[String: Any]] else { throw APIError.invalidResponse }
+        return models.compactMap { $0["id"] as? String }
     }
     
     /// Get debug mode status
@@ -420,8 +496,12 @@ actor ManagementAPIClient {
     }
     
     func deleteAPIKey(value: String) async throws {
-        let encodedValue = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
-        _ = try await makeRequest("/api-keys?value=\(encodedValue)", method: "DELETE")
+        // 手动输入的密钥可能含有 &、+ 等字符，必须按查询参数值编码。
+        var components = URLComponents()
+        components.path = "/api-keys"
+        components.queryItems = [URLQueryItem(name: "value", value: value)]
+        let endpoint = (components.string ?? "/api-keys").replacingOccurrences(of: "+", with: "%2B")
+        _ = try await makeRequest(endpoint, method: "DELETE")
     }
     
     func deleteAPIKeyByIndex(_ index: Int) async throws {
@@ -492,11 +572,15 @@ nonisolated struct LogsResponse: Codable, Sendable {
     let lines: [String]?
     let lineCount: Int?
     let latestTimestamp: Int?
+    var nextCursor: String? = nil
+    var cursorReset: Bool? = nil
     
     enum CodingKeys: String, CodingKey {
         case lines
         case lineCount = "line-count"
         case latestTimestamp = "latest-timestamp"
+        case nextCursor = "next-cursor"
+        case cursorReset = "cursor-reset"
     }
 }
 

@@ -46,22 +46,33 @@ final class UpdaterService: NSObject {
     
     private(set) var isInitialized = false
     
-    /// Whether automatic update checks are enabled
+    /// 应用偏好是自动检查的统一来源，未初始化 Sparkle 时也能读取和保存用户选择。
     var automaticallyChecksForUpdates: Bool {
-        get { updater?.automaticallyChecksForUpdates ?? true }
-        set { updater?.automaticallyChecksForUpdates = newValue }
+        get { Self.automaticCheckPreference() }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "autoCheckUpdates")
+            updater?.automaticallyChecksForUpdates = newValue
+        }
+    }
+
+    /// 用 object 区分“从未设置”和显式 false，只有首次使用才采用默认开启。
+    nonisolated static func automaticCheckPreference(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true
     }
     
     /// Last time updates were checked
-    var lastUpdateCheckDate: Date? {
-        updater?.lastUpdateCheckDate
-    }
+    // 只在检查完成时发布一次；不依赖每秒变化的相对时间迫使视图重新读取 Sparkle 属性。
+    private(set) var lastUpdateCheckDate: Date?
+
+    var supportsAutomaticUpdates: Bool { AppReleaseConfiguration.supportsAutomaticUpdates }
+    var checkButtonTitleKey: String { supportsAutomaticUpdates ? "settings.checkNow" : "updates.own.viewReleases" }
     
     /// Whether an update check is currently in progress
     private(set) var isCheckingForUpdates = false
     
     /// Whether the updater can check for updates
     var canCheckForUpdates: Bool {
+        if !supportsAutomaticUpdates { return true }
         guard isInitialized else { return false }
         return updater?.canCheckForUpdates ?? false
     }
@@ -94,20 +105,29 @@ final class UpdaterService: NSObject {
     
     /// Initialize Sparkle updater on-demand (memory optimization)
     func initializeIfNeeded() {
-        guard !isInitialized else { return }
+        // 尚未配置自有公钥的开发构建只提供发布页，不使用上游公钥初始化 Sparkle。
+        guard !isInitialized, supportsAutomaticUpdates else { return }
         
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: false,
             updaterDelegate: self,
             userDriverDelegate: nil
         )
+        // 必须先同步迁移后的开关再启动调度，避免新 Bundle 的默认值覆盖用户关闭自动检查的选择。
+        updater?.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+        updaterController?.startUpdater()
         isInitialized = true
+        lastUpdateCheckDate = updater?.lastUpdateCheckDate
     }
     
     // MARK: - Public Methods
     
     /// Manually check for updates
     func checkForUpdates() {
+        guard supportsAutomaticUpdates else {
+            NSWorkspace.shared.open(AppReleaseConfiguration.releasesURL)
+            return
+        }
         initializeIfNeeded()
         guard canCheckForUpdates else { return }
         isCheckingForUpdates = true
@@ -116,6 +136,8 @@ final class UpdaterService: NSObject {
     
     /// Check for updates in background (no UI if no update)
     func checkForUpdatesInBackground() {
+        // 显式后台检查会绕过 Sparkle 的自动调度开关，因此启动入口也必须遵守应用偏好。
+        guard automaticallyChecksForUpdates else { return }
         initializeIfNeeded()
         updater?.checkForUpdatesInBackground()
     }
@@ -157,7 +179,7 @@ final class UpdaterService: NSObject {
 extension UpdaterService: SPUUpdaterDelegate {
     
     nonisolated func feedURLString(for updater: SPUUpdater) -> String? {
-        return "https://github.com/nguyenphutrong/quotio/releases/latest/download/appcast.xml"
+        AppReleaseConfiguration.feedURL.absoluteString
     }
     
     nonisolated func allowedChannels(for updater: SPUUpdater) -> Set<String> {
@@ -165,15 +187,18 @@ extension UpdaterService: SPUUpdaterDelegate {
         return channel == "beta" ? Set(["beta"]) : Set()
     }
     
-    nonisolated func updaterDidFinishUpdateCycleForUpdateCheck(_ updater: SPUUpdater) throws {
+    // 实现 Sparkle 的三参数可选委托方法；检查成功、关闭或跳过更新时都会结束检查状态。
+    nonisolated func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
         Task { @MainActor in
             self.isCheckingForUpdates = false
+            self.lastUpdateCheckDate = self.updater?.lastUpdateCheckDate
         }
     }
     
     nonisolated func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         Task { @MainActor in
             self.isCheckingForUpdates = false
+            self.lastUpdateCheckDate = self.updater?.lastUpdateCheckDate
             Log.update("Update check aborted: \\(error.localizedDescription)")
         }
     }

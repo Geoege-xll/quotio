@@ -10,75 +10,77 @@ import SwiftUI
 
 struct IDEScanSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(QuotaViewModel.self) private var viewModel
     @State private var settings = MenuBarSettingsManager.shared
-    
+
     @State private var scanOptions = IDEScanOptions.defaultOptions
     @State private var isScanning = false
     @State private var scanComplete = false
     @State private var errorMessage: String?
-    
+
     let onScanComplete: () -> Void
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
             headerSection
-            
-            Divider()
-            
+
             // Content
             ScrollView {
                 VStack(spacing: 20) {
                     privacyNoticeSection
                     scanOptionsSection
-                    
+
                     if scanComplete {
                         scanResultSection
                     }
-                    
+
                     if let error = errorMessage {
                         errorSection(error)
                     }
                 }
-                .padding(24)
+                .padding(20)
             }
-            
-            Divider()
-            
+
             // Footer buttons
             footerSection
         }
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
         .frame(width: 520, height: 520)
     }
-    
+
     // MARK: - Header
-    
+
     private var headerSection: some View {
         HStack(spacing: 16) {
             ZStack {
-                Circle()
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color.blue.opacity(0.1))
-                    .frame(width: 56, height: 56)
-                
+                    .frame(width: 48, height: 48)
+
                 Image(systemName: "magnifyingglass.circle.fill")
-                    .font(.system(size: 28))
+                    .font(.system(size: 26))
                     .foregroundStyle(.blue)
             }
-            
-            VStack(alignment: .leading, spacing: 4) {
+
+            VStack(alignment: .leading, spacing: 2) {
                 Text("ideScan.title".localized())
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
+                    .font(.headline)
+
                 Text("ideScan.subtitle".localized())
-                    .font(.subheadline)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            
+
             Spacer()
+
+            QuotioCircularIconButton(systemImage: "xmark") {
+                dismiss()
+            }
+            .accessibilityLabel("action.cancel".localized())
         }
-        .padding(24)
+        .padding(20)
     }
     
     // MARK: - Privacy Notice
@@ -179,9 +181,7 @@ struct IDEScanSheet: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
         }
-        .padding(12)
-        .background(Color(.controlBackgroundColor))
-        .cornerRadius(8)
+        .quotioInsetCard(cornerRadius: QuotioTheme.Radius.sm, padding: 12)
     }
     
     // MARK: - Scan Result
@@ -260,22 +260,24 @@ struct IDEScanSheet: View {
     }
     
     // MARK: - Footer
-    
+
     private var footerSection: some View {
         HStack(spacing: 12) {
             Button("action.cancel".localized()) {
                 dismiss()
             }
-            .buttonStyle(.bordered)
-            
+            .buttonStyle(.quotioSecondaryCapsule)
+            .keyboardShortcut(.escape)
+
             Spacer()
-            
+
             if scanComplete {
                 Button("action.done".localized()) {
                     onScanComplete()
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.quotioPrimaryCapsule)
+                .keyboardShortcut(.return, modifiers: .command)
             } else {
                 Button {
                     performScan()
@@ -289,7 +291,8 @@ struct IDEScanSheet: View {
                         Label("ideScan.scanNow".localized(), systemImage: "magnifyingglass")
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.quotioPrimaryCapsule)
+                .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!scanOptions.hasAnyScanEnabled || isScanning)
             }
         }

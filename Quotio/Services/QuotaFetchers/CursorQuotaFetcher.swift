@@ -25,24 +25,41 @@ nonisolated struct CursorQuotaInfo: Sendable {
     
     struct PlanUsage: Sendable {
         let enabled: Bool
-        let used: Int
-        let limit: Int
-        let remaining: Int
-        let totalPercentUsed: Double
+        let used: Int?
+        let limit: Int?
+        let remaining: Int?
+        let totalPercentUsed: Double?
         let autoPercentUsed: Double
         let apiPercentUsed: Double
         
         var remainingPercentage: Double {
-            guard limit > 0 else { return 100 }
-            return min(100, max(0, Double(remaining) / Double(limit) * 100))
+            // 字段缺失与真实零是不同状态。先采用完整剩余计数，再采用服务端百分比，最后计算差值。
+            if let limit, limit > 0, let remaining {
+                return min(100, max(0, Double(remaining) / Double(limit) * 100))
+            }
+            if let totalPercentUsed, totalPercentUsed.isFinite {
+                return min(100, max(0, 100 - totalPercentUsed))
+            }
+            if let limit, limit > 0, let used {
+                return min(100, max(0, (Double(limit) - Double(used)) / Double(limit) * 100))
+            }
+            return -1
         }
     }
     
     struct OnDemandUsage: Sendable {
         let enabled: Bool
-        let used: Int
+        let used: Int?
         let limit: Int?
         let remaining: Int?
+
+        /// 与套餐用量一致：缺失的已用值不能默认为零，也不能把没有上限解释为100%。
+        var remainingPercentage: Double {
+            guard let limit, limit > 0 else { return -1 }
+            if let remaining { return min(100, max(0, Double(remaining) / Double(limit) * 100)) }
+            if let used { return min(100, max(0, (Double(limit) - Double(used)) / Double(limit) * 100)) }
+            return -1
+        }
     }
 }
 
@@ -223,7 +240,7 @@ actor CursorQuotaFetcher {
                 )
             }
             
-            return parseUsageSummaryResponse(data, authData: authData)
+            return Self.parseUsageSummaryResponse(data, authData: authData)
         } catch {
             // Return basic info from local auth on network error
             return CursorQuotaInfo(
@@ -240,7 +257,7 @@ actor CursorQuotaFetcher {
     }
     
     /// Parse usage-summary API response
-    private func parseUsageSummaryResponse(_ data: Data, authData: CursorAuthData) -> CursorQuotaInfo? {
+    nonisolated static func parseUsageSummaryResponse(_ data: Data, authData: CursorAuthData) -> CursorQuotaInfo? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return CursorQuotaInfo(
                 email: authData.email,
@@ -265,10 +282,10 @@ actor CursorQuotaFetcher {
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         
         if let startStr = json["billingCycleStart"] as? String {
-            billingCycleStart = dateFormatter.date(from: startStr)
+            billingCycleStart = dateFormatter.date(from: startStr) ?? ISO8601DateFormatter().date(from: startStr)
         }
         if let endStr = json["billingCycleEnd"] as? String {
-            billingCycleEnd = dateFormatter.date(from: endStr)
+            billingCycleEnd = dateFormatter.date(from: endStr) ?? ISO8601DateFormatter().date(from: endStr)
         }
         
         // Parse individual usage
@@ -279,10 +296,10 @@ actor CursorQuotaFetcher {
             // Parse plan usage
             if let plan = individualUsage["plan"] as? [String: Any] {
                 let enabled = plan["enabled"] as? Bool ?? false
-                let used = plan["used"] as? Int ?? 0
-                let limit = plan["limit"] as? Int ?? 0
-                let remaining = plan["remaining"] as? Int ?? 0
-                let totalPercentUsed = plan["totalPercentUsed"] as? Double ?? 0
+                let used = plan["used"] as? Int
+                let limit = plan["limit"] as? Int
+                let remaining = plan["remaining"] as? Int
+                let totalPercentUsed = plan["totalPercentUsed"] as? Double
                 let autoPercentUsed = plan["autoPercentUsed"] as? Double ?? 0
                 let apiPercentUsed = plan["apiPercentUsed"] as? Double ?? 0
                 
@@ -300,7 +317,7 @@ actor CursorQuotaFetcher {
             // Parse on-demand usage
             if let onDemand = individualUsage["onDemand"] as? [String: Any] {
                 let enabled = onDemand["enabled"] as? Bool ?? false
-                let used = onDemand["used"] as? Int ?? 0
+                let used = onDemand["used"] as? Int
                 let limit = onDemand["limit"] as? Int
                 let remaining = onDemand["remaining"] as? Int
                 
@@ -355,12 +372,7 @@ actor CursorQuotaFetcher {
         // Add on-demand usage if enabled
         if let onDemand = info.onDemandUsage, onDemand.enabled {
             // For on-demand, show used count (no limit typically)
-            let percentage: Double
-            if let limit = onDemand.limit, limit > 0, let remaining = onDemand.remaining {
-                percentage = min(100, max(0, Double(remaining) / Double(limit) * 100))
-            } else {
-                percentage = 100 // Unlimited or no limit set
-            }
+            let percentage = onDemand.remainingPercentage
             
             var onDemandModel = ModelQuota(
                 name: "on-demand",

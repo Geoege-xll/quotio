@@ -13,40 +13,55 @@ nonisolated enum CodexUsageMapper {
         let response = try JSONDecoder().decode(CodexUsageResponseV2.self, from: data)
         let rawJSON = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
 
-        var models = standardModels(from: response.rateLimit)
-        models.append(contentsOf: extraModels(from: response.additionalRateLimits))
+        // 所有来源共用 ID 注册表：相同周期或显示名称不意味着同一额度池。
+        // 第一次出现保留旧 ID，后续冲突才加入来源与窗口位置，避免列表覆盖有效窗口。
+        var usedIDs = Set<String>()
+        var models = standardModels(from: response.rateLimit, usedIDs: &usedIDs)
+        models.append(contentsOf: extraModels(from: response.additionalRateLimits, usedIDs: &usedIDs))
+        // 代码审查是独立限额，不能用普通对话窗口覆盖，也不能因主窗口缺失而丢弃。
+        models.append(contentsOf: standardModels(from: response.codeReviewRateLimit, codeReview: true, usedIDs: &usedIDs))
+        guard !models.isEmpty else { throw QuotaFetchError.invalidResponse }
 
         let planType = response.planType ?? identity.planType
         return ProviderQuotaData(
             models: models,
             lastUpdated: updatedAt,
-            isForbidden: response.rateLimit?.limitReached ?? false,
+            // limit_reached 是配额耗尽，并非 HTTP 403 或账号封禁；仍须显示各窗口与重置时间。
+            isForbidden: false,
             planType: planType,
             analytics: analytics(from: rawJSON)
         )
     }
 
-    private static func modelQuota(name: String, from snapshot: CodexUsageResponseV2.WindowSnapshot?) -> ModelQuota? {
+    private static func modelQuota(name: String, from snapshot: CodexUsageResponseV2.WindowSnapshot?, reached: Bool = false) -> ModelQuota? {
         guard let snapshot else { return nil }
         return ModelQuota(
             name: name,
-            percentage: Double(100 - snapshot.usedPercent),
+            percentage: remaining(snapshot, reached: reached),
             resetTime: snapshot.resetDate.map { ISO8601DateFormatter().string(from: $0) } ?? ""
         )
     }
 
-    private static func standardModels(from rateLimit: CodexUsageResponseV2.RateLimitDetails?) -> [ModelQuota] {
-        let windows: [(CodexUsageResponseV2.WindowSnapshot?, StandardWindowKind)] = [
-            (rateLimit?.primaryWindow, .session),
-            (rateLimit?.secondaryWindow, .weekly)
+    private static func standardModels(
+        from rateLimit: CodexUsageResponseV2.RateLimitDetails?,
+        codeReview: Bool = false,
+        usedIDs: inout Set<String>
+    ) -> [ModelQuota] {
+        let windows: [(CodexUsageResponseV2.WindowSnapshot?, StandardWindowKind, String)] = [
+            (rateLimit?.primaryWindow, .session, "primary"),
+            (rateLimit?.secondaryWindow, .weekly, "secondary")
         ]
-        var usedKinds = Set<StandardWindowKind>()
 
-        return windows.compactMap { snapshot, fallbackKind in
+        return windows.compactMap { snapshot, fallbackKind, position in
             guard let snapshot else { return nil }
             let kind = standardWindowKind(for: snapshot, fallback: fallbackKind)
-            guard usedKinds.insert(kind).inserted else { return nil }
-            return modelQuota(name: kind.id, from: snapshot)
+            let preferredID = codeReview
+                ? kind.id.replacingOccurrences(of: "codex-", with: "codex-code-review-")
+                : kind.id
+            // primary/secondary 即使时长相同，也分别保留各自的数值和重置时间。
+            let source = codeReview ? "code-review" : "standard"
+            let id = reserveID(preferredID, position: source + "-" + position, usedIDs: &usedIDs)
+            return modelQuota(name: id, from: snapshot, reached: rateLimit?.isReached == true)
         }
     }
 
@@ -56,9 +71,10 @@ nonisolated enum CodexUsageMapper {
     ) -> StandardWindowKind {
         let day = 24 * 60 * 60
         if let seconds = snapshot.limitWindowSeconds, seconds > 0 {
-            if seconds >= 6 * day { return .weekly }
-            if seconds <= day { return .session }
-            return fallback
+            if (28 * day...31 * day).contains(seconds) { return .monthly }
+            if seconds == 7 * day { return .weekly }
+            if seconds == 5 * 3600 { return .session }
+            return .custom(seconds)
         }
         // Heuristic, used only when the authoritative `limit_window_seconds` is
         // absent. `reset_after_seconds` is the time REMAINING in the window, not
@@ -71,43 +87,67 @@ nonisolated enum CodexUsageMapper {
         return fallback
     }
 
-    private static func extraModels(from limits: [CodexUsageResponseV2.AdditionalRateLimit]?) -> [ModelQuota] {
+    private static func extraModels(
+        from limits: [CodexUsageResponseV2.AdditionalRateLimit]?,
+        usedIDs: inout Set<String>
+    ) -> [ModelQuota] {
         guard let limits, !limits.isEmpty else { return [] }
-        var usedIDs = Set<String>()
-        return limits.flatMap { limit in
+        return limits.enumerated().flatMap { index, limit in
             if isSpark(limit) {
-                return sparkModels(from: limit, usedIDs: &usedIDs)
+                return sparkModels(from: limit, sourceIndex: index, usedIDs: &usedIDs)
             }
 
-            guard let snapshot = limit.rateLimit?.primaryWindow ?? limit.rateLimit?.secondaryWindow,
-                  let id = modelID(for: limit),
-                  usedIDs.insert(id).inserted
-            else {
-                return []
+            // 官方允许附加限额仅有 rate_limit；没有名字时按来源位置生成标识，
+            // 不能将实际存在的额度窗口当作坏数据丢弃。有名项仍优先使用原来的 ID。
+            let id = modelID(for: limit) ?? "codex-additional-\(index + 1)"
+            // 同一附加能力也可能同时有会话与周限额，不能只取第一个非空窗口。
+            let windows = [(limit.rateLimit?.primaryWindow, ""), (limit.rateLimit?.secondaryWindow, "-secondary")]
+            return windows.compactMap { snapshot, suffix in
+                guard let snapshot else { return nil }
+                let kind = standardWindowKind(for: snapshot, fallback: suffix.isEmpty ? .session : .weekly)
+                let position = "additional-\(index + 1)-" + (suffix.isEmpty ? "primary" : "secondary")
+                let uniqueID = reserveID(id + suffix, position: position, usedIDs: &usedIDs)
+                var model = modelQuota(name: uniqueID, from: snapshot, reached: limit.rateLimit?.isReached == true)
+                let label = firstNonEmpty(limit.limitName, limit.meteredFeature) ?? "Additional \(index + 1)"
+                model?.sourceDisplayName = label + " · " + kind.title
+                return model
             }
-            return [ModelQuota(
-                name: id,
-                percentage: Double(100 - snapshot.usedPercent),
-                resetTime: snapshot.resetDate.map { ISO8601DateFormatter().string(from: $0) } ?? ""
-            )]
         }
     }
 
     private static func sparkModels(
         from limit: CodexUsageResponseV2.AdditionalRateLimit,
+        sourceIndex: Int,
         usedIDs: inout Set<String>
     ) -> [ModelQuota] {
         [
-            (limit.rateLimit?.primaryWindow, sparkKind(for: limit.rateLimit?.primaryWindow, fallback: .fiveHour)),
-            (limit.rateLimit?.secondaryWindow, sparkKind(for: limit.rateLimit?.secondaryWindow, fallback: .weekly))
-        ].compactMap { snapshot, kind in
-            guard let snapshot, usedIDs.insert(kind.id).inserted else { return nil }
+            (limit.rateLimit?.primaryWindow, sparkKind(for: limit.rateLimit?.primaryWindow, fallback: .fiveHour), "primary"),
+            (limit.rateLimit?.secondaryWindow, sparkKind(for: limit.rateLimit?.secondaryWindow, fallback: .weekly), "secondary")
+        ].compactMap { snapshot, kind, position in
+            guard let snapshot else { return nil }
+            // Spark 也可能出现同周期的多个池，周期只决定旧版展示 ID，不用于删减响应。
+            let id = reserveID(kind.id, position: "additional-\(sourceIndex + 1)-" + position, usedIDs: &usedIDs)
             return ModelQuota(
-                name: kind.id,
-                percentage: Double(100 - snapshot.usedPercent),
+                name: id,
+                percentage: remaining(snapshot, reached: limit.rateLimit?.isReached == true),
                 resetTime: snapshot.resetDate.map { ISO8601DateFormatter().string(from: $0) } ?? ""
             )
         }
+    }
+
+    /// 兼容已有窗口标识，同时保留同名、同周期及跨来源碰撞的独立限额。
+    /// 上游名称本身也可能与生成的后缀相同，因此继续编号直到当前响应内唯一。
+    /// 无名项只能使用响应中的位置定位；不根据百分比或重置时间生成会随刷新变化的 ID。
+    private static func reserveID(_ preferred: String, position: String, usedIDs: inout Set<String>) -> String {
+        if usedIDs.insert(preferred).inserted { return preferred }
+        let base = preferred + "-" + position
+        var candidate = base
+        var occurrence = 2
+        while !usedIDs.insert(candidate).inserted {
+            candidate = base + "-\(occurrence)"
+            occurrence += 1
+        }
+        return candidate
     }
 
     private static func sparkKind(
@@ -130,6 +170,13 @@ nonisolated enum CodexUsageMapper {
         [limit.limitName, limit.meteredFeature]
             .compactMap { $0?.lowercased() }
             .contains { $0.contains("spark") }
+    }
+
+    /// used_percent 是 0...100 的已用百分比（例如 0.63 表示已用 0.63%），保留小数。
+    /// 缺少数值时只有明确限流且存在重置依据才显示耗尽，其余保持未知。
+    private static func remaining(_ snapshot: CodexUsageResponseV2.WindowSnapshot, reached: Bool) -> Double {
+        if let used = snapshot.usedPercent { return 100 - min(100, max(0, used)) }
+        return reached && snapshot.resetDate != nil ? 0 : -1
     }
 
     private static func analytics(from json: [String: Any]?) -> QuotaAnalytics? {
@@ -217,14 +264,26 @@ nonisolated enum CodexUsageMapper {
         }
     }
 
-    private enum StandardWindowKind {
+    private enum StandardWindowKind: Hashable {
         case session
         case weekly
+        case monthly
+        case custom(Int)
 
         var id: String {
             switch self {
             case .session: "codex-session"
             case .weekly: "codex-weekly"
+            case .monthly: "codex-monthly"
+            case .custom(let seconds): "codex-window-\(seconds)s"
+            }
+        }
+        var title: String {
+            switch self {
+            case .session: "Session"
+            case .weekly: "Weekly"
+            case .monthly: "Monthly"
+            case .custom(let seconds): "\(seconds)s"
             }
         }
     }
@@ -234,18 +293,27 @@ nonisolated struct CodexUsageResponseV2: Decodable {
     var planType: String?
     var rateLimit: RateLimitDetails?
     var additionalRateLimits: [AdditionalRateLimit]?
+    var codeReviewRateLimit: RateLimitDetails?
 
     enum CodingKeys: String, CodingKey {
         case planType = "plan_type"
         case rateLimit = "rate_limit"
         case additionalRateLimits = "additional_rate_limits"
+        case codeReviewRateLimit = "code_review_rate_limit"
+        case planTypeCamel = "planType", rateLimitCamel = "rateLimit"
+        case additionalRateLimitsCamel = "additionalRateLimits", codeReviewRateLimitCamel = "codeReviewRateLimit"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        planType = try? container.decodeIfPresent(String.self, forKey: .planType)
-        rateLimit = try? container.decodeIfPresent(RateLimitDetails.self, forKey: .rateLimit)
-        if let decoded = try? container.decodeIfPresent([LossyAdditionalRateLimit].self, forKey: .additionalRateLimits) {
+        planType = (try? container.decodeIfPresent(String.self, forKey: .planType))
+            ?? (try? container.decodeIfPresent(String.self, forKey: .planTypeCamel))
+        rateLimit = (try? container.decodeIfPresent(RateLimitDetails.self, forKey: .rateLimit))
+            ?? (try? container.decodeIfPresent(RateLimitDetails.self, forKey: .rateLimitCamel))
+        codeReviewRateLimit = (try? container.decodeIfPresent(RateLimitDetails.self, forKey: .codeReviewRateLimit))
+            ?? (try? container.decodeIfPresent(RateLimitDetails.self, forKey: .codeReviewRateLimitCamel))
+        if let decoded = (try? container.decodeIfPresent([LossyAdditionalRateLimit].self, forKey: .additionalRateLimits))
+            ?? (try? container.decodeIfPresent([LossyAdditionalRateLimit].self, forKey: .additionalRateLimitsCamel)) {
             additionalRateLimits = decoded.compactMap(\.value)
         }
     }
@@ -254,23 +322,31 @@ nonisolated struct CodexUsageResponseV2: Decodable {
         var limitReached: Bool?
         var primaryWindow: WindowSnapshot?
         var secondaryWindow: WindowSnapshot?
+        var allowed: Bool?
+        var isReached: Bool { limitReached == true || allowed == false }
 
         enum CodingKeys: String, CodingKey {
             case limitReached = "limit_reached"
             case primaryWindow = "primary_window"
             case secondaryWindow = "secondary_window"
+            case allowed
+            case limitReachedCamel = "limitReached", primaryWindowCamel = "primaryWindow", secondaryWindowCamel = "secondaryWindow"
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            limitReached = try? container.decodeIfPresent(Bool.self, forKey: .limitReached)
-            primaryWindow = try? container.decodeIfPresent(WindowSnapshot.self, forKey: .primaryWindow)
-            secondaryWindow = try? container.decodeIfPresent(WindowSnapshot.self, forKey: .secondaryWindow)
+            allowed = try? container.decodeIfPresent(Bool.self, forKey: .allowed)
+            limitReached = (try? container.decodeIfPresent(Bool.self, forKey: .limitReached))
+                ?? (try? container.decodeIfPresent(Bool.self, forKey: .limitReachedCamel))
+            primaryWindow = (try? container.decodeIfPresent(WindowSnapshot.self, forKey: .primaryWindow))
+                ?? (try? container.decodeIfPresent(WindowSnapshot.self, forKey: .primaryWindowCamel))
+            secondaryWindow = (try? container.decodeIfPresent(WindowSnapshot.self, forKey: .secondaryWindow))
+                ?? (try? container.decodeIfPresent(WindowSnapshot.self, forKey: .secondaryWindowCamel))
         }
     }
 
     struct WindowSnapshot: Decodable {
-        var usedPercent: Int
+        var usedPercent: Double?
         var resetAt: Int?
         var resetAfterSeconds: Int?
         var limitWindowSeconds: Int?
@@ -280,19 +356,25 @@ nonisolated struct CodexUsageResponseV2: Decodable {
             case resetAt = "reset_at"
             case resetAfterSeconds = "reset_after_seconds"
             case limitWindowSeconds = "limit_window_seconds"
+            case usedPercentCamel = "usedPercent", resetAtCamel = "resetAt"
+            case resetAfterSecondsCamel = "resetAfterSeconds", limitWindowSecondsCamel = "limitWindowSeconds"
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            usedPercent = (try Self.flexibleInt(container, forKey: .usedPercent)).clamped(to: 0...100)
-            resetAt = try? Self.flexibleInt(container, forKey: .resetAt)
-            resetAfterSeconds = try? Self.flexibleInt(container, forKey: .resetAfterSeconds)
-            limitWindowSeconds = try? Self.flexibleInt(container, forKey: .limitWindowSeconds)
+            usedPercent = Self.flexibleDouble(container, forKey: .usedPercent)
+                ?? Self.flexibleDouble(container, forKey: .usedPercentCamel)
+            resetAt = (try? Self.flexibleInt(container, forKey: .resetAt)) ?? (try? Self.flexibleInt(container, forKey: .resetAtCamel))
+            resetAfterSeconds = (try? Self.flexibleInt(container, forKey: .resetAfterSeconds)) ?? (try? Self.flexibleInt(container, forKey: .resetAfterSecondsCamel))
+            limitWindowSeconds = (try? Self.flexibleInt(container, forKey: .limitWindowSeconds)) ?? (try? Self.flexibleInt(container, forKey: .limitWindowSecondsCamel))
         }
 
         var resetDate: Date? {
-            guard let resetAt, resetAt > 0 else { return nil }
-            return Date(timeIntervalSince1970: TimeInterval(resetAt))
+            if let resetAt, resetAt > 0 {
+                return Date(timeIntervalSince1970: TimeInterval(resetAt > 10_000_000_000 ? resetAt / 1000 : resetAt))
+            }
+            guard let resetAfterSeconds, resetAfterSeconds > 0, resetAfterSeconds < 315_576_000 else { return nil }
+            return Date().addingTimeInterval(TimeInterval(resetAfterSeconds))
         }
 
         var windowMinutes: Int? {
@@ -307,13 +389,16 @@ nonisolated struct CodexUsageResponseV2: Decodable {
             if let int = try? container.decode(Int.self, forKey: key) {
                 return int
             }
-            if let double = try? container.decode(Double.self, forKey: key) {
-                return Int(double.rounded())
-            }
-            if let string = try? container.decode(String.self, forKey: key), let double = Double(string) {
-                return Int(double.rounded())
-            }
+            if let value = flexibleDouble(container, forKey: key),
+               value >= Double(Int.min), value < Double(Int.max) { return Int(value) }
             throw DecodingError.dataCorrupted(.init(codingPath: [key], debugDescription: "Expected number"))
+        }
+
+        private static func flexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Double? {
+            let value = (try? container.decode(Double.self, forKey: key))
+                ?? (try? container.decode(String.self, forKey: key)).flatMap(Double.init)
+            guard let value, value.isFinite else { return nil }
+            return value
         }
     }
 
@@ -326,13 +411,14 @@ nonisolated struct CodexUsageResponseV2: Decodable {
             case limitName = "limit_name"
             case meteredFeature = "metered_feature"
             case rateLimit = "rate_limit"
+            case limitNameCamel = "limitName", meteredFeatureCamel = "meteredFeature", rateLimitCamel = "rateLimit"
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            limitName = try? container.decodeIfPresent(String.self, forKey: .limitName)
-            meteredFeature = try? container.decodeIfPresent(String.self, forKey: .meteredFeature)
-            rateLimit = try? container.decodeIfPresent(RateLimitDetails.self, forKey: .rateLimit)
+            limitName = (try? container.decodeIfPresent(String.self, forKey: .limitName)) ?? (try? container.decodeIfPresent(String.self, forKey: .limitNameCamel))
+            meteredFeature = (try? container.decodeIfPresent(String.self, forKey: .meteredFeature)) ?? (try? container.decodeIfPresent(String.self, forKey: .meteredFeatureCamel))
+            rateLimit = (try? container.decodeIfPresent(RateLimitDetails.self, forKey: .rateLimit)) ?? (try? container.decodeIfPresent(RateLimitDetails.self, forKey: .rateLimitCamel))
         }
     }
 

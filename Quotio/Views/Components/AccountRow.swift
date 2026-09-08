@@ -176,6 +176,7 @@ struct AccountRowData: Identifiable, Hashable {
 // MARK: - AccountRow View
 
 struct AccountRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let account: AccountRowData
     var onDelete: (() -> Void)?
     var onEdit: (() -> Void)?
@@ -183,20 +184,21 @@ struct AccountRow: View {
     var onToggleDisabled: (() -> Void)?
     var onDownload: (() -> Void)?
     var isActiveInIDE: Bool = false
-    
+
     @State private var settings = MenuBarSettingsManager.shared
     @State private var showWarning = false
     @State private var showMaxItemsAlert = false
     @State private var showDeleteConfirmation = false
-    
+    @State private var isHovered: Bool = false
+
     private var isMenuBarSelected: Bool {
         settings.isSelected(account.menuBarItem)
     }
-    
+
     private var maskedDisplayName: String {
         account.displayName.masked(if: settings.hideSensitiveInfo)
     }
-    
+
     private var statusColor: Color {
         switch account.status {
         case "ready": return account.isDisabled ? .gray : .green
@@ -205,30 +207,30 @@ struct AccountRow: View {
         default: return .gray
         }
     }
-    
+
     var body: some View {
         HStack(spacing: 12) {
             // Provider icon
             ProviderIcon(provider: account.provider, size: 24)
-            
+
             // Account info
             VStack(alignment: .leading, spacing: 2) {
                 Text(maskedDisplayName)
-                    .fontWeight(.medium)
+                    .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
-                
+
                 HStack(spacing: 6) {
                     // Provider name
                     Text(account.provider.displayName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    
+
                     // Status indicator (only for proxy accounts)
                     if let status = account.status {
                         Circle()
                             .fill(statusColor)
                             .frame(width: 6, height: 6)
-                        
+
                         Text(status)
                             .font(.caption)
                             .foregroundStyle(statusColor)
@@ -237,7 +239,7 @@ struct AccountRow: View {
                         Text("•")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
-                        
+
                         Text(account.source.displayName)
                             .font(.caption)
                             .foregroundStyle(.tertiary)
@@ -251,9 +253,9 @@ struct AccountRow: View {
                         .lineLimit(1)
                 }
             }
-            
+
             Spacer()
-            
+
             // Disabled badge
             if account.isDisabled {
                 Text("providers.disabled".localized())
@@ -263,7 +265,7 @@ struct AccountRow: View {
                     .background(.secondary.opacity(0.2))
                     .clipShape(Capsule())
             }
-            
+
             // Active in IDE badge (Antigravity only)
             if account.provider == .antigravity && isActiveInIDE {
                 Text("antigravity.active".localized())
@@ -275,7 +277,7 @@ struct AccountRow: View {
                     .background(Color(red: 0.85, green: 0.95, blue: 0.85))
                     .clipShape(Capsule())
             }
-            
+
             // Switch button (Antigravity only, for proxy/direct accounts that are not active)
             if account.provider == .antigravity && !isActiveInIDE && account.source != .autoDetected {
                 Button {
@@ -296,7 +298,7 @@ struct AccountRow: View {
                 .buttonStyle(.plain)
                 .help("antigravity.switch.title".localized())
             }
-            
+
             // Menu bar toggle
             MenuBarBadge(
                 isSelected: isMenuBarSelected,
@@ -309,16 +311,16 @@ struct AccountRow: View {
                     onToggleDisabled()
                 } label: {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(account.isDisabled ? Color.red.opacity(0.1) : Color.clear)
-                            .frame(width: 28, height: 28)
+                        Circle()
+                            .fill(account.isDisabled ? Color.red.opacity(0.12) : (isHovered ? QuotioTheme.Colors.cardInset(for: colorScheme) : Color.clear))
+                            .frame(width: 26, height: 26)
 
                         Image(systemName: account.isDisabled ? "xmark.circle.fill" : "checkmark.circle")
-                            .font(.system(size: 14))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(account.isDisabled ? .red : .secondary)
                     }
                 }
-                .buttonStyle(.rowAction)
+                .buttonStyle(.plain)
                 .help(account.isDisabled ? "providers.enable".localized() : "providers.disable".localized())
                 .accessibilityLabel(account.isDisabled ? "providers.enable".localized() : "providers.disable".localized())
             }
@@ -328,10 +330,17 @@ struct AccountRow: View {
                 Button {
                     onEdit()
                 } label: {
-                    Image(systemName: "pencil")
-                        .foregroundStyle(.blue)
+                    ZStack {
+                        Circle()
+                            .fill(Color.blue.opacity(0.10))
+                            .frame(width: 26, height: 26)
+
+                        Image(systemName: "pencil")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.blue)
+                    }
                 }
-                .buttonStyle(.rowAction)
+                .buttonStyle(.plain)
                 .help("action.edit".localized())
             }
 
@@ -340,11 +349,35 @@ struct AccountRow: View {
                 Button(role: .destructive) {
                     showDeleteConfirmation = true
                 } label: {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.red.opacity(0.8))
+                    ZStack {
+                        Circle()
+                            .fill(Color.red.opacity(0.08))
+                            .frame(width: 26, height: 26)
+
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.red.opacity(0.85))
+                    }
                 }
-                .buttonStyle(.rowActionDestructive)
+                .buttonStyle(.plain)
                 .help("action.delete".localized())
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            isHovered
+                ? QuotioTheme.Colors.cardElevated(for: colorScheme)
+                : QuotioTheme.Colors.cardBackground(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(isHovered ? 0.8 : 0.4), lineWidth: 0.5)
+        )
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovered = hovering
             }
         }
         .contentShape(Rectangle())

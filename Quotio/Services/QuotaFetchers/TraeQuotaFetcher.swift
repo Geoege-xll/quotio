@@ -27,13 +27,13 @@ struct TraeQuotaInfo: Sendable {
     
     // Usage limits
     let advancedModelLimit: Int
-    let advancedModelUsed: Int
+    let advancedModelUsed: Int?
     let autoCompletionLimit: Int
-    let autoCompletionUsed: Int
+    let autoCompletionUsed: Int?
     let premiumFastLimit: Int
-    let premiumFastUsed: Int
+    let premiumFastUsed: Int?
     let premiumSlowLimit: Int
-    let premiumSlowUsed: Int
+    let premiumSlowUsed: Int?
     
     let resetTime: Date?
 }
@@ -174,7 +174,7 @@ actor TraeQuotaFetcher {
     }
     
     /// Parse quota API response
-    private func parseQuotaResponse(_ data: Data, authData: TraeAuthData) -> TraeQuotaInfo? {
+    func parseQuotaResponse(_ data: Data, authData: TraeAuthData) -> TraeQuotaInfo? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let entitlementList = json["user_entitlement_pack_list"] as? [[String: Any]] else {
             return nil
@@ -199,10 +199,7 @@ actor TraeQuotaFetcher {
         }
         
         guard let entitlement = activeEntitlement else {
-            // No active entitlement, use first one if available
-            if let first = entitlementList.first {
-                return parseEntitlement(first, authData: authData, resetTime: nil)
-            }
+            // 没有有效权益时不能回退到列表首项；首项可能是已到期套餐，其剩余额度不可再用。
             return nil
         }
         
@@ -238,16 +235,17 @@ actor TraeQuotaFetcher {
         }
         
         // Get usage - use *_amount fields (not *_request_usage)
-        var advancedModelUsed = 0
-        var autoCompletionUsed = 0
-        var premiumFastUsed = 0
-        var premiumSlowUsed = 0
+        // 权益额度和已用次数可能分开返回；缺少 usage 不能宣称该账号尚未使用任何额度。
+        var advancedModelUsed: Int?
+        var autoCompletionUsed: Int?
+        var premiumFastUsed: Int?
+        var premiumSlowUsed: Int?
         
         if let usage = entitlement["usage"] as? [String: Any] {
-            advancedModelUsed = usage["advanced_model_amount"] as? Int ?? 0
-            autoCompletionUsed = usage["auto_completion_amount"] as? Int ?? 0
-            premiumFastUsed = usage["premium_model_fast_amount"] as? Int ?? 0
-            premiumSlowUsed = usage["premium_model_slow_amount"] as? Int ?? 0
+            advancedModelUsed = usage["advanced_model_amount"] as? Int
+            autoCompletionUsed = usage["auto_completion_amount"] as? Int
+            premiumFastUsed = usage["premium_model_fast_amount"] as? Int
+            premiumSlowUsed = usage["premium_model_slow_amount"] as? Int
         }
         
         return TraeQuotaInfo(
@@ -283,8 +281,8 @@ actor TraeQuotaFetcher {
         
         // Add Premium Fast quota (most important for users)
         if info.premiumFastLimit > 0 {
-            let remaining = max(0, info.premiumFastLimit - info.premiumFastUsed)
-            let percentage = min(100, max(0, Double(remaining) / Double(info.premiumFastLimit) * 100))
+            let remaining = info.premiumFastUsed.map { max(0, info.premiumFastLimit - $0) }
+            let percentage = remaining.map { min(100, max(0, Double($0) / Double(info.premiumFastLimit) * 100)) } ?? -1
             
             var quotaModel = ModelQuota(
                 name: "premium-fast",
@@ -299,8 +297,8 @@ actor TraeQuotaFetcher {
         
         // Add Premium Slow quota
         if info.premiumSlowLimit > 0 {
-            let remaining = max(0, info.premiumSlowLimit - info.premiumSlowUsed)
-            let percentage = min(100, max(0, Double(remaining) / Double(info.premiumSlowLimit) * 100))
+            let remaining = info.premiumSlowUsed.map { max(0, info.premiumSlowLimit - $0) }
+            let percentage = remaining.map { min(100, max(0, Double($0) / Double(info.premiumSlowLimit) * 100)) } ?? -1
             
             var quotaModel = ModelQuota(
                 name: "premium-slow",
@@ -315,8 +313,8 @@ actor TraeQuotaFetcher {
         
         // Add Advanced Model quota
         if info.advancedModelLimit > 0 {
-            let remaining = max(0, info.advancedModelLimit - info.advancedModelUsed)
-            let percentage = min(100, max(0, Double(remaining) / Double(info.advancedModelLimit) * 100))
+            let remaining = info.advancedModelUsed.map { max(0, info.advancedModelLimit - $0) }
+            let percentage = remaining.map { min(100, max(0, Double($0) / Double(info.advancedModelLimit) * 100)) } ?? -1
             
             var quotaModel = ModelQuota(
                 name: "advanced-model",
@@ -331,8 +329,8 @@ actor TraeQuotaFetcher {
         
         // Add Auto Completion quota
         if info.autoCompletionLimit > 0 {
-            let remaining = max(0, info.autoCompletionLimit - info.autoCompletionUsed)
-            let percentage = min(100, max(0, Double(remaining) / Double(info.autoCompletionLimit) * 100))
+            let remaining = info.autoCompletionUsed.map { max(0, info.autoCompletionLimit - $0) }
+            let percentage = remaining.map { min(100, max(0, Double($0) / Double(info.autoCompletionLimit) * 100)) } ?? -1
             
             var quotaModel = ModelQuota(
                 name: "auto-completion",

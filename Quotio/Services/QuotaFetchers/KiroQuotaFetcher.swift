@@ -391,7 +391,8 @@ actor KiroQuotaFetcher {
                 hasAttemptedRefresh = true
             } else {
                 return ProviderQuotaData(
-                    models: [ModelQuota(name: "Error", percentage: 0, resetTime: "Token Refresh Failed")],
+                    // 刷新令牌失败属于未知额度，不能让统一展示或分析将错误行当成真实耗尽。
+                    models: [ModelQuota(name: "Error", percentage: -1, resetTime: "Token Refresh Failed")],
                     lastUpdated: Date(),
                     isForbidden: true,
                     planType: "Expired",
@@ -530,7 +531,7 @@ actor KiroQuotaFetcher {
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 return UsageAPIResult(statusCode: 0, quotaData: ProviderQuotaData(
-                    models: [ModelQuota(name: "Error", percentage: 0, resetTime: "Invalid Response Type")],
+                    models: [ModelQuota(name: "Error", percentage: -1, resetTime: "Invalid Response Type")],
                     lastUpdated: Date(), isForbidden: false, planType: "Error", tokenExpiresAt: tokenExpiresAt
                 ))
             }
@@ -541,7 +542,7 @@ actor KiroQuotaFetcher {
                 }
                 let errorMsg = "HTTP \(httpResponse.statusCode)"
                 return UsageAPIResult(statusCode: httpResponse.statusCode, quotaData: ProviderQuotaData(
-                    models: [ModelQuota(name: "Error", percentage: 0, resetTime: errorMsg)],
+                    models: [ModelQuota(name: "Error", percentage: -1, resetTime: errorMsg)],
                     lastUpdated: Date(), isForbidden: false, planType: "Error", tokenExpiresAt: tokenExpiresAt
                 ))
             }
@@ -566,18 +567,18 @@ actor KiroQuotaFetcher {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     let keys = json.keys.sorted().joined(separator: ",")
                     return UsageAPIResult(statusCode: 200, quotaData: ProviderQuotaData(
-                        models: [ModelQuota(name: "Debug: Keys: \(keys)", percentage: 0, resetTime: "Decode Error: \(error.localizedDescription)")],
+                        models: [ModelQuota(name: "Debug: Keys: \(keys)", percentage: -1, resetTime: "Decode Error: \(error.localizedDescription)")],
                         lastUpdated: Date(), isForbidden: false, planType: "Error", tokenExpiresAt: tokenExpiresAt
                     ))
                 }
                 return UsageAPIResult(statusCode: 200, quotaData: ProviderQuotaData(
-                    models: [ModelQuota(name: "Error", percentage: 0, resetTime: error.localizedDescription)],
+                    models: [ModelQuota(name: "Error", percentage: -1, resetTime: error.localizedDescription)],
                     lastUpdated: Date(), isForbidden: false, planType: "Error", tokenExpiresAt: tokenExpiresAt
                 ))
             }
         } catch {
             return UsageAPIResult(statusCode: 0, quotaData: ProviderQuotaData(
-                models: [ModelQuota(name: "Error", percentage: 0, resetTime: error.localizedDescription)],
+                models: [ModelQuota(name: "Error", percentage: -1, resetTime: error.localizedDescription)],
                 lastUpdated: Date(), isForbidden: false, planType: "Error", tokenExpiresAt: tokenExpiresAt
             ))
         }
@@ -797,16 +798,15 @@ actor KiroQuotaFetcher {
     }
 
     /// Convert Kiro response to standard Quota Data
-    private func convertToQuotaData(_ response: KiroUsageResponse, planType: String, tokenExpiresAt: Date?) -> ProviderQuotaData {
+    /// 仅把完整计数转换为百分比；没有限制信息或缺少已用值时保留未知，避免空响应显示满额。
+    func convertToQuotaData(_ response: KiroUsageResponse, planType: String, tokenExpiresAt: Date?, now: Date = Date()) -> ProviderQuotaData {
         var models: [ModelQuota] = []
 
         // Calculate reset time from nextDateReset timestamp
         var resetTimeStr = ""
         if let nextReset = response.nextDateReset {
             let resetDate = Date(timeIntervalSince1970: nextReset)
-            let formatter = DateFormatter()
-            formatter.dateFormat = "MM/dd"
-            resetTimeStr = "resets \(formatter.string(from: resetDate))"
+            resetTimeStr = ISO8601DateFormatter().string(from: resetDate)
         }
 
         if let breakdownList = response.usageBreakdownList {
@@ -815,14 +815,15 @@ actor KiroQuotaFetcher {
 
                 // Check for active free trial (Bonus Credits)
                 let hasActiveTrial = breakdown.freeTrialInfo?.freeTrialStatus == "ACTIVE"
+                    && (breakdown.freeTrialInfo?.freeTrialExpiry.map { $0 > now.timeIntervalSince1970 } ?? true)
 
                 if hasActiveTrial, let freeTrialInfo = breakdown.freeTrialInfo {
                     // Show trial/bonus quota
-                    let used = freeTrialInfo.currentUsageWithPrecision ?? freeTrialInfo.currentUsage ?? 0
-                    let total = freeTrialInfo.usageLimitWithPrecision ?? freeTrialInfo.usageLimit ?? 0
+                    let used = freeTrialInfo.currentUsageWithPrecision ?? freeTrialInfo.currentUsage
+                    let total = freeTrialInfo.usageLimitWithPrecision ?? freeTrialInfo.usageLimit
 
-                    var percentage: Double = 0
-                    if total > 0 {
+                    var percentage: Double = -1
+                    if let total, total > 0, let used {
                         percentage = min(100, max(0, (total - used) / total * 100))
                     }
 
@@ -830,9 +831,7 @@ actor KiroQuotaFetcher {
                     var trialResetStr = resetTimeStr
                     if let expiry = freeTrialInfo.freeTrialExpiry {
                         let expiryDate = Date(timeIntervalSince1970: expiry)
-                        let formatter = DateFormatter()
-                        formatter.dateFormat = "MM/dd"
-                        trialResetStr = "expires \(formatter.string(from: expiryDate))"
+                        trialResetStr = ISO8601DateFormatter().string(from: expiryDate)
                     }
 
                     models.append(ModelQuota(
@@ -843,20 +842,21 @@ actor KiroQuotaFetcher {
                 }
 
                 // Always check regular/paid quota (root level usage)
-                let regularUsed = breakdown.currentUsageWithPrecision ?? breakdown.currentUsage ?? 0
+                let regularUsed = breakdown.currentUsageWithPrecision ?? breakdown.currentUsage
                 let regularTotal = breakdown.usageLimitWithPrecision ?? breakdown.usageLimit ?? 0
 
                 // Add regular quota if it has meaningful limits
                 if regularTotal > 0 {
-                    var percentage: Double = 0
-                    percentage = min(100, max(0, (regularTotal - regularUsed) / regularTotal * 100))
+                    let percentage = regularUsed.map { min(100, max(0, (regularTotal - $0) / regularTotal * 100)) } ?? -1
 
                     // Use different name based on whether trial is active
                     let quotaName = hasActiveTrial ? "\(displayName) (Base)" : displayName
                     models.append(ModelQuota(
                         name: quotaName,
                         percentage: percentage,
-                        resetTime: resetTimeStr
+                        resetTime: breakdown.nextDateReset.map {
+                            ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: $0))
+                        } ?? resetTimeStr
                     ))
                 }
             }
@@ -864,7 +864,7 @@ actor KiroQuotaFetcher {
 
         // Fallback if no limits found
         if models.isEmpty {
-            models.append(ModelQuota(name: "kiro-standard", percentage: 100, resetTime: "Unknown"))
+            models.append(ModelQuota(name: "kiro-standard", percentage: -1, resetTime: ""))
         }
 
         return ProviderQuotaData(

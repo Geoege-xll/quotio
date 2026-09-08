@@ -4,7 +4,7 @@ import XCTest
 @testable import Quotio
 
 final class MenuBarQuotaPairTests: XCTestCase {
-    func testClaudeUsesFiveHourAndLowestWeeklyLimit() throws {
+    func testClaudeKeepsPrimaryWeeklyQuotaSeparateFromModelLimits() throws {
         let models = [
             ModelQuota(name: "five-hour-session", percentage: 81, resetTime: ""),
             ModelQuota(name: "seven-day-weekly", percentage: 63, resetTime: ""),
@@ -15,10 +15,11 @@ final class MenuBarQuotaPairTests: XCTestCase {
         let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .claude, from: models))
 
         XCTAssertEqual(pair.top, MenuBarQuotaMetric(labelKey: "quota.metric.fiveHour", remainingPercentage: 81))
-        XCTAssertEqual(pair.bottom, MenuBarQuotaMetric(labelKey: "quota.metric.weekly", remainingPercentage: 12))
+        // 主周额度与 Sonnet／Opus 的独立模型限额分开显示，不能取后者最小值覆盖主额度。
+        XCTAssertEqual(pair.bottom, MenuBarQuotaMetric(labelKey: "quota.metric.weekly", remainingPercentage: 63))
     }
 
-    func testCodexUsesLowestStandardOrSparkLimitForEachWindow() throws {
+    func testCodexKeepsPrimarySessionAndWeeklyQuotaSeparateFromSpark() throws {
         let models = [
             ModelQuota(name: "codex-session", percentage: 78, resetTime: ""),
             ModelQuota(name: "codex-spark", percentage: 43, resetTime: ""),
@@ -28,7 +29,8 @@ final class MenuBarQuotaPairTests: XCTestCase {
 
         let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .codex, from: models))
 
-        XCTAssertEqual(pair.top.remainingPercentage, 43)
+        // Spark 是独立附加限额，菜单栏主会话必须与配额页主会话保持一致。
+        XCTAssertEqual(pair.top.remainingPercentage, 78)
         XCTAssertEqual(pair.bottom.remainingPercentage, 51)
     }
 
@@ -113,16 +115,14 @@ final class MenuBarQuotaPairTests: XCTestCase {
         XCTAssertNil(MenuBarQuotaPair.resolve(for: .codex, from: models))
     }
 
-    func testUnknownValuesDoNotOverrideKnownMinimum() throws {
+    func testUnknownPrimarySessionDoesNotUseSparkAsFallback() {
         let models = [
             ModelQuota(name: "codex-session", percentage: -1, resetTime: ""),
             ModelQuota(name: "codex-spark", percentage: 38, resetTime: ""),
         ]
 
-        let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .codex, from: models))
-
-        XCTAssertEqual(pair.top.remainingPercentage, 38)
-        XCTAssertEqual(pair.bottom.remainingPercentage, -1)
+        // 主额度未知时不合成双行主额度；独立 Spark 仍由菜单明细展示。
+        XCTAssertNil(MenuBarQuotaPair.resolve(for: .codex, from: models))
     }
 
     func testUnsupportedProviderDoesNotResolvePair() {

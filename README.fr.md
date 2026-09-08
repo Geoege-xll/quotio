@@ -1,3 +1,5 @@
+> **QuotioPlus 二开版说明**：本仓库基于 [Trong Nguyen 的 Quotio](https://github.com/nguyenphutrong/quotio) 二次开发，感谢原作者与贡献者。以下保留上游语言文档；QuotioPlus 1.0.0 的功能、安装与更新以[本仓库首页](README.md)和[本仓库 Releases](https://github.com/Geoege-xll/quotio/releases)为准。上游 Homebrew tap 安装的是原版 Quotio。
+
 # Quotio
 
 <p align="center">

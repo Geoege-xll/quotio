@@ -12,6 +12,8 @@ struct YubiKeyProvisioningSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let device: YubiKeyPIVDevice
+    /// 设置内使用导航页；其他调用点仍可保留原有事务弹窗。
+    var usesNavigation = false
     let onSuccess: @MainActor () async -> Void
 
     @State private var preflight: YubiKeyPIVPreflight?
@@ -26,6 +28,42 @@ struct YubiKeyProvisioningSheet: View {
     }
 
     var body: some View {
+        Group {
+            if usesNavigation { navigationContent }
+            else { sheetContent }
+        }
+        .task { await loadPreflight() }
+    }
+
+    /// 硬件读写流程完全复用；只替换原固定尺寸弹窗的呈现容器。
+    /// 写入过程中暂时隐藏返回，避免 PIN 或密钥操作未完成时离开页面。
+    private var navigationContent: some View {
+        Form {
+            Section {
+                LabeledContent("settings.yubikey.setupPicker".localized(), value: device.name + " (" + device.serial + ")")
+                if let preflight { planView(preflight) }
+                else if failure == nil {
+                    ProgressView("yubikey.setup.inspecting".localized())
+                }
+            }
+            if let preflight {
+                Section { credentialsView(preflight) }
+            }
+            if let failure {
+                Section {
+                    Label(failure, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red).textSelection(.enabled)
+                }
+            }
+            Section { footerView }
+        }
+        .formStyle(.grouped)
+        .modifier(SettingsPageBackground())
+        .navigationTitle("yubikey.setup.title".localized())
+        .navigationBarBackButtonHidden(isWorking)
+    }
+
+    private var sheetContent: some View {
         VStack(spacing: 0) {
             headerView
 
@@ -59,7 +97,6 @@ struct YubiKeyProvisioningSheet: View {
             footerView
         }
         .frame(width: 480, height: 560)
-        .task { await loadPreflight() }
     }
 
     private var headerView: some View {

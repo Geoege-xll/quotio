@@ -1287,7 +1287,7 @@ final class MonitorRuntimeTests: XCTestCase {
         XCTAssertEqual(candidate.clientID, GrokQuotaFetcher.defaultClientID)
     }
 
-    func testGrokMapsOnlyWeeklyPeriodAndStatusCap() throws {
+    func testGrokMapsExplicitCreditUsageAcrossPeriodTypesAndStatusCap() throws {
         let weekly = try JSONSerialization.data(withJSONObject: [
             "config": [
                 "creditUsagePercent": 25,
@@ -1310,7 +1310,8 @@ final class MonitorRuntimeTests: XCTestCase {
             weeklyQuota.models.first(where: { $0.name == "grok-extra-usage" })?.presentation,
             .status(text: String(format: "grok.status.cap".localizedStatic(), "2500"))
         )
-        XCTAssertNil(legacyQuota.models.first(where: { $0.name == "grok-weekly" }))
+        // CPA 优先接受真实 creditUsagePercent，不以周期枚举是否为 weekly 丢弃已取得的额度。
+        XCTAssertEqual(legacyQuota.models.first(where: { $0.name == "grok-weekly" })?.percentage, 75)
     }
 
     func testGrokQuotaResultMarksRejectedCredentialsAndSetsDisplayName() throws {
@@ -1882,11 +1883,12 @@ final class MonitorRuntimeTests: XCTestCase {
         let counter = Counter()
         async let first = coordinator.refresh(provider: .codex, force: true, previous: [:]) {
             await counter.increment()
-            try? await Task.sleep(for: .milliseconds(50))
+            try? await Task.sleep(for: .milliseconds(200))
             return ["account": ProviderQuotaData(models: [], lastUpdated: Date())]
         }
         async let second = coordinator.refresh(provider: .codex, force: true, previous: [:]) {
             await counter.increment()
+            try? await Task.sleep(for: .milliseconds(200))
             return ["other": ProviderQuotaData(models: [], lastUpdated: Date())]
         }
 

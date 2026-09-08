@@ -1,11 +1,25 @@
 # Changelog
 
-All notable changes to Quotio will be documented in this file.
+本文件记录 QuotioPlus 的发行变更；1.0.0 之前的条目保留自上游 Quotio。
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-09-08
+
+QuotioPlus 首次独立发布，基于 Trong Nguyen 的 Quotio 二次开发，感谢原作者及开源社区贡献者。
+
+- 采用符合界面配色的午夜蓝猫咪图标，提供中英文项目首页与当前版本截图。
+- 优化仪表盘、筛选、请求明细与价格统计，修复统计口径和空数据问题。
+- 完善客户端 Token 用量与工具调用分析，兼容 Pi 的多种安装方式。
+- 统一 SQLite 存储、持久化汇总和增量处理，降低重复扫描与大历史内存占用。
+- 新增存储维护入口，区分缓存清理、统计删除和数据库空间回收。
+- 完善账号、配额、提供商和模型配置体验，统一设置导航与原生界面。
+- 使用 QuotioPlus 独立应用身份和自有发布地址，分离上游更新检查。
+
+详细说明：[QuotioPlus 1.0.0](docs/releases/1.0.0.md)。原作者版权和第三方许可证均保留。
 
 ## [0.31.0] - 2026-09-02
 

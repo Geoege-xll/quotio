@@ -164,6 +164,11 @@ actor WarpQuotaFetcher {
             try decoder.decode(WarpQuotaResponse.self, from: data)
         }
 
+        return try await mapQuotaResponse(warpResponse)
+    }
+
+    /// 把网络请求与固定响应映射分开，允许用确定时间验证赠送额度的到期边界。
+    func mapQuotaResponse(_ warpResponse: WarpQuotaResponse, now: Date = Date()) async throws -> ProviderQuotaData {
         guard let info = warpResponse.data?.user?.user?.requestLimitInfo else {
             throw QuotaFetchError.invalidResponse
         }
@@ -174,31 +179,29 @@ actor WarpQuotaFetcher {
         return await MainActor.run {
             var models: [ModelQuota] = []
 
-            let used = info.requestsUsedSinceLastRefresh ?? 0
-            let limit = info.requestLimit ?? 0
-            let remaining = max(0, limit - used)
+            let used = info.requestsUsedSinceLastRefresh
+            let limit = info.requestLimit
+            let remaining = used.flatMap { used in limit.map { max(0, $0 - used) } }
             let isUnlimited = info.isUnlimited ?? false
 
             let percentage: Double
             if isUnlimited {
-                percentage = 100
-            } else if limit > 0 {
+                percentage = -1
+            } else if let limit, limit > 0, let remaining {
                 percentage = min(100, max(0, Double(remaining) / Double(limit) * 100))
             } else {
-                percentage = 0
+                percentage = -1
             }
 
             models.append(ModelQuota(
                 name: "warp-usage",
                 percentage: percentage,
-                resetTime: stripMilliseconds(from: info.nextRefreshTime) ?? "",
+                resetTime: Self.normalizedResetTime(info.nextRefreshTime),
+                presentation: isUnlimited ? .status(text: "不限额") : nil,
                 used: used,
                 limit: limit,
                 remaining: remaining
             ))
-
-            let dateFormatter = ISO8601DateFormatter()
-            dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
             var allGrants: [WarpQuotaResponse.WarpBonusGrant] = []
 
@@ -211,6 +214,9 @@ actor WarpQuotaFetcher {
             allGrants.append(contentsOf: userBonusGrants)
 
             for (index, grant) in allGrants.enumerated() {
+                // 到期时间决定赠额是否还能使用；接口即使保留历史剩余数，也不能继续计入可用额度。
+                let expirationDate = Self.parseResetDate(grant.expiration)
+                if let expirationDate, expirationDate <= now { continue }
                 guard let granted = grant.requestCreditsGranted,
                       let remainingCredits = grant.requestCreditsRemaining,
                       granted > 0 else {
@@ -224,13 +230,7 @@ actor WarpQuotaFetcher {
                     bonusPercentage = 0
                 }
 
-                var bonusResetTime = ""
-                if let expiration = grant.expiration,
-                   let expiryDate = dateFormatter.date(from: expiration) {
-                    let formatter = DateFormatter()
-                    formatter.dateFormat = "MM/dd"
-                    bonusResetTime = "expires " + formatter.string(from: expiryDate)
-                }
+                let bonusResetTime = expirationDate.map { ISO8601DateFormatter().string(from: $0) } ?? ""
 
                 let _ = grant.userFacingMessage?.components(separatedBy: ".").first ?? grant.reason ?? "bonus-\(index)"
 
@@ -249,14 +249,14 @@ actor WarpQuotaFetcher {
         }
     }
 
-    private nonisolated func stripMilliseconds(from timeString: String?) -> String? {
-        guard let timeString = timeString else { return nil }
-        let pattern = #"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.\d+Z$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: timeString, range: NSRange(timeString.startIndex..., in: timeString)),
-              let range = Range(match.range(at: 1), in: timeString) else {
-            return timeString
-        }
-        return String(timeString[range]) + "Z"
+    private nonisolated static func parseResetDate(_ timeString: String?) -> Date? {
+        guard let timeString else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: timeString) ?? ISO8601DateFormatter().date(from: timeString)
+    }
+
+    private nonisolated static func normalizedResetTime(_ value: String?) -> String {
+        parseResetDate(value).map { ISO8601DateFormatter().string(from: $0) } ?? ""
     }
 }

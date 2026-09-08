@@ -223,7 +223,13 @@ actor GLMQuotaFetcher {
         }
     }
 
-    /// Fetch quota for all configured GLM API keys
+    /// 配额身份仅由配置和密钥条目的稳定 UUID 组成，不包含密钥内容。
+    /// 同名配置、配置改名和多个密钥并发返回都不会再覆盖其他账号的快照。
+    nonisolated static func quotaAccountKey(providerID: UUID, apiKeyID: UUID) -> String {
+        "glm:\(providerID.uuidString.lowercased()):\(apiKeyID.uuidString.lowercased())"
+    }
+
+    /// 获取所有启用配置中的独立账号额度，显示名称与内部账号身份分离。
     func fetchAllQuotas() async -> [String: ProviderQuotaData] {
         // Get providers from CustomProviderService
         let providers = await getGlmProviders()
@@ -232,15 +238,21 @@ actor GLMQuotaFetcher {
 
         await withTaskGroup(of: (String, ProviderQuotaData?).self) { group in
             for provider in providers {
-                for apiKeyEntry in provider.apiKeys {
+                for (index, apiKeyEntry) in provider.apiKeys.enumerated() {
                     group.addTask {
                         do {
-                            let quota = try await self.fetchQuota(
+                            var quota = try await self.fetchQuota(
                                 apiKey: apiKeyEntry.apiKey,
                                 baseURL: provider.baseURL
                             )
-                            // Use provider name as identifier
-                            return (provider.name, quota)
+                            // 序号仅用于界面辨认；实际查找始终使用 UUID，密钥重排不会串号。
+                            quota.accountDisplayName = provider.apiKeys.count > 1
+                                ? "\(provider.name) · \(index + 1)"
+                                : provider.name
+                            return (Self.quotaAccountKey(
+                                providerID: provider.id,
+                                apiKeyID: apiKeyEntry.id
+                            ), quota)
                         } catch {
                             return ("", nil)
                         }

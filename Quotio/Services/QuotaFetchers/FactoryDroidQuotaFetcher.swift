@@ -450,7 +450,11 @@ nonisolated enum FactoryDroidQuotaMapper {
             models.append(ModelQuota(
                 name: prefix + "-" + suffix,
                 percentage: max(0, min(100, 100 - usedPercent)),
-                resetTime: window.windowEnd ?? ""
+                // 有些计费响应只提供相对秒数；与绝对时间表示同一窗口，不能将其丢弃。
+                resetTime: window.windowEnd ?? window.secondsRemaining.flatMap { seconds in
+                    guard seconds.isFinite, seconds >= 0 else { return nil }
+                    return ISO8601DateFormatter().string(from: now.addingTimeInterval(seconds))
+                } ?? ""
             ))
         }
     }

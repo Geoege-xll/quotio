@@ -7,7 +7,9 @@ import Foundation
 
 actor OpenAIQuotaFetcher {
     private let usageURL = "https://chatgpt.com/backend-api/wham/usage"
-    private let tokenURL = "https://token.oaifree.com/api/auth/refresh"
+    // 离线代理模式的直连回退也只向 OpenAI 官方 OAuth 服务提交刷新凭据。
+    private let tokenURL = "https://auth.openai.com/oauth/token"
+    private let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     
     private var session: URLSession
     
@@ -129,6 +131,7 @@ actor OpenAIQuotaFetcher {
         request.httpMethod = "GET"
         request.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.addValue("codex-tui/0.149.1 (Mac OS; arm64)", forHTTPHeaderField: "User-Agent")
         if let accountId, !accountId.isEmpty {
             request.addValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
         }
@@ -167,7 +170,7 @@ actor OpenAIQuotaFetcher {
         let data = try Data(contentsOf: url)
         let authFile = try JSONDecoder().decode(CodexAuthFile.self, from: data)
         let rawJSON = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        let accountId = extractAccountId(from: authFile, rawJSON: rawJSON)
+        var accountId = extractAccountId(from: authFile, rawJSON: rawJSON)
         let accountKey = resolveAccountKey(
             authFile: authFile,
             rawJSON: rawJSON,
@@ -175,14 +178,19 @@ actor OpenAIQuotaFetcher {
         )
 
         var accessToken = authFile.accessToken
-        let identity = CodexQuotaIdentity(
+        var identity = CodexQuotaIdentity(
             planType: authFile.idToken.flatMap(decodePlanType)
         )
 
         if authFile.isExpired, let refreshToken = authFile.refreshToken {
             do {
-                accessToken = try await refreshAccessToken(refreshToken: refreshToken)
-                persistRefreshedToken(at: url, originalData: data, newAccessToken: accessToken)
+                let refreshed = try await refreshAccessToken(refreshToken: refreshToken)
+                accessToken = refreshed.accessToken
+                if let token = refreshed.idToken {
+                    accountId = decodeAccountId(fromJWT: token) ?? accountId
+                    identity.planType = decodePlanType(fromJWT: token) ?? identity.planType
+                }
+                persistRefreshedToken(at: url, originalData: data, refreshed: refreshed)
             } catch {
                 Log.quota("Token refresh failed: \\(error)")
             }
@@ -216,7 +224,7 @@ actor OpenAIQuotaFetcher {
         }
     }
     
-    private func refreshAccessToken(refreshToken: String) async throws -> String {
+    private func refreshAccessToken(refreshToken: String) async throws -> TokenRefreshResponse {
         guard let url = URL(string: tokenURL) else {
             throw CodexQuotaError.invalidURL
         }
@@ -224,7 +232,11 @@ actor OpenAIQuotaFetcher {
         request.httpMethod = "POST"
         request.addValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
-        let body = "refresh_token=\(refreshToken)"
+        // 表单逐值编码，令牌中的 +、&、= 不得被当作表单分隔符。
+        let values = ["grant_type": "refresh_token", "client_id": clientID, "refresh_token": refreshToken]
+        let body = values.map { key, value in
+            key + "=" + (value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
+        }.joined(separator: "&")
         request.httpBody = body.data(using: .utf8)
         
         let (data, response) = try await session.data(for: request)
@@ -235,25 +247,29 @@ actor OpenAIQuotaFetcher {
         }
         
         let tokenResponse = try JSONDecoder().decode(TokenRefreshResponse.self, from: data)
-        return tokenResponse.accessToken
+        return tokenResponse
     }
 
     /// Persist refreshed access token back to auth file using read-modify-write
     /// to preserve all existing fields (including `disabled`, etc.)
-    private func persistRefreshedToken(at url: URL, originalData: Data, newAccessToken: String) {
+    private func persistRefreshedToken(at url: URL, originalData: Data, refreshed: TokenRefreshResponse) {
+        // 账号可能在请求期间被重新授权；仅更新仍等于原快照的文件，保留旋转后的所有令牌。
+        guard (try? Data(contentsOf: url)) == originalData else { return }
         guard var json = try? JSONSerialization.jsonObject(with: originalData) as? [String: Any] else { return }
-        json["access_token"] = newAccessToken
+        json["access_token"] = refreshed.accessToken
+        if let refresh = refreshed.refreshToken { json["refresh_token"] = refresh }
+        if let token = refreshed.idToken { json["id_token"] = token }
 
         // Update expiry to prevent repeated refresh on every cycle
         // OpenAI TokenRefreshResponse does not include expires_in, use 1 hour as default
-        let expiryDate = Date().addingTimeInterval(3600)
+        let expiryDate = Date().addingTimeInterval(TimeInterval(max(1, refreshed.expiresIn ?? 3600)))
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         formatter.timeZone = .current
         json["expired"] = formatter.string(from: expiryDate)
 
         if let updatedData = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]) {
-            try? updatedData.write(to: url)
+            try? SecureAtomicFileWriter.write(updatedData, to: url)
         }
     }
 
@@ -326,9 +342,13 @@ nonisolated struct CodexAuthFile: Codable, Sendable {
 
 private nonisolated struct TokenRefreshResponse: Codable, Sendable {
     let accessToken: String
+    let refreshToken: String?
+    let idToken: String?
+    let expiresIn: Int?
     
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
+        case refreshToken = "refresh_token", idToken = "id_token", expiresIn = "expires_in"
     }
 }
 

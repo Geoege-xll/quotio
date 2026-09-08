@@ -2,6 +2,23 @@ import XCTest
 @testable import Quotio
 
 final class AmpQuotaFetcherTests: XCTestCase {
+    private var previousLanguage: String?
+
+    override func setUp() {
+        super.setUp()
+        previousLanguage = UserDefaults.standard.string(forKey: "appLanguage")
+        UserDefaults.standard.set("en", forKey: "appLanguage")
+    }
+
+    override func tearDown() {
+        if let previousLanguage {
+            UserDefaults.standard.set(previousLanguage, forKey: "appLanguage")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "appLanguage")
+        }
+        super.tearDown()
+    }
+
     func testRequestContainsOnlyExplicitBearerJSONAndNoCookies() throws {
         let request = AmpQuotaFetcher.request(apiKey: "synthetic-token")
         XCTAssertEqual(request.url?.absoluteString, "https://ampcode.com/api/internal?userDisplayBalanceInfo")

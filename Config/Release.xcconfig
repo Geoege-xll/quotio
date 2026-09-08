@@ -6,7 +6,8 @@
 // to ensure consistent production builds
 
 // Production settings (DO NOT override these locally)
-PRODUCT_BUNDLE_IDENTIFIER = app.bytrong.quotio
+#include "Updates.xcconfig"
+PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus
 PRODUCT_NAME = Quotio
 ENABLE_HARDENED_RUNTIME = YES
 POSTHOG_PROJECT_TOKEN =

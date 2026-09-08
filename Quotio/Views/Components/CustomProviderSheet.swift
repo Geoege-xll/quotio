@@ -7,7 +7,8 @@ import SwiftUI
 
 struct CustomProviderSheet: View {
     @Environment(\.dismiss) private var dismiss
-    
+    @Environment(\.colorScheme) private var colorScheme
+
     let provider: CustomProvider?
     let initialProviderType: CustomProviderType
     let onSave: (CustomProvider) -> Void
@@ -69,29 +70,27 @@ struct CustomProviderSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             headerView
-            
-            Divider()
-            
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     // Step 1: Provider name and type
                     if providerType != .clinePass {
                         basicInfoSection
                     }
-                    
+
                     // Step 2: API Keys (needed before fetching models)
                     apiKeysSection
-                    
+
                     // Step 3: Model selection (requires API key to fetch)
                     if providerType.supportsModelMapping {
                         modelMappingSection
                     }
-                    
+
                     // Step 4: Custom headers (optional)
                     if providerType.supportsCustomHeaders {
                         customHeadersSection
                     }
-                    
+
                     // Step 5: Enable toggle
                     if providerType != .clinePass {
                         enabledSection
@@ -99,11 +98,10 @@ struct CustomProviderSheet: View {
                 }
                 .padding(20)
             }
-            
-            Divider()
-            
+
             footerView
         }
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
         .frame(width: 600, height: 700)
         .onAppear {
             loadProviderData()
@@ -145,17 +143,29 @@ struct CustomProviderSheet: View {
             }
             
             Spacer()
-            
-            Button {
+
+            // Close (26pt circular target per design spec)
+            QuotioCircularIconButton(systemImage: "xmark") {
                 dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .accessibilityLabel("action.cancel".localized())
         }
         .padding(20)
+    }
+
+    // MARK: - Step Pill
+
+    /// Compact capsule step badge (des-pill-002: 18pt height, 11pt semibold).
+    private func stepPill(_ number: Int) -> some View {
+        Text("Step \(number)")
+            .font(.system(size: 11, weight: .semibold))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 9)
+            .frame(height: 18)
+            .background(
+                Capsule().fill(QuotioTheme.Colors.cardTag(for: colorScheme))
+            )
     }
     
     // MARK: - Basic Info Section
@@ -165,18 +175,15 @@ struct CustomProviderSheet: View {
             HStack {
                 Text("customProviders.basicInfo".localized())
                     .font(.headline)
-                Text("• Step 1")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                stepPill(1)
             }
-            
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("customProviders.providerName".localized())
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                
-                TextField("e.g., OpenRouter, Ollama Local", text: $name)
-                    .textFieldStyle(.roundedBorder)
+
+                QuotioCapsuleTextField("e.g., OpenRouter, Ollama Local", text: $name)
             }
             
             VStack(alignment: .leading, spacing: 8) {
@@ -184,24 +191,47 @@ struct CustomProviderSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 
-                Picker("Type", selection: $providerType) {
+                Menu {
                     ForEach(Self.selectableProviderTypes) { type in
-                        HStack {
-                            Image(type.menuBarIconName)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 16, height: 16)
-                            Text(type.localizedDisplayName)
+                        Button {
+                            providerType = type
+                            if baseURL.isEmpty, let defaultURL = type.defaultBaseURL {
+                                baseURL = defaultURL
+                            }
+                        } label: {
+                            HStack {
+                                Image(type.menuBarIconName)
+                                Text(type.localizedDisplayName)
+                            }
                         }
-                        .tag(type)
                     }
-                }
-                .pickerStyle(.menu)
-                .onChange(of: providerType) { _, newType in
-                    if baseURL.isEmpty, let defaultURL = newType.defaultBaseURL {
-                        baseURL = defaultURL
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(providerType.menuBarIconName)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 16, height: 16)
+
+                        Text(providerType.localizedDisplayName)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+
+                        Spacer()
+
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.tertiary)
                     }
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .background(
+                        Capsule().fill(QuotioTheme.Colors.cardInset(for: colorScheme))
+                    )
+                    .overlay(
+                        Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                    )
                 }
+                .menuStyle(.borderlessButton)
             }
             
             VStack(alignment: .leading, spacing: 8) {
@@ -217,9 +247,13 @@ struct CustomProviderSheet: View {
                     }
                 }
                 
-                TextField(providerType.defaultBaseURL ?? "https://api.example.com", text: $baseURL)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(providerType == .clinePass)
+                QuotioCapsuleTextField(
+                    providerType.defaultBaseURL ?? "https://api.example.com",
+                    text: $baseURL,
+                    systemImage: "network",
+                    monospaced: true
+                )
+                .disabled(providerType == .clinePass)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -233,84 +267,73 @@ struct CustomProviderSheet: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                TextField("customProviders.prefixHint".localized(), text: $prefix)
-                    .textFieldStyle(.roundedBorder)
+                QuotioCapsuleTextField("customProviders.prefixHint".localized(), text: $prefix, systemImage: "tag")
             }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .quotioInsetCard()
     }
-    
+
     // MARK: - API Keys Section
-    
+
     private var apiKeysSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("customProviders.apiKeys".localized())
                     .font(.headline)
-                Text(providerType == .clinePass ? "• Step 1" : "• Step 2")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                
+                stepPill(providerType == .clinePass ? 1 : 2)
+
                 Spacer()
-                
+
                 if providerType != .clinePass {
                     Button {
                         apiKeys.append(CustomAPIKeyEntry(apiKey: ""))
                     } label: {
-                        Label("customProviders.addKey".localized(), systemImage: "plus.circle")
-                            .font(.caption)
+                        Label("customProviders.addKey".localized(), systemImage: "plus")
                     }
-                    .buttonStyle(.sectionHeader)
+                    .buttonStyle(.quotioMicroCapsule)
                 }
             }
-            
+
             ForEach(Array(apiKeys.enumerated()), id: \.offset) { index, _ in
                 apiKeyRow(index: index)
             }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .quotioInsetCard()
     }
-    
+
     private func apiKeyRow(index: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("API Key #\(index + 1)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                
+
                 Spacer()
-                
+
                 if apiKeys.count > 1 {
-                    Button {
+                    QuotioCircularIconButton(systemImage: "trash", tint: .red, backgroundTint: .red) {
                         apiKeys.remove(at: index)
-                    } label: {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.red)
                     }
-                    .buttonStyle(.rowActionDestructive)
                 }
             }
-            
-            SecureField("customProviders.apiKeys".localized(), text: Binding(
+
+            QuotioCapsuleSecureField("customProviders.apiKeys".localized(), text: Binding(
                 get: { apiKeys[safe: index]?.apiKey ?? "" },
                 set: { if index < apiKeys.count { apiKeys[index].apiKey = $0 } }
-            ))
-            .textFieldStyle(.roundedBorder)
-            
-            TextField("customProviders.proxyURL".localized(), text: Binding(
+            ), systemImage: "key")
+
+            QuotioCapsuleTextField("customProviders.proxyURL".localized(), text: Binding(
                 get: { apiKeys[safe: index]?.proxyURL ?? "" },
                 set: { if index < apiKeys.count { apiKeys[index].proxyURL = $0.isEmpty ? nil : $0 } }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .font(.caption)
+            ), systemImage: "globe", monospaced: true)
         }
         .padding(12)
-        .background(Color(.windowBackgroundColor))
-        .cornerRadius(6)
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+        )
     }
     
     // MARK: - Model Mapping Section
@@ -346,9 +369,7 @@ struct CustomProviderSheet: View {
                     HStack {
                         Text("customProviders.modelMapping".localized())
                             .font(.headline)
-                        Text(providerType == .clinePass ? "• Step 2" : "• Step 3")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                        stepPill(providerType == .clinePass ? 2 : 3)
                     }
                     
                     Text("customProviders.modelMappingDesc".localized())
@@ -367,9 +388,8 @@ struct CustomProviderSheet: View {
                             fetchModelsFromAPI()
                         } label: {
                             Label("customProviders.fetchModels".localized(), systemImage: "arrow.clockwise")
-                                .font(.caption)
                         }
-                        .buttonStyle(.sectionHeader)
+                        .buttonStyle(.quotioMicroCapsule)
                         .disabled(apiKeys.first?.apiKey.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
                     }
                 }
@@ -386,7 +406,7 @@ struct CustomProviderSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch)
                 .disabled(providerType == .clinePass)
                 
                 if limitToSelectedModels && selectedModelIds.isEmpty {
@@ -419,32 +439,13 @@ struct CustomProviderSheet: View {
                 manualModelEntry
             }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .quotioInsetCard()
     }
-    
+
     private var modelSelectionList: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Search box
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("customProviders.searchModels".localized(), text: $modelSearchText)
-                    .textFieldStyle(.plain)
-                if !modelSearchText.isEmpty {
-                    Button {
-                        modelSearchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(6)
-            .background(Color(.windowBackgroundColor))
-            .cornerRadius(6)
+            QuotioCapsuleTextField("customProviders.searchModels".localized(), text: $modelSearchText, systemImage: "magnifyingglass")
             
             // Top 5 popular models
             if modelSearchText.isEmpty && !topModels.isEmpty {
@@ -489,71 +490,54 @@ struct CustomProviderSheet: View {
                     Button("customProviders.clearSelection".localized()) {
                         selectedModelIds.removeAll()
                     }
-                    .font(.caption)
+                    .buttonStyle(.quotioMicroCapsule)
                 }
             }
-            
+
             // Select All / Deselect All buttons
             if !availableModels.isEmpty {
-                HStack {
+                HStack(spacing: 8) {
                     Button("customProviders.selectAll".localized()) {
                         selectedModelIds = Set(availableModels.map { $0.id })
                     }
-                    .font(.caption)
-                    
+                    .buttonStyle(.quotioMicroCapsule)
+
                     Button("customProviders.deselectAll".localized()) {
                         selectedModelIds.removeAll()
                     }
-                    .font(.caption)
+                    .buttonStyle(.quotioMicroCapsule)
                 }
             }
         }
     }
-    
+
     private func modelSelectionRow(model: AvailableModel) -> some View {
-        Button {
-            if selectedModelIds.contains(model.id) {
-                selectedModelIds.remove(model.id)
-            } else {
-                selectedModelIds.insert(model.id)
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: selectedModelIds.contains(model.id) ? "checkmark.square" : "square")
-                    .foregroundStyle(selectedModelIds.contains(model.id) ? Color.accentColor : .secondary)
-                
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(model.name)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                    if model.id != model.name {
-                        Text(model.id)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
+        ModelSelectionRowView(
+            model: model,
+            isSelected: selectedModelIds.contains(model.id),
+            onToggle: {
+                if selectedModelIds.contains(model.id) {
+                    selectedModelIds.remove(model.id)
+                } else {
+                    selectedModelIds.insert(model.id)
                 }
-                
-                Spacer()
             }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        )
     }
-    
+
     private var manualModelEntry: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("customProviders.enterManually".localized())
                 .font(.caption)
                 .foregroundStyle(.tertiary)
-            
+
             Button {
                 models.append(ModelMapping(name: "", alias: ""))
             } label: {
-                Label("customProviders.addMapping".localized(), systemImage: "plus.circle")
-                    .font(.caption)
+                Label("customProviders.addMapping".localized(), systemImage: "plus")
             }
-            .buttonStyle(.sectionHeader)
-            
+            .buttonStyle(.quotioMicroCapsule)
+
             if models.isEmpty {
                 Text("customProviders.noMappings".localized())
                     .font(.caption)
@@ -566,78 +550,77 @@ struct CustomProviderSheet: View {
             }
         }
     }
-    
+
     private func modelMappingRow(index: Int) -> some View {
         VStack(spacing: 8) {
             HStack(spacing: 12) {
-                TextField("customProviders.upstreamModel".localized(), text: Binding(
+                QuotioCapsuleTextField("customProviders.upstreamModel".localized(), text: Binding(
                     get: { models[safe: index]?.name ?? "" },
                     set: { if index < models.count { models[index].name = $0 } }
                 ))
-                .textFieldStyle(.roundedBorder)
-                
+
                 Image(systemName: "arrow.right")
-                    .foregroundStyle(.secondary)
-                
-                TextField("customProviders.localAlias".localized(), text: Binding(
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.tertiary)
+
+                QuotioCapsuleTextField("customProviders.localAlias".localized(), text: Binding(
                     get: { models[safe: index]?.alias ?? "" },
                     set: { if index < models.count { models[index].alias = $0 } }
                 ))
-                .textFieldStyle(.roundedBorder)
-                
-                Button {
+
+                QuotioCircularIconButton(systemImage: "trash", tint: .red, backgroundTint: .red) {
                     models.remove(at: index)
-                } label: {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.red)
                 }
-                .buttonStyle(.rowActionDestructive)
             }
-            
+
             HStack(spacing: 8) {
                 Text("customProviders.thinkingBudget".localized())
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                
-                TextField("customProviders.thinkingBudgetHint".localized(), text: Binding(
+
+                QuotioCapsuleTextField("customProviders.thinkingBudgetHint".localized(), text: Binding(
                     get: { models[safe: index]?.thinkingBudget ?? "" },
                     set: { if index < models.count { models[index].thinkingBudget = $0.isEmpty ? nil : $0 } }
-                ))
-                .textFieldStyle(.roundedBorder)
+                ), showsClearButton: false)
                 .frame(maxWidth: 200)
-                
+
                 Spacer()
             }
             .padding(.leading, 4)
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+        )
     }
-    
+
     // MARK: - Custom Headers Section
-    
+
     private var customHeadersSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("customProviders.customHeaders".localized())
                         .font(.headline)
-                    
+
                     Text("customProviders.customHeadersDesc".localized())
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                
+
                 Spacer()
-                
+
                 Button {
                     headers.append(CustomHeader(key: "", value: ""))
                 } label: {
-                    Label("customProviders.addHeader".localized(), systemImage: "plus.circle")
-                        .font(.caption)
+                    Label("customProviders.addHeader".localized(), systemImage: "plus")
                 }
-                .buttonStyle(.sectionHeader)
+                .buttonStyle(.quotioMicroCapsule)
             }
-            
+
             if headers.isEmpty {
                 Text("customProviders.noHeaders".localized())
                     .font(.caption)
@@ -649,56 +632,55 @@ struct CustomProviderSheet: View {
                 }
             }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .quotioInsetCard()
     }
-    
+
     private func customHeaderRow(index: Int) -> some View {
         HStack(spacing: 12) {
-            TextField("customProviders.headerName".localized(), text: Binding(
+            QuotioCapsuleTextField("customProviders.headerName".localized(), text: Binding(
                 get: { headers[safe: index]?.key ?? "" },
                 set: { if index < headers.count { headers[index].key = $0 } }
-            ))
-            .textFieldStyle(.roundedBorder)
-            
+            ), showsClearButton: false)
+
             Text(":")
-                .foregroundStyle(.secondary)
-            
-            TextField("customProviders.headerValue".localized(), text: Binding(
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.tertiary)
+
+            QuotioCapsuleTextField("customProviders.headerValue".localized(), text: Binding(
                 get: { headers[safe: index]?.value ?? "" },
                 set: { if index < headers.count { headers[index].value = $0 } }
-            ))
-            .textFieldStyle(.roundedBorder)
-            
-            Button {
+            ), showsClearButton: false)
+
+            QuotioCircularIconButton(systemImage: "trash", tint: .red, backgroundTint: .red) {
                 headers.remove(at: index)
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(.red)
             }
-            .buttonStyle(.rowActionDestructive)
         }
+        .padding(10)
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+        )
     }
-    
+
     // MARK: - Enabled Section
-    
+
     private var enabledSection: some View {
         HStack {
             Toggle("customProviders.enableProvider".localized(), isOn: $isEnabled)
+                .toggleStyle(.switch)
                 .disabled(providerType == .clinePass)
-            
+
             Spacer()
-            
+
             if !isEnabled {
                 Text("customProviders.disabledNote".localized())
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .quotioInsetCard()
     }
     
     // MARK: - Footer
@@ -708,6 +690,7 @@ struct CustomProviderSheet: View {
             Button("action.cancel".localized()) {
                 dismiss()
             }
+            .buttonStyle(.quotioSecondaryCapsule)
             .keyboardShortcut(.escape)
             .disabled(isTestingConnection)
             
@@ -727,7 +710,7 @@ struct CustomProviderSheet: View {
                 saveProvider()
             }
             .keyboardShortcut(.return, modifiers: .command)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.quotioPrimaryCapsule)
             .disabled(isTestingConnection)
         }
         .padding(20)
@@ -1125,6 +1108,53 @@ private struct ModelData: Codable {
 private extension Array {
     subscript(safe index: Index) -> Element? {
         indices.contains(index) ? self[index] : nil
+    }
+}
+
+// MARK: - Model Selection Row View
+
+private struct ModelSelectionRowView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let model: AvailableModel
+    let isSelected: Bool
+    let onToggle: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary.opacity(0.6))
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(model.name)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    if model.id != model.name {
+                        Text(model.id)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous)
+                    .fill(isHovered ? QuotioTheme.Colors.cardElevated(for: colorScheme).opacity(0.6) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
     }
 }
 

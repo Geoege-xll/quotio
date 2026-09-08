@@ -50,12 +50,13 @@ final class AtomFeedUpdateService {
     // MARK: - Feed URLs
 
     private static let cliProxyFeedURL = "https://github.com/router-for-me/CLIProxyAPI/releases.atom"
-    private static let quotioFeedURL = "https://github.com/nguyenphutrong/quotio/releases.atom"
+    private static let quotioFeedURL = AppReleaseConfiguration.atomFeedURL.absoluteString
 
     // MARK: - Cache Keys
 
     private static let cliProxyCacheKey = "atomFeedCache_cliproxy"
-    private static let quotioCacheKey = "atomFeedCache_quotio"
+    // 仓库切换后不复用原上游的 ETag 和版本，防止旧缓存继续提示安装上游发行版。
+    private static let quotioCacheKey = "atomFeedCache_app_" + AppReleaseConfiguration.repository
 
     // MARK: - Polling Configuration
 

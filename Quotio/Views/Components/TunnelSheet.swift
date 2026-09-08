@@ -11,45 +11,46 @@ import AppKit
 struct TunnelSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(QuotaViewModel.self) private var viewModel
-    
+    @Environment(\.colorScheme) private var colorScheme
+
     private var tunnelManager: TunnelManager { TunnelManager.shared }
     private var proxyPort: UInt16 { viewModel.proxyManager.port }
-    
+
     @State private var isHoveringCopy = false
-    
+
     var body: some View {
         VStack(spacing: 0) {
             headerView
-                .background(Color(nsColor: .windowBackgroundColor))
-            
+                .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+
             Divider()
-            
+
             ScrollView {
                 VStack(spacing: 24) {
                     if !tunnelManager.installation.isInstalled {
                         installationBanner
                     } else {
                         statusSection
-                        
+
                         if tunnelManager.tunnelState.isActive {
                             publicUrlSection
                         }
-                        
+
                         if let error = tunnelManager.tunnelState.errorMessage {
                             errorSection(error)
                         }
-                        
+
                         infoSection
                     }
                 }
                 .padding(24)
             }
-            .background(Color(nsColor: .controlBackgroundColor))
-            
+            .background(QuotioTheme.Colors.canvasBackground(for: colorScheme))
+
             Divider()
-            
+
             footerView
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
         }
         .frame(width: 520, height: 450)
     }
@@ -59,7 +60,7 @@ struct TunnelSheet: View {
     private var headerView: some View {
         HStack(spacing: 16) {
             ZStack {
-                Circle()
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [.blue.opacity(0.15), .purple.opacity(0.1)],
@@ -69,10 +70,10 @@ struct TunnelSheet: View {
                     )
                     .frame(width: 48, height: 48)
                     .overlay(
-                        Circle()
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
                     )
-                
+
                 Image(systemName: "globe")
                     .font(.system(size: 24))
                     .foregroundStyle(
@@ -155,15 +156,14 @@ struct TunnelSheet: View {
                 .controlSize(.regular)
             }
             .padding(16)
-            .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+            .background(QuotioTheme.Colors.cardInset(for: colorScheme))
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
     
     private var publicUrlSection: some View {
@@ -215,13 +215,12 @@ struct TunnelSheet: View {
             }
         }
         .padding(16)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
     
     private func errorSection(_ message: String) -> some View {
@@ -286,13 +285,12 @@ struct TunnelSheet: View {
             }
         }
         .padding(16)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
     
     private var installationBanner: some View {
@@ -339,8 +337,12 @@ struct TunnelSheet: View {
                 }
             }
             .padding()
-            .background(Color(nsColor: .windowBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .background(QuotioTheme.Colors.cardInset(for: colorScheme))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+            )
         }
         .padding()
     }

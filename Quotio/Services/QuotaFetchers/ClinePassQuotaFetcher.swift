@@ -92,7 +92,7 @@ actor ClinePassQuotaFetcher {
         }
     }
 
-    private func parseQuota(_ data: Data) throws -> ProviderQuotaData {
+    func parseQuota(_ data: Data) throws -> ProviderQuotaData {
         let response = try JSONDecoder().decode(ClinePassLimitsResponse.self, from: data)
         guard response.success else {
             throw QuotaFetchError.invalidResponse
@@ -134,7 +134,8 @@ actor ClinePassQuotaFetcher {
         standard.formatOptions = [.withInternetDateTime]
 
         guard let date = fractional.date(from: value) ?? standard.date(from: value) else {
-            throw QuotaFetchError.invalidResponse
+            // 重置时间格式异常不等于额度值无效；保留各个已成功解析的窗口，时间暂按未知展示。
+            return ""
         }
         return ISO8601DateFormatter().string(from: date)
     }

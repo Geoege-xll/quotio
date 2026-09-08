@@ -23,12 +23,12 @@ nonisolated struct CopilotQuotaSnapshot: Codable, Sendable {
     }
     
     nonisolated func calculatePercent(defaultTotal: Int) -> Double {
-        if let percent = percentRemaining {
+        if let percent = percentRemaining, percent.isFinite {
             return min(100, max(0, percent))
         }
-        let remaining = remaining ?? 0
-        let total = entitlement ?? defaultTotal
-        return total > 0 ? min(100, max(0, (Double(remaining) / Double(total)) * 100)) : 0
+        // 不再用 Free 套餐的硬编码额度替代缺失上限；同一账号可能属于不同付费方案。
+        guard let remaining, let total = entitlement, total > 0 else { return -1 }
+        return min(100, max(0, (Double(remaining) / Double(total)) * 100))
     }
 }
 
@@ -433,59 +433,35 @@ actor CopilotQuotaFetcher {
     }
     
     private func convertToQuotaData(entitlement: CopilotEntitlement) -> ProviderQuotaData {
+        Self.mapEntitlement(entitlement)
+    }
+
+    /// 每类额度独立选择新式快照或旧式计数，避免一条不完整快照屏蔽其他有效额度。
+    nonisolated static func mapEntitlement(_ entitlement: CopilotEntitlement) -> ProviderQuotaData {
         var models: [ModelQuota] = []
         let resetTimeString = entitlement.resetDate?.ISO8601Format() ?? ""
-
-        // Method 1: Parse quota_snapshots (used by some plans)
-        if let snapshots = entitlement.quotaSnapshots {
-            if let chat = snapshots.chat, chat.unlimited != true {
-                models.append(ModelQuota(
-                    name: "copilot-chat",
-                    percentage: chat.calculatePercent(defaultTotal: 50),
-                    resetTime: resetTimeString
-                ))
+        let categories: [(String, CopilotQuotaSnapshot?, Int?, Int?)] = [
+            ("copilot-chat", entitlement.quotaSnapshots?.chat, entitlement.limitedUserQuotas?.chat, entitlement.monthlyQuotas?.chat),
+            ("copilot-completions", entitlement.quotaSnapshots?.completions, entitlement.limitedUserQuotas?.completions, entitlement.monthlyQuotas?.completions),
+            ("copilot-premium", entitlement.quotaSnapshots?.premiumInteractions, nil, nil),
+        ]
+        for (name, snapshot, remaining, total) in categories {
+            if snapshot?.unlimited == true {
+                models.append(ModelQuota(name: name, percentage: -1, resetTime: "", presentation: .status(text: "不限额")))
+                continue
             }
-
-            if let completions = snapshots.completions, completions.unlimited != true {
-                models.append(ModelQuota(
-                    name: "copilot-completions",
-                    percentage: completions.calculatePercent(defaultTotal: 2000),
-                    resetTime: resetTimeString
-                ))
+            let snapshotPercentage = snapshot?.calculatePercent(defaultTotal: 0) ?? -1
+            let percentage: Double
+            if snapshotPercentage >= 0 {
+                percentage = snapshotPercentage
+            } else if let remaining, let total, total > 0 {
+                percentage = min(100, max(0, Double(remaining) / Double(total) * 100))
+            } else if snapshot != nil || remaining != nil || total != nil {
+                percentage = -1
+            } else {
+                continue
             }
-
-            if let premium = snapshots.premiumInteractions, premium.unlimited != true {
-                models.append(ModelQuota(
-                    name: "copilot-premium",
-                    percentage: premium.calculatePercent(defaultTotal: 50),
-                    resetTime: resetTimeString
-                ))
-            }
-        }
-
-        // Method 2: Parse limited_user_quotas + monthly_quotas (used by free/individual plans)
-        if models.isEmpty,
-           let remaining = entitlement.limitedUserQuotas,
-           let total = entitlement.monthlyQuotas {
-            // Chat quota
-            if let chatRemaining = remaining.chat, let chatTotal = total.chat, chatTotal > 0 {
-                let percentage = min(100, max(0, (Double(chatRemaining) / Double(chatTotal)) * 100.0))
-                models.append(ModelQuota(
-                    name: "copilot-chat",
-                    percentage: percentage,
-                    resetTime: resetTimeString
-                ))
-            }
-
-            // Completions quota
-            if let compRemaining = remaining.completions, let compTotal = total.completions, compTotal > 0 {
-                let percentage = min(100, max(0, (Double(compRemaining) / Double(compTotal)) * 100.0))
-                models.append(ModelQuota(
-                    name: "copilot-completions",
-                    percentage: percentage,
-                    resetTime: resetTimeString
-                ))
-            }
+            models.append(ModelQuota(name: name, percentage: percentage, resetTime: resetTimeString))
         }
 
         return ProviderQuotaData(

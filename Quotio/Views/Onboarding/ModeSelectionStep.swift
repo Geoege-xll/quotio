@@ -66,6 +66,7 @@ struct ModeSelectionStep: View {
 }
 
 struct OperatingModeCard: View {
+    @Environment(\.colorScheme) private var colorScheme
     let mode: OperatingMode
     let isSelected: Bool
     let onSelect: () -> Void
@@ -107,10 +108,6 @@ struct OperatingModeCard: View {
         .padding(16)
         .background(backgroundView)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(borderColor, lineWidth: isSelected ? 2 : 1)
-        )
         .scaleEffect(isHovered ? 1.01 : 1.0)
         .animation(.easeInOut(duration: 0.15), value: isHovered)
         .animation(.easeInOut(duration: 0.15), value: isSelected)
@@ -124,36 +121,22 @@ struct OperatingModeCard: View {
             .font(.title2)
             .foregroundStyle(isSelected ? .white : mode.color)
             .frame(width: 44, height: 44)
-            .background(isSelected ? mode.color : Color.clear)
+            .background(isSelected ? mode.color : mode.color.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(mode.color, lineWidth: isSelected ? 0 : 2)
-            )
     }
     
     private var badgeColor: Color {
         .green
     }
     
-    private var borderColor: Color {
-        if isSelected {
-            return Color.accentColor
-        } else if isHovered {
-            return Color.secondary.opacity(0.5)
-        } else {
-            return Color.secondary.opacity(0.2)
-        }
-    }
-    
     @ViewBuilder
     private var backgroundView: some View {
         if isSelected {
-            Color.accentColor.opacity(0.08)
+            Color.accentColor.opacity(colorScheme == .dark ? 0.16 : 0.08)
         } else if isHovered {
-            Color.secondary.opacity(0.05)
+            QuotioTheme.Colors.cardElevated(for: colorScheme)
         } else {
-            Color.clear
+            QuotioTheme.Colors.cardInset(for: colorScheme)
         }
     }
 }

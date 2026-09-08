@@ -32,7 +32,14 @@ plans/
 # Local AI agent context (not shared)
 .context/
 .wallpaper-cache/
+.claude/
+*.profraw
 
 .DS_Store
 
 .lattice/
+# 本机性能采集和临时验证产物，不纳入发行源码。
+*.trace/
+*.memgraph
+/work/
+.build-benchmark/

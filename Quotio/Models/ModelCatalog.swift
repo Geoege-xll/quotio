@@ -80,12 +80,30 @@ nonisolated struct ModelCatalogState: Equatable, Sendable {
         hasCompletedFetch && !lastFetchFailed && entries.isEmpty
     }
 
-    mutating func beginLoading() {
+    /// 每次读取独立令牌；停止清空或新请求发出后，旧响应不能重新填充目录。
+    private(set) var requestID: UUID?
+
+    @discardableResult
+    mutating func beginLoading() -> UUID {
+        let token = UUID()
+        requestID = token
         isLoading = true
+        return token
+    }
+
+    mutating func complete(entries: [ModelCatalogEntry], fetchedAt: Date, requestID: UUID) {
+        guard self.requestID == requestID else { return }
+        apply(entries: entries, fetchedAt: fetchedAt)
+    }
+
+    mutating func fail(requestID: UUID) {
+        guard self.requestID == requestID else { return }
+        applyFailure()
     }
 
     /// Records a successful `/v1/models` response verbatim.
     mutating func apply(entries: [ModelCatalogEntry], fetchedAt: Date) {
+        requestID = nil
         self.entries = ModelCatalog.displayEntries(entries)
         freshness = .live(fetchedAt: fetchedAt)
         isLoading = false
@@ -95,6 +113,7 @@ nonisolated struct ModelCatalogState: Equatable, Sendable {
 
     /// Records a failed fetch, keeping any earlier response but demoting it to stale.
     mutating func applyFailure() {
+        requestID = nil
         isLoading = false
         lastFetchFailed = true
         hasCompletedFetch = true
@@ -153,6 +172,18 @@ nonisolated enum ModelCatalog {
             .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
     }
 
+    /// 分组只采用接口归属字段，不按模型名称猜测提供商，也不解释请求路由。
+    /// 全目录先按 ID 去重；缺失归属独立成组，避免伪造默认提供商或漏掉条目。
+    static func groups(_ entries: [ModelCatalogEntry]) -> [ModelCatalogGroup] {
+        let grouped = Dictionary(grouping: displayEntries(entries), by: \.displayOwner)
+        return grouped.map { ModelCatalogGroup(owner: $0.key, entries: $0.value) }
+            .sorted {
+                guard let left = $0.owner else { return false }
+                guard let right = $1.owner else { return true }
+                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+            }
+    }
+
     /// Maps catalog entries onto the agent-setup model list.
     ///
     /// Preserves the historical `owned_by ?? "openai"` provider default that
@@ -168,5 +199,17 @@ nonisolated enum ModelCatalog {
                 isDefault: false
             )
         }
+    }
+}
+
+/// 归属为可选字符串，标识保留 nil，防止真实归属值与“未提供”显示文案冲突。
+nonisolated struct ModelCatalogGroup: Identifiable, Equatable, Sendable {
+    let owner: String?
+    let entries: [ModelCatalogEntry]
+    var id: String? { owner }
+
+    /// 默认每组最多三项；展开时返回该组完整条目，不受模型名称或归属值影响。
+    func visibleEntries(expanded: Bool) -> [ModelCatalogEntry] {
+        expanded ? entries : Array(entries.prefix(3))
     }
 }

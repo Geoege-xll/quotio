@@ -13,10 +13,10 @@ struct AgentCard: View {
         HStack(spacing: 16) {
             // Agent Icon
             ZStack {
-                Circle()
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(status.agent.color.opacity(0.15))
                     .frame(width: 48, height: 48)
-                
+
                 Image(systemName: status.agent.systemIcon)
                     .font(.title2)
                     .foregroundStyle(status.agent.color)
@@ -30,6 +30,13 @@ struct AgentCard: View {
                         .fontWeight(.semibold)
                     
                     StatusBadge(status: status)
+
+                    // Pi 的版本来自包元数据或成功的版本探测，便于核对多种安装方式下实际选中的版本。
+                    if status.agent == .pi, let version = status.version {
+                        Text(version)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 
                 Text(status.agent.description)
@@ -72,12 +79,10 @@ struct AgentCard: View {
                 .tint(status.agent.color)
             }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .quotioCard(cornerRadius: QuotioTheme.Radius.lg, padding: 16)
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(status.configured ? status.agent.color.opacity(0.3) : Color.clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
+                .stroke(status.configured ? status.agent.color.opacity(0.35) : Color.clear, lineWidth: 1)
         )
     }
 }
@@ -93,7 +98,7 @@ private struct StatusBadge: View {
                 .fill(status.statusColor)
                 .frame(width: 6, height: 6)
             
-            Text(status.statusText)
+            Text(status.statusLocalizationKey.localized())
                 .font(.caption)
                 .foregroundStyle(status.statusColor)
         }
@@ -101,6 +106,8 @@ private struct StatusBadge: View {
         .padding(.vertical, 3)
         .background(status.statusColor.opacity(0.1))
         .clipShape(Capsule())
+        // 「已配置」指 Quotio 的代理接入；Pi 自身登录其他提供商并不等于已接入 CPA。
+        .help(status.agent == .pi ? "agents.pi.statusHelp".localized() : status.statusLocalizationKey.localized())
     }
 }
 

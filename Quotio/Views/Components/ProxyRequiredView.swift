@@ -30,7 +30,7 @@ struct ProxyRequiredView: View {
         VStack(spacing: 24) {
             // Icon with animated gradient background
             ZStack {
-                Circle()
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .fill(
                         LinearGradient(
                             colors: [.blue.opacity(0.15), .purple.opacity(0.15)],
@@ -39,7 +39,7 @@ struct ProxyRequiredView: View {
                         )
                     )
                     .frame(width: 100, height: 100)
-                
+
                 Image(systemName: icon)
                     .font(.system(size: 40, weight: .medium))
                     .foregroundStyle(

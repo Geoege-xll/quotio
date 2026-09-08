@@ -49,24 +49,22 @@ struct QuotaCard: View {
     }
     
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 16) {
-                headerSection
-                
-                if hasRealQuotaData {
-                    realQuotaSection
-                } else {
-                    estimatedQuotaSection
-                }
-                
-                Divider()
-                
-                statusBreakdownSection
-                
-                accountListSection
+        VStack(alignment: .leading, spacing: 16) {
+            headerSection
+
+            if hasRealQuotaData {
+                realQuotaSection
+            } else {
+                estimatedQuotaSection
             }
-            .padding(4)
+
+            Divider()
+
+            statusBreakdownSection
+
+            accountListSection
         }
+        .quotioCard()
     }
     
     // MARK: - Header

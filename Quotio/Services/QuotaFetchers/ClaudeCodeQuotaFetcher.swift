@@ -26,6 +26,8 @@ nonisolated struct ClaudeCodeQuotaInfo: Sendable {
     let sevenDaySonnet: QuotaUsage?
     let sevenDayOpus: QuotaUsage?
     let extraUsage: ExtraUsage?
+    /// 两条获取路径共用完整窗口解析，兼容既有调用者构造的旧四窗口快照。
+    var parsedModels: [ModelQuota]? = nil
 
     struct QuotaUsage: Sendable {
         let utilization: Double  // Percentage used (0-100)
@@ -298,6 +300,7 @@ actor ClaudeCodeQuotaFetcher {
             let sevenDayOpus = parseQuotaUsage(from: json["seven_day_opus"] as? [String: Any])
             let extraUsage = parseExtraUsage(from: json["extra_usage"] as? [String: Any])
 
+            let mapped = try ClaudeQuotaMapper.map(data: data)
             return .success(ClaudeCodeQuotaInfo(
                 accessToken: accessToken,
                 email: email,
@@ -305,7 +308,8 @@ actor ClaudeCodeQuotaFetcher {
                 sevenDay: sevenDay,
                 sevenDaySonnet: sevenDaySonnet,
                 sevenDayOpus: sevenDayOpus,
-                extraUsage: extraUsage
+                extraUsage: extraUsage,
+                parsedModels: mapped.models
             ))
         } catch {
             NSLog("[ClaudeQuota] Network error: \(error.localizedDescription)")
@@ -540,6 +544,9 @@ actor ClaudeCodeQuotaFetcher {
     }
 
     private func quotaData(from info: ClaudeCodeQuotaInfo) -> ProviderQuotaData? {
+        if let models = info.parsedModels {
+            return ProviderQuotaData(models: models, lastUpdated: Date())
+        }
         var models: [ModelQuota] = []
         if let value = info.fiveHour {
             models.append(ModelQuota(name: "five-hour-session", percentage: value.remaining, resetTime: value.resetsAt))

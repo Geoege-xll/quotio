@@ -29,6 +29,11 @@ nonisolated struct CodexResetCreditInventoryFetcher: Sendable {
             return nil
         }
 
+        return try Self.analytics(data: data, now: now())
+    }
+
+    /// 直连与 CPA authIndex 请求共享同一个库存解码器，避免重置次数在不同连接模式下采用不同口径。
+    static func analytics(data: Data, now: Date = Date()) throws -> QuotaAnalytics? {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom(Self.decodeISO8601Date)
         let payload = try decoder.decode(CodexResetCreditInventoryResponse.self, from: data)
@@ -37,7 +42,7 @@ nonisolated struct CodexResetCreditInventoryFetcher: Sendable {
         let snapshot = CodexResetCreditInventorySnapshot(
             credits: payload.credits.map(\.model),
             availableCount: payload.availableCount,
-            updatedAt: now()
+            updatedAt: now
         )
         return Self.analytics(from: snapshot)
     }

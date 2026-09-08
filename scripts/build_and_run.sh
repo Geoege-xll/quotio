@@ -9,7 +9,8 @@ DERIVED_DATA="${BUILD_DIR}/DebugDerivedData"
 CACHE_OWNER_FILE="${DERIVED_DATA}/.project-path"
 APP_PATH="${DERIVED_DATA}/Build/Products/Debug/${PROJECT_NAME}.app"
 APP_BINARY="${APP_PATH}/Contents/MacOS/${PROJECT_NAME}"
-BUNDLE_ID="app.bytrong.quotio"
+# 实际日志子系统跟随构建后的 Bundle ID，不固定为旧应用身份。
+BUNDLE_ID="com.app.george.quotioplus"
 MODE="run"
 
 usage() {
@@ -67,6 +68,7 @@ fi
 
 echo "==> Stopping any running ${PROJECT_NAME} process"
 pkill -x "${PROJECT_NAME}" 2>/dev/null || true
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP_PATH}/Contents/Info.plist")"
 sleep 0.5
 
 case "${MODE}" in

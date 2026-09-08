@@ -6,100 +6,45 @@
 import SwiftUI
 import AppKit
 
+/// 设置内部只建立一个系统导航栈；系统负责 Push、返回按钮、标题与键盘导航。
+/// 应用模式只在根页面编辑，返回根页面的定位操作不写入任何业务配置。
 struct SettingsScreen: View {
-    @Environment(QuotaViewModel.self) private var viewModel
-    @State private var modeManager = OperatingModeManager.shared
-    private let launchManager = LaunchAtLoginManager.shared
-    
+    var opensLogs = false
+    @State private var path = NavigationPath()
+    @State private var search = ""
+    @State private var modeFocusRequest = UUID()
+
     var body: some View {
-        @Bindable var lang = LanguageManager.shared
-
-        Form {
-            // Operating Mode
-            OperatingModeSection()
-
-            // General Settings
-            Section {
-                LaunchAtLoginToggle()
-            } header: {
-                Label("settings.general".localized(), systemImage: "gearshape")
-            }
-
-            // Language
-            Section {
-                Picker(selection: Binding(
-                    get: { lang.currentLanguage },
-                    set: { lang.setLanguage($0) }
-                )) {
-                    ForEach(AppLanguage.allCases) { language in
-                        HStack {
-                            Text(language.flag)
-                            Text(language.displayName)
-                        }
-                        .tag(language)
+        NavigationStack(path: $path) {
+            SettingsOverviewScreen(search: $search, modeFocusRequest: modeFocusRequest)
+                .navigationDestination(for: SettingsDestination.self) { destination in
+                    SettingsCategoryScreen(destination: destination, onShowMode: showMode)
+                }
+                .navigationDestination(for: SettingsAuxiliaryPage.self) { page in
+                    switch page {
+                    case .aliases: SettingsModelAliasesScreen()
+                    case .agents: AgentSetupScreen()
+                    case .logs: LogsScreen()
+                    case .about: AboutScreen()
+                    case .upstreamUpdates: UpstreamUpdatesScreen()
+                    case .storageData: StorageDataDestination()
                     }
-                } label: {
-                    Text("settings.language".localized())
                 }
-            } header: {
-                Label("settings.language".localized(), systemImage: "globe")
-            }
-
-            // Troubleshooting
-            Section {
-                Button("troubleshooting.applyWorkaround".localized()) {
-                    CLIProxyManager.shared.applyBaseURLWorkaround()
-                }
-
-                Button("troubleshooting.restoreOriginal".localized()) {
-                    CLIProxyManager.shared.removeBaseURLWorkaround()
-                }
-            } header: {
-                Label("troubleshooting.title".localized(), systemImage: "hammer.fill")
-            } footer: {
-                Text("troubleshooting.description".localized())
-            }
-
-            // Appearance
-            AppearanceSettingsSection()
-            
-            // Privacy
-            PrivacySettingsSection()
-
-            // Hardware-backed secret storage
-            YubiKeySettingsSection()
-            
-            // Local Proxy Server - Only in Local Proxy Mode
-            if modeManager.isLocalProxyMode {
-                LocalProxyServerSection()
-                ProxySettingsSection()
-            }
-            
-            // Notifications
-            NotificationSettingsSection()
-            
-            // Quota Display
-            QuotaDisplaySettingsSection()
-            
-            // Usage Display
-            UsageDisplaySettingsSection()
-            
-            // Refresh Cadence
-            RefreshCadenceSettingsSection()
-            
-            // Menu Bar
-            MenuBarSettingsSection()
-            
-            // Paths - Only in Local Proxy Mode
-            if modeManager.isLocalProxyMode {
-                LocalPathsSection()
-            }
         }
-        .formStyle(.grouped)
-        .navigationTitle("nav.settings".localized())
+        .modifier(SettingsPageBackground())
         .onAppear {
-            NSLog("[SettingsScreen] View appeared - mode: \(modeManager.currentMode.rawValue), proxy running: \(viewModel.proxyManager.proxyStatus.running)")
+            // 异常快捷入口复用设置导航栈，不创建没有返回按钮的独立日志页。
+            if opensLogs && path.isEmpty {
+                path.append(SettingsDestination(category: .maintenance))
+                path.append(SettingsAuxiliaryPage.logs)
+            }
         }
+    }
+
+    private func showMode() {
+        search = ""
+        path = NavigationPath()
+        modeFocusRequest = UUID()
     }
 }
 
@@ -113,18 +58,24 @@ struct OperatingModeSection: View {
     
     var body: some View {
         Section {
-            // Mode selection cards
-            VStack(spacing: 10) {
+            // 复用原有模式卡片的图标、徽标和选中效果，两个弹性列各占一半可用宽度。
+            // 点击仍进入原来的确认与切换流程，不因布局调整直接写入运行模式。
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 ForEach(OperatingMode.allCases) { mode in
                     OperatingModeCard(
                         mode: mode,
-                        isSelected: modeManager.currentMode == mode
-                    ) {
-                        handleModeSelection(mode)
-                    }
+                        isSelected: modeManager.currentMode == mode,
+                        onSelect: { handleModeSelection(mode) }
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(.vertical, 4)
+            DisclosureGroup("settings.navigation.mode.features".localized()) {
+                ForEach(modeManager.currentMode.features, id: \.self) { feature in
+                    Text(feature).font(.caption).foregroundStyle(.secondary)
+                }
+            }
         } header: {
             Label("settings.appMode".localized(), systemImage: "switch.2")
         } footer: {
@@ -185,6 +136,10 @@ struct OperatingModeSection: View {
 // Uses ManagementAPIClient for hot-reload settings
 
 struct ProxySettingsSection: View {
+    /// 展示范围只决定哪些卡片可见；所有范围复用原有加载和保存函数，避免配置实现分叉。
+    enum Scope { case all, network, requests, logging }
+    var scope: Scope = .all
+    @State private var saveError: String?
     @Environment(QuotaViewModel.self) private var viewModel
     
     @State private var isLoading = true
@@ -208,67 +163,64 @@ struct ProxySettingsSection: View {
     }
     
     var body: some View {
-        if !isAPIAvailable {
-            // Show placeholder when API is not available
-            Section {
-                HStack {
-                    Image(systemName: "network.slash")
+        Group {
+            if !isAPIAvailable {
+                Section {
+                    Label("settings.proxy.startToConfigureAdvanced".localized(), systemImage: "network.slash")
                         .foregroundStyle(.secondary)
-                    Text("settings.proxy.startToConfigureAdvanced".localized())
-                        .foregroundStyle(.secondary)
+                } header: {
+                    Label("settings.proxySettings".localized(), systemImage: "slider.horizontal.3")
                 }
-            } header: {
-                Label("settings.proxySettings".localized(), systemImage: "slider.horizontal.3")
-            }
-        } else if isLoading {
-            Section {
-                HStack {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("settings.proxy.loading".localized())
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Label("settings.proxySettings".localized(), systemImage: "slider.horizontal.3")
-            }
-            .onAppear {
-                Task {
-                    await loadConfig()
-                }
-            }
-        } else if let error = loadError {
-            Section {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text(error)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("action.retry".localized()) {
-                        Task {
-                            await loadConfig()
-                        }
+            } else if isLoading {
+                Section {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("settings.proxy.loading".localized()).foregroundStyle(.secondary)
                     }
+                } header: {
+                    Label("settings.proxySettings".localized(), systemImage: "slider.horizontal.3")
                 }
-            } header: {
-                Label("settings.proxySettings".localized(), systemImage: "slider.horizontal.3")
+            } else if let error = loadError {
+                Section {
+                    Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.secondary)
+                    Button("action.retry".localized()) { Task { await loadConfig() } }
+                } header: {
+                    Label("settings.proxySettings".localized(), systemImage: "slider.horizontal.3")
+                }
+            } else {
+                if scope == .all || scope == .network { upstreamProxySection }
+                if scope == .all || scope == .requests {
+                    routingStrategySection
+                    quotaExceededSection
+                    retryConfigurationSection
+                }
+                if scope == .all || scope == .logging { loggingSection }
             }
-        } else {
-            upstreamProxySection
-            routingStrategySection
-            quotaExceededSection
-            retryConfigurationSection
-            loggingSection
+        }
+        // 分类页出现或服务可用性变化时读取最新配置；读取不会触发 onChange 的写入。
+        .task(id: isAPIAvailable) {
+            if isAPIAvailable { await loadConfig() }
+        }
+        .alert("settings.navigation.saveFailed".localized(), isPresented: Binding(
+            get: { saveError != nil }, set: { if !$0 { saveError = nil } }
+        )) {
+            Button("settings.navigation.reload".localized()) {
+                saveError = nil
+                Task { await loadConfig() }
+            }
+            Button("action.close".localized(), role: .cancel) { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
         }
     }
-    
+
     private var upstreamProxySection: some View {
         Section {
             VStack(alignment: .leading, spacing: 6) {
                 LabeledContent("settings.upstreamProxy".localized()) {
                     TextField("", text: $proxyURL)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 220)
+                        .frame(minWidth: 160, idealWidth: 260, maxWidth: 360)
                         .onChange(of: proxyURL) { _, newValue in
                             proxyURLValidation = ProxyURLValidator.validate(newValue)
                         }
@@ -277,6 +229,10 @@ struct ProxySettingsSection: View {
                         }
                 }
                 
+                // 保留回车提交，同时提供可发现的应用按钮；空值仍按原逻辑清除上游代理。
+                Button("settings.navigation.apply".localized()) { Task { await saveProxyURL() } }
+                    .disabled(proxyURLValidation != .valid && proxyURLValidation != .empty)
+
                 if proxyURLValidation != .valid && proxyURLValidation != .empty {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -298,11 +254,9 @@ struct ProxySettingsSection: View {
     
     private var routingStrategySection: some View {
         Section {
-            Picker("settings.routingStrategy".localized(), selection: $routingStrategy) {
-                Text("settings.roundRobin".localized()).tag("round-robin")
-                Text("settings.fillFirst".localized()).tag("fill-first")
+            SettingsChoiceControl("settings.routingStrategy", options: ["round-robin", "fill-first"], selection: $routingStrategy) {
+                ($0 == "round-robin" ? "settings.roundRobin" : "settings.fillFirst").localized()
             }
-            .pickerStyle(.segmented)
             .onChange(of: routingStrategy) { _, newValue in
                 guard !isLoadingConfig else { return }
                 Task { await saveRoutingStrategy(newValue) }
@@ -445,6 +399,7 @@ struct ProxySettingsSection: View {
             }
         } catch {
             NSLog("[ProxySettings] Failed to save proxy URL: \(error)")
+            saveError = error.localizedDescription
         }
     }
     
@@ -454,6 +409,7 @@ struct ProxySettingsSection: View {
             try await apiClient.setRoutingStrategy(strategy)
         } catch {
             NSLog("[ProxySettings] Failed to save routing strategy: \(error)")
+            saveError = error.localizedDescription
         }
     }
     
@@ -463,6 +419,7 @@ struct ProxySettingsSection: View {
             try await apiClient.setQuotaExceededSwitchProject(enabled)
         } catch {
             NSLog("[ProxySettings] Failed to save switch project: \(error)")
+            saveError = error.localizedDescription
         }
     }
     
@@ -472,6 +429,7 @@ struct ProxySettingsSection: View {
             try await apiClient.setQuotaExceededSwitchPreviewModel(enabled)
         } catch {
             NSLog("[ProxySettings] Failed to save switch preview model: \(error)")
+            saveError = error.localizedDescription
         }
     }
     
@@ -481,6 +439,7 @@ struct ProxySettingsSection: View {
             try await apiClient.setRequestRetry(count)
         } catch {
             NSLog("[ProxySettings] Failed to save request retry: \(error)")
+            saveError = error.localizedDescription
         }
     }
     
@@ -490,6 +449,7 @@ struct ProxySettingsSection: View {
             try await apiClient.setMaxRetryInterval(seconds)
         } catch {
             NSLog("[ProxySettings] Failed to save max retry interval: \(error)")
+            saveError = error.localizedDescription
         }
     }
     
@@ -499,6 +459,7 @@ struct ProxySettingsSection: View {
             try await apiClient.setLoggingToFile(enabled)
         } catch {
             NSLog("[ProxySettings] Failed to save logging to file: \(error)")
+            saveError = error.localizedDescription
         }
     }
     
@@ -508,6 +469,7 @@ struct ProxySettingsSection: View {
             try await apiClient.setRequestLog(enabled)
         } catch {
             NSLog("[ProxySettings] Failed to save request log: \(error)")
+            saveError = error.localizedDescription
         }
     }
     
@@ -517,6 +479,7 @@ struct ProxySettingsSection: View {
             try await apiClient.setDebug(enabled)
         } catch {
             NSLog("[ProxySettings] Failed to save debug mode: \(error)")
+            saveError = error.localizedDescription
         }
     }
 }
@@ -524,6 +487,8 @@ struct ProxySettingsSection: View {
 // MARK: - Local Proxy Server Section
 
 struct LocalProxyServerSection: View {
+    /// 新设置页将管理密钥移到隐私与安全；默认值保留旧调用点的完整展示行为。
+    var showsManagementKey = true
     @Environment(QuotaViewModel.self) private var viewModel
     @AppStorage("autoStartProxy") private var autoStartProxy = false
     @AppStorage("autoStartTunnel") private var autoStartTunnel = false
@@ -533,6 +498,7 @@ struct LocalProxyServerSection: View {
     @State private var isLoadingConfig = false  // Prevents onChange from firing during initial load
     
     var body: some View {
+        Group {
         Section {
             HStack {
                 Text("settings.port".localized())
@@ -563,7 +529,7 @@ struct LocalProxyServerSection: View {
                     .textSelection(.enabled)
             }
             
-            ManagementKeyRow()
+            if showsManagementKey { ManagementKeyRow() }
             
             Toggle("settings.autoStartProxy".localized(), isOn: $autoStartProxy)
             
@@ -573,11 +539,7 @@ struct LocalProxyServerSection: View {
             Toggle("settings.autoRestartTunnel".localized(), isOn: $autoRestartTunnel)
                 .disabled(!viewModel.tunnelManager.installation.isInstalled)
                 
-            NetworkAccessSection(allowNetworkAccess: $allowNetworkAccess)
-                .onChange(of: allowNetworkAccess) { _, newValue in
-                    guard !isLoadingConfig else { return }
-                    viewModel.proxyManager.allowNetworkAccess = newValue
-                }
+
                 
 
         } header: {
@@ -585,6 +547,12 @@ struct LocalProxyServerSection: View {
         } footer: {
             Text("settings.restartProxy".localized())
                 .font(.caption)
+        }
+            NetworkAccessSection(allowNetworkAccess: $allowNetworkAccess)
+                .onChange(of: allowNetworkAccess) { _, newValue in
+                    guard !isLoadingConfig else { return }
+                    viewModel.proxyManager.allowNetworkAccess = newValue
+                }
         }
         .onAppear {
             isLoadingConfig = true
@@ -714,8 +682,9 @@ struct NotificationSettingsSection: View {
                 
                 HStack {
                     Text("settings.notifications.threshold".localized())
-                    Spacer()
-                    Picker("", selection: Binding(
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 12)
+                    Picker("settings.notifications.threshold".localized(), selection: Binding(
                         get: { Int(manager.quotaAlertThreshold) },
                         set: { manager.quotaAlertThreshold = Double($0) }
                     )) {
@@ -725,7 +694,13 @@ struct NotificationSettingsSection: View {
                         Text("50%").tag(50)
                     }
                     .pickerStyle(.menu)
-                    .frame(width: 80)
+                    // 隐藏 Picker 自带标签，但保留无障碍名称；宽度由百分比、
+                    // 系统菜单箭头和内边距共同决定，不再用 80 点硬裁切导致省略号。
+                    .labelsHidden()
+                    .monospacedDigit()
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(minWidth: 100, alignment: .trailing)
+                    .layoutPriority(1)
                 }
             }
             
@@ -768,18 +743,13 @@ struct QuotaDisplaySettingsSection: View {
     
     var body: some View {
         Section {
-            Picker("settings.quota.displayMode".localized(), selection: displayModeBinding) {
-                Text("settings.quota.displayMode.used".localized()).tag(QuotaDisplayMode.used)
-                Text("settings.quota.displayMode.remaining".localized()).tag(QuotaDisplayMode.remaining)
+            SettingsChoiceControl("settings.quota.displayMode", options: [QuotaDisplayMode.used, .remaining], selection: displayModeBinding) {
+                ($0 == .used ? "settings.quota.displayMode.used" : "settings.quota.displayMode.remaining").localized()
             }
-            .pickerStyle(.segmented)
             
-            Picker("settings.quota.displayStyle".localized(), selection: displayStyleBinding) {
-                ForEach(QuotaDisplayStyle.allCases) { style in
-                    Text(style.localizationKey.localized()).tag(style)
-                }
+            SettingsChoiceControl("settings.quota.displayStyle", options: QuotaDisplayStyle.allCases, selection: displayStyleBinding) {
+                $0.localizationKey.localized()
             }
-            .pickerStyle(.segmented)
         } header: {
             Label("settings.quota.display".localized(), systemImage: "percent")
         } footer: {
@@ -844,12 +814,17 @@ struct UpdateSettingsSection: View {
                 .onChange(of: autoCheckUpdates) { _, newValue in
                     updaterService.automaticallyChecksForUpdates = newValue
                 }
-            
+                .disabled(!updaterService.supportsAutomaticUpdates)
+
+            if !updaterService.supportsAutomaticUpdates {
+                Text("updates.own.manualOnly".localized()).font(.caption).foregroundStyle(.secondary)
+            }
+
             HStack {
                 Text("settings.lastChecked".localized())
                 Spacer()
                 if let date = updaterService.lastUpdateCheckDate {
-                    Text(date, style: .relative)
+                    UpdateCheckTimestamp(date: date)
                         .foregroundStyle(.secondary)
                 } else {
                     Text("settings.never".localized())
@@ -857,7 +832,7 @@ struct UpdateSettingsSection: View {
                 }
             }
             
-            Button("settings.checkNow".localized()) {
+            Button(updaterService.checkButtonTitleKey.localized()) {
                 updaterService.checkForUpdates()
             }
             .disabled(!updaterService.canCheckForUpdates)
@@ -966,7 +941,7 @@ struct ProxyUpdateSettingsSection: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text(lastCheck, style: .relative)
+                        UpdateCheckTimestamp(date: lastCheck)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -978,7 +953,7 @@ struct ProxyUpdateSettingsSection: View {
                 Text("settings.lastChecked".localized())
                 Spacer()
                 if let date = proxyManager.lastProxyUpdateCheckDate {
-                    Text(date, style: .relative)
+                    UpdateCheckTimestamp(date: date)
                         .foregroundStyle(.secondary)
                 } else {
                     Text("settings.never".localized())
@@ -1056,6 +1031,7 @@ struct ProxyUpdateSettingsSection: View {
 
 struct ProxyVersionManagerSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(QuotaViewModel.self) private var viewModel
     
     @State private var availableVersions: [ProxyVersionInfo] = []
@@ -1238,7 +1214,7 @@ struct ProxyVersionManagerSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+        .background(QuotioTheme.Colors.cardInset(for: colorScheme))
     }
     
     private func isVersionInstalled(_ version: String) -> Bool {
@@ -1620,11 +1596,8 @@ struct AppearanceSettingsSection: View {
     
     var body: some View {
         Section {
-            Picker("settings.appearance.mode".localized(), selection: appearanceModeBinding) {
-                ForEach(AppearanceMode.allCases) { mode in
-                    Label(mode.localizationKey.localized(), systemImage: mode.icon)
-                        .tag(mode)
-                }
+            SettingsChoiceControl("settings.appearance.mode", options: AppearanceMode.allCases, selection: appearanceModeBinding) {
+                $0.localizationKey.localized()
             }
         } header: {
             Label("settings.appearance.title".localized(), systemImage: "paintbrush")
@@ -1686,7 +1659,6 @@ struct YubiKeySettingsSection: View {
     @State private var selectedID = ""
     @State private var selectedDeviceID = ""
     @State private var statusMessage: String?
-    @State private var provisioningDevice: YubiKeyPIVDevice?
 
     private var isConfigured: Bool {
         status != .notConfigured
@@ -1714,11 +1686,7 @@ struct YubiKeySettingsSection: View {
             Text("settings.yubikey.help".localized())
         }
         .task { await refresh() }
-        .sheet(item: $provisioningDevice) { device in
-            YubiKeyProvisioningSheet(device: device) {
-                await completeProvisioning()
-            }
-        }
+
     }
 
     /// Exactly one story per state: adopt a key that already exists, or create
@@ -1754,10 +1722,18 @@ struct YubiKeySettingsSection: View {
                         Text(device.name + " (" + device.serial + ")").tag(device.id)
                     }
                 }
-                Button("settings.yubikey.setup".localized()) {
-                    provisioningDevice = devices.first { $0.id == selectedDeviceID }
+                // 硬件配置页面使用系统 Push，成功后仍执行原有身份刷新和选用流程。
+                if let device = devices.first(where: { $0.id == selectedDeviceID }) {
+                    NavigationLink {
+                        YubiKeyProvisioningSheet(device: device, usesNavigation: true) {
+                            await completeProvisioning()
+                        }
+                    } label: {
+                        Text("settings.yubikey.setup".localized())
+                    }
+                } else {
+                    Button("settings.yubikey.setup".localized()) {}.disabled(true)
                 }
-                .disabled(selectedDeviceID.isEmpty)
             }
 
             if identities.isEmpty, devices.isEmpty {
@@ -1929,688 +1905,6 @@ struct GeneralSettingsTab: View {
         }
         .formStyle(.grouped)
         .padding()
-    }
-}
-
-struct AboutTab: View {
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "gauge.with.dots.needle.67percent")
-                .font(.system(size: 48))
-                .foregroundStyle(.blue)
-            
-            Text("Quotio")
-                .font(.title)
-                .fontWeight(.bold)
-            
-            Text("CLIProxyAPI GUI Wrapper")
-                .foregroundStyle(.secondary)
-            
-            Text("Version 1.0")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            
-            Link("GitHub: CLIProxyAPI", destination: URL(string: "https://github.com/router-for-me/CLIProxyAPI")!)
-                .buttonStyle(.bordered)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - About Screen (New Full-Page Version)
-
-struct AboutScreen: View {
-    @State private var showCopiedToast = false
-    @State private var isHoveringVersion = false
-    @State private var updaterService = UpdaterService.shared
-    
-    private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-    }
-    
-    private var buildNumber: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-    }
-    
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 32) {
-                // Hero Section
-                heroSection
-                
-                // Description
-                descriptionSection
-                
-                // Updates Grid
-                updatesSection
-                
-                Divider()
-                    .frame(maxWidth: 500)
-                
-                // Links Grid
-                linksSection
-                
-                Spacer(minLength: 40)
-                
-                // Footer
-                footerSection
-            }
-            .frame(maxWidth: .infinity)
-            .padding(40)
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay {
-            if showCopiedToast {
-                versionCopyToast
-                    .transition(.opacity)
-            }
-        }
-        .onAppear {
-            #if canImport(Sparkle)
-            updaterService.initializeIfNeeded()
-            #endif
-        }
-        .navigationTitle("nav.about".localized())
-    }
-    
-    // MARK: - Hero Section
-    
-    private var heroSection: some View {
-        VStack(spacing: 20) {
-            // App Icon with gradient glow
-            ZStack {
-                // Glow effect
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.blue.opacity(0.2),
-                                Color.purple.opacity(0.1),
-                                Color.clear
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 160, height: 160)
-                    .blur(radius: 40)
-                
-                // App Icon - uses observable currentAppIcon from UpdaterService
-                if let appIcon = UpdaterService.shared.currentAppIcon {
-                    Image(nsImage: appIcon)
-                        .resizable()
-                        .frame(width: 96, height: 96)
-                        .clipShape(RoundedRectangle(cornerRadius: 22))
-                        .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 8)
-                }
-            }
-            
-            // App Name & Tagline
-            VStack(spacing: 8) {
-                Text("Quotio")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                
-                Text("about.tagline".localized())
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
-            
-            // Version Badges
-            HStack(spacing: 12) {
-                VersionBadge(
-                    label: "Version",
-                    value: appVersion,
-                    icon: "tag"
-                )
-                .onHover { hovering in
-                    isHoveringVersion = hovering
-                }
-                
-                VersionBadge(
-                    label: "Build",
-                    value: buildNumber,
-                    icon: "hammer.fill"
-                )
-            }
-        }
-        .padding(.top, 20)
-    }
-    
-    // MARK: - Description Section
-    
-    private var descriptionSection: some View {
-        Text("about.description".localized())
-            .font(.body)
-            .multilineTextAlignment(.center)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: 500)
-    }
-    
-    // MARK: - Updates Section
-    
-    private var updatesSection: some View {
-        VStack(spacing: 12) {
-            AboutUpdateCard()
-            
-            if OperatingModeManager.shared.isLocalProxyMode {
-                AboutProxyUpdateCard()
-            }
-        }
-        .frame(maxWidth: 500)
-    }
-    
-    // MARK: - Links Section
-    
-    private var linksSection: some View {
-        VStack(spacing: 16) {
-            Text("Links")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            
-            LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                spacing: 12
-            ) {
-                LinkCard(
-                    title: "GitHub: Quotio",
-                    icon: "link",
-                    color: .blue,
-                    url: URL(string: "https://github.com/nguyenphutrong/quotio")!
-                )
-                
-                LinkCard(
-                    title: "GitHub: CLIProxyAPI",
-                    icon: "link",
-                    color: .purple,
-                    url: URL(string: "https://github.com/router-for-me/CLIProxyAPI")!
-                )
-                
-                LinkCard(
-                    title: "about.support".localized(),
-                    icon: "heart.fill",
-                    color: .pink,
-                    url: URL(string: "https://www.quotio.dev/sponsors")!
-                )
-            }
-        }
-        .frame(maxWidth: 500)
-    }
-    
-    // MARK: - Footer Section
-    
-    private var footerSection: some View {
-        VStack(spacing: 8) {
-            Text("about.madeWith".localized())
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.bottom, 16)
-    }
-    
-    // MARK: - Version Copy Toast
-    
-    private var versionCopyToast: some View {
-        VStack {
-            Spacer()
-            
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("Version copied to clipboard")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 4)
-            .padding(.bottom, 40)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-// MARK: - Version Badge
-
-struct VersionBadge: View {
-    let label: String
-    let value: String
-    let icon: String
-    
-    @State private var isHovered = false
-    
-    var body: some View {
-        Button {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(value, forType: .string)
-        } label: {
-            HStack(spacing: 6) {
-                    Image(systemName: icon)
-                        .font(.caption)
-                        .foregroundStyle(isHovered ? .blue : .secondary)
-                
-                Text(label)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundStyle(isHovered ? .blue : .secondary)
-                
-                Text(value)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                isHovered ? Color.blue.opacity(0.1) : Color.secondary.opacity(0.05),
-                in: Capsule()
-            )
-            .overlay(
-                Capsule()
-                    .strokeBorder(
-                        isHovered ? Color.blue.opacity(0.3) : Color.secondary.opacity(0.2),
-                        lineWidth: 1
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
-    }
-}
-
-// MARK: - About Update Card
-
-struct AboutUpdateCard: View {
-    @AppStorage("autoCheckUpdates") private var autoCheckUpdates = true
-    @State private var isHovered = false
-    
-    #if canImport(Sparkle)
-    private let updaterService = UpdaterService.shared
-    #endif
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            cardHeader(
-                title: "settings.updates".localized(),
-                systemImage: "arrow.down.circle",
-                color: .blue
-            )
-            
-            #if canImport(Sparkle)
-            HStack {
-                Text("settings.autoCheckUpdates".localized())
-                    .font(.subheadline)
-                Spacer()
-                Toggle("", isOn: $autoCheckUpdates)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .onChange(of: autoCheckUpdates) { _, newValue in
-                        updaterService.automaticallyChecksForUpdates = newValue
-                    }
-            }
-            
-            HStack {
-                Text("settings.updateChannel.receiveBeta".localized())
-                    .font(.subheadline)
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { updaterService.updateChannel == .beta },
-                    set: { newValue in
-                        updaterService.updateChannel = newValue ? .beta : .stable
-                    }
-                ))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-            }
-            
-            Divider()
-
-            HStack {
-                Text("settings.lastChecked".localized())
-                Spacer()
-                if let date = updaterService.lastUpdateCheckDate {
-                    Text(date, style: .relative)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("settings.never".localized())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            HStack {
-                Spacer()
-
-                Button("settings.checkNow".localized()) {
-                    updaterService.checkForUpdates()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
-            #else
-            Text("settings.version".localized() + ": " + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"))
-                .font(.caption)
-            #endif
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(
-            color: .black.opacity(isHovered ? 0.08 : 0.04),
-            radius: isHovered ? 8 : 4,
-            x: 0,
-            y: isHovered ? 2 : 1
-        )
-        .scaleEffect(isHovered ? 1.01 : 1.0)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isHovered = hovering
-            }
-        }
-    }
-}
-
-// MARK: - About Proxy Update Card
-
-struct AboutProxyUpdateCard: View {
-    @Environment(QuotaViewModel.self) private var viewModel
-    @State private var isHovered = false
-    @State private var showAdvancedSheet = false
-    @State private var isCheckingForUpdate = false
-    @State private var isUpgrading = false
-    @State private var upgradeError: String?
-
-    private var proxyManager: CLIProxyManager {
-        viewModel.proxyManager
-    }
-
-    private var atomFeedService: AtomFeedUpdateService {
-        AtomFeedUpdateService.shared
-    }
-
-    private var currentVersionText: String {
-        if let version = proxyManager.currentVersion ?? proxyManager.installedProxyVersion {
-            return "v\(version)"
-        }
-        return "Not installed"
-    }
-
-    private var statusText: String {
-        if proxyManager.currentVersion == nil && proxyManager.installedProxyVersion == nil {
-            return "Install required"
-        }
-
-        if proxyManager.upgradeAvailable, let upgrade = proxyManager.availableUpgrade {
-            return "Update available: v\(upgrade.version)"
-        }
-
-        return "Up to date"
-    }
-
-    private var statusColor: Color {
-        if upgradeError != nil {
-            return .orange
-        }
-        if proxyManager.upgradeAvailable {
-            return .green
-        }
-        return .secondary
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            cardHeader(
-                title: "settings.proxyUpdate".localized(),
-                systemImage: "shippingbox.and.arrow.backward",
-                color: .purple
-            )
-
-            HStack {
-                Text("settings.proxyUpdate.currentVersion".localized())
-                Spacer()
-                Text(currentVersionText)
-                    .font(.system(.subheadline, design: .monospaced))
-                    .fontWeight(.medium)
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 8, height: 8)
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundStyle(statusColor == .secondary ? .secondary : .primary)
-            }
-
-            if let lastCheck = atomFeedService.lastCLIProxyCheck {
-                HStack {
-                    Text("Last checked")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text(lastCheck, style: .relative)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            
-            if let error = upgradeError {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            HStack {
-                Button {
-                    checkForUpdate()
-                } label: {
-                    ZStack {
-                        Text("settings.proxyUpdate.checkNow".localized())
-                            .opacity(isCheckingForUpdate ? 0 : 1)
-
-                        if isCheckingForUpdate {
-                            SmallProgressView()
-                        }
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isCheckingForUpdate)
-
-                if let upgrade = proxyManager.availableUpgrade {
-                    Button {
-                        performUpgrade(to: upgrade)
-                    } label: {
-                        ZStack {
-                            Text("action.update".localized())
-                                .opacity(isUpgrading ? 0 : 1)
-
-                            if isUpgrading {
-                                SmallProgressView()
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(isUpgrading)
-                }
-
-                Spacer()
-                
-                Button {
-                    showAdvancedSheet = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("settings.proxyUpdate.advanced".localized())
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(
-            color: .black.opacity(isHovered ? 0.08 : 0.04),
-            radius: isHovered ? 8 : 4,
-            x: 0,
-            y: isHovered ? 2 : 1
-        )
-        .scaleEffect(isHovered ? 1.01 : 1.0)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isHovered = hovering
-            }
-        }
-        .sheet(isPresented: $showAdvancedSheet) {
-            ProxyVersionManagerSheet()
-                .environment(viewModel)
-        }
-    }
-    
-    private func checkForUpdate() {
-        isCheckingForUpdate = true
-        upgradeError = nil
-
-        Task { @MainActor in
-            defer {
-                // Always reset loading state
-                isCheckingForUpdate = false
-            }
-
-            await proxyManager.checkForUpgrade()
-        }
-    }
-    
-    private func performUpgrade(to version: ProxyVersionInfo) {
-        isUpgrading = true
-        upgradeError = nil
-        
-        Task { @MainActor in
-            do {
-                try await proxyManager.performManagedUpgrade(to: version)
-                isUpgrading = false
-            } catch {
-                upgradeError = error.localizedDescription
-                isUpgrading = false
-            }
-        }
-    }
-}
-
-private func cardHeader(title: String, systemImage: String, color: Color) -> some View {
-    HStack {
-        Image(systemName: systemImage)
-            .font(.title3)
-            .foregroundStyle(color)
-        Text(title)
-            .font(.headline)
-        Spacer()
-    }
-}
-
-// MARK: - Link Card
-
-struct LinkCard: View {
-    let title: String
-    let icon: String
-    let color: Color
-    let url: URL?
-    let action: (() -> Void)?
-    
-    @State private var isHovered = false
-    
-    init(
-        title: String,
-        icon: String,
-        color: Color,
-        url: URL? = nil,
-        action: (() -> Void)? = nil
-    ) {
-        self.title = title
-        self.icon = icon
-        self.color = color
-        self.url = url
-        self.action = action
-    }
-    
-    var body: some View {
-        Button {
-            if let url = url {
-                NSWorkspace.shared.open(url)
-            } else if let action = action {
-                action()
-            }
-        } label: {
-            HStack(spacing: 12) {
-                // Icon
-                ZStack {
-                    Circle()
-                        .fill(color.opacity(isHovered ? 0.15 : 0.08))
-                        .frame(width: 40, height: 40)
-                    
-                    Image(systemName: icon)
-                        .font(.title3)
-                        .foregroundStyle(isHovered ? color : .secondary)
-                }
-                
-                // Title
-                Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(isHovered ? color : .primary)
-                
-                Spacer()
-                
-                // Arrow icon (for links)
-                if url != nil {
-                    Image(systemName: "arrow.up.right")
-                        .font(.caption)
-                        .foregroundStyle(isHovered ? color : .secondary.opacity(0.5))
-                }
-            }
-            .padding(14)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(
-                        isHovered ? color.opacity(0.3) : Color.clear,
-                        lineWidth: 1.5
-                    )
-            )
-            .shadow(
-                color: .black.opacity(isHovered ? 0.1 : 0.03),
-                radius: isHovered ? 10 : 4,
-                x: 0,
-                y: isHovered ? 3 : 1
-            )
-            .scaleEffect(isHovered ? 1.02 : 1.0)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
     }
 }
 
@@ -2792,13 +2086,9 @@ struct UsageDisplaySettingsSection: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 
-                Picker("", selection: totalUsageModeBinding) {
-                    ForEach(TotalUsageMode.allCases) { mode in
-                        Text(mode.localizationKey.localized()).tag(mode)
-                    }
+                SettingsChoiceControl("", options: TotalUsageMode.allCases, selection: totalUsageModeBinding) {
+                    $0.localizationKey.localized()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 
                 Text("settings.usageDisplay.totalMode.description".localized())
                     .font(.caption)
@@ -2811,13 +2101,9 @@ struct UsageDisplaySettingsSection: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 
-                Picker("", selection: modelAggregationModeBinding) {
-                    ForEach(ModelAggregationMode.allCases) { mode in
-                        Text(mode.localizationKey.localized()).tag(mode)
-                    }
+                SettingsChoiceControl("", options: ModelAggregationMode.allCases, selection: modelAggregationModeBinding) {
+                    $0.localizationKey.localized()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 
                 Text("settings.usageDisplay.modelAggregation.description".localized())
                     .font(.caption)

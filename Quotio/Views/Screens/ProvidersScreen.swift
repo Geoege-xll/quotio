@@ -15,6 +15,7 @@ import UniformTypeIdentifiers
 
 struct ProvidersScreen: View {
     @Environment(QuotaViewModel.self) private var viewModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isImporterPresented = false
     @State private var selectedProvider: AIProvider?
     @State private var showProxyRequiredAlert = false
@@ -161,17 +162,26 @@ struct ProvidersScreen: View {
     }
     
     // MARK: - Body
-    
+
     var body: some View {
-        List {
-            // Section 1: Your Accounts (grouped by provider)
-            accountsSection
-            
-            // Section 2: Custom Providers (Local Proxy Mode only)
-            if modeManager.isLocalProxyMode {
-                customProvidersSection
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 20) {
+                // 直接迁移原仪表盘的提供商流式摘要，添加动作复用本页已有授权/导入入口。
+                if modeManager.isLocalProxyMode {
+                    ProviderConnectionSummary(onAdd: handleAddProvider)
+                }
+
+                // Section 1: Your Accounts (grouped by provider)
+                accountsSection
+
+                // Section 2: Custom Providers (Local Proxy Mode only)
+                if modeManager.isLocalProxyMode {
+                    customProvidersSection
+                }
             }
+            .padding(20)
         }
+        .quotioPage()
         .navigationTitle(modeManager.isMonitorMode ? "nav.accounts".localized() : "nav.providers".localized())
         .toolbar {
             toolbarContent
@@ -354,10 +364,32 @@ struct ProvidersScreen: View {
     }
     
     // MARK: - Accounts Section
-    
+
     @ViewBuilder
     private var accountsSection: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 12) {
+            // Section Header
+            HStack {
+                Label("providers.yourAccounts".localized(), systemImage: "person.2.badge.key")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                if totalAccountCount > 0 {
+                    Spacer()
+                    Text("\(totalAccountCount)")
+                        .font(.caption2.bold().monospacedDigit())
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+                        .foregroundStyle(.secondary)
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                        )
+                }
+            }
+            .padding(.horizontal, 4)
+
             if groupedAccounts.isEmpty {
                 // Empty state
                 AccountsEmptyState(
@@ -369,61 +401,49 @@ struct ProvidersScreen: View {
                     }
                 )
             } else {
-                // Grouped accounts by provider
-                ForEach(sortedProviders, id: \.self) { provider in
-                    ProviderDisclosureGroup(
-                        provider: provider,
-                        accounts: groupedAccounts[provider] ?? [],
-                        onDeleteAccount: { account in
-                            Task { await deleteAccount(account) }
-                        },
-                        onEditAccount: { account in
-                            if provider == .glm {
-                                handleEditGlmAccount(account)
-                            } else if provider == .clinePass {
-                                handleEditClinePassAccount(account)
-                            } else if provider == .warp {
-                                handleEditWarpAccount(account)
-                            } else if [.factoryDroid, .openRouter, .amp].contains(provider) {
-                                handleEditMonitorAPIKeyAccount(account)
-                            }
-                        },
-                        onSwitchAccount: provider == .antigravity ? { account in
-                            switchingAccount = account
-                        } : nil,
-                        onToggleDisabled: { account in
-                            Task { await toggleAccountDisabled(account) }
-                        },
-                        onDownloadAccount: { account in
-                            Task { await downloadAccountAuthFile(account) }
-                        },
-                        isAccountActive: provider == .antigravity ? { account in
-                            viewModel.isAntigravityAccountActive(email: account.displayName)
-                        } : nil
-                    )
+                // Grouped accounts by provider as collapsible cards
+                VStack(spacing: 10) {
+                    ForEach(sortedProviders, id: \.self) { provider in
+                        ProviderDisclosureGroup(
+                            provider: provider,
+                            accounts: groupedAccounts[provider] ?? [],
+                            onDeleteAccount: { account in
+                                Task { await deleteAccount(account) }
+                            },
+                            onEditAccount: { account in
+                                if provider == .glm {
+                                    handleEditGlmAccount(account)
+                                } else if provider == .clinePass {
+                                    handleEditClinePassAccount(account)
+                                } else if provider == .warp {
+                                    handleEditWarpAccount(account)
+                                } else if [.factoryDroid, .openRouter, .amp].contains(provider) {
+                                    handleEditMonitorAPIKeyAccount(account)
+                                }
+                            },
+                            onSwitchAccount: provider == .antigravity ? { account in
+                                switchingAccount = account
+                            } : nil,
+                            onToggleDisabled: { account in
+                                Task { await toggleAccountDisabled(account) }
+                            },
+                            onDownloadAccount: { account in
+                                Task { await downloadAccountAuthFile(account) }
+                            },
+                            isAccountActive: provider == .antigravity ? { account in
+                                viewModel.isAntigravityAccountActive(email: account.displayName)
+                            } : nil
+                        )
+                    }
                 }
-            }
-        } header: {
-            HStack {
-                Label("providers.yourAccounts".localized(), systemImage: "person.2.badge.key")
-                
-                if totalAccountCount > 0 {
-                    Spacer()
-                    Text("\(totalAccountCount)")
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.2))
-                        .clipShape(Capsule())
-                }
-            }
-        } footer: {
-            if !groupedAccounts.isEmpty {
+
                 MenuBarHintView()
+                    .padding(.top, 4)
+                    .padding(.horizontal, 4)
             }
         }
     }
-    
+
     // MARK: - Custom Providers Section
 
     @ViewBuilder
@@ -433,42 +453,54 @@ struct ProvidersScreen: View {
             $0.type != .glmCompatibility && $0.type != .clinePass
         }
 
-        Section {
-            // List existing custom providers
-            ForEach(genericProviders) { provider in
-                CustomProviderRow(
-                    provider: provider,
-                    onEdit: {
-                        customProviderSheetMode = .edit(provider)
-                    },
-                    onDelete: {
-                        customProviderService.deleteProvider(id: provider.id)
-                        syncCustomProvidersToConfig()
-                    },
-                    onToggle: {
-                        customProviderService.toggleProvider(id: provider.id)
-                        syncCustomProvidersToConfig()
-                    }
-                )
-            }
-        } header: {
+        VStack(alignment: .leading, spacing: 12) {
+            // Section Header
             HStack {
                 Label("customProviders.title".localized(), systemImage: "puzzlepiece.extension.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
 
                 if !genericProviders.isEmpty {
                     Spacer()
                     Text("\(genericProviders.count)")
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.2))
-                        .clipShape(Capsule())
+                        .font(.caption2.bold().monospacedDigit())
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+                        .foregroundStyle(.secondary)
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                        )
                 }
             }
-        } footer: {
-            Text("customProviders.footer".localized())
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            .padding(.horizontal, 4)
+
+            if !genericProviders.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(genericProviders) { provider in
+                        CustomProviderRow(
+                            provider: provider,
+                            onEdit: {
+                                customProviderSheetMode = .edit(provider)
+                            },
+                            onDelete: {
+                                customProviderService.deleteProvider(id: provider.id)
+                                syncCustomProvidersToConfig()
+                            },
+                            onToggle: {
+                                customProviderService.toggleProvider(id: provider.id)
+                                syncCustomProvidersToConfig()
+                            }
+                        )
+                    }
+                }
+
+                Text("customProviders.footer".localized())
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4)
+            }
         }
     }
     
@@ -645,33 +677,35 @@ struct ProvidersScreen: View {
 // MARK: - Custom Provider Row
 
 struct CustomProviderRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let provider: CustomProvider
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onToggle: () -> Void
-    
+
     @State private var showDeleteConfirmation = false
-    
+    @State private var isHovered = false
+
     var body: some View {
         HStack(spacing: 12) {
             // Provider type icon
             ZStack {
-                Circle()
-                    .fill(provider.type.color.opacity(0.1))
+                RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous)
+                    .fill(provider.type.color.opacity(0.12))
                     .frame(width: 32, height: 32)
-                
+
                 Image(provider.type.providerIconName)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: 18, height: 18)
             }
-            
+
             // Provider info
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(provider.name)
-                        .fontWeight(.medium)
-                    
+                        .font(.system(size: 13, weight: .medium))
+
                     if !provider.isEnabled {
                         Text("customProviders.disabled".localized())
                             .font(.caption2)
@@ -682,35 +716,60 @@ struct CustomProviderRow: View {
                             .clipShape(Capsule())
                     }
                 }
-                
+
                 HStack(spacing: 6) {
                     Text(provider.type.localizedDisplayName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    
+
                     Text("•")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
-                    
+
                     let keyCount = provider.apiKeys.count
                     Text("\(keyCount) \(keyCount == 1 ? "customProviders.key".localized() : "customProviders.keys".localized())")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
             }
-            
+
             Spacer()
-            
+
             // Toggle button
             Button {
                 onToggle()
             } label: {
-                Image(systemName: provider.isEnabled ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(provider.isEnabled ? .green : .secondary)
+                ZStack {
+                    Circle()
+                        .fill(provider.isEnabled ? Color.green.opacity(0.12) : (isHovered ? QuotioTheme.Colors.cardInset(for: colorScheme) : Color.clear))
+                        .frame(width: 26, height: 26)
+
+                    Image(systemName: provider.isEnabled ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(provider.isEnabled ? .green : .secondary)
+                }
             }
-            .buttonStyle(.subtle)
+            .buttonStyle(.plain)
             .help(provider.isEnabled ? "customProviders.disable".localized() : "customProviders.enable".localized())
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            isHovered
+                ? QuotioTheme.Colors.cardElevated(for: colorScheme)
+                : QuotioTheme.Colors.cardBackground(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(isHovered ? 0.8 : 0.4), lineWidth: 0.5)
+        )
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
+        .contentShape(Rectangle())
         .contextMenu {
             Button {
                 onEdit()
@@ -746,22 +805,41 @@ struct CustomProviderRow: View {
 // MARK: - Menu Bar Badge Component
 
 struct MenuBarBadge: View {
+    @Environment(\.colorScheme) private var colorScheme
     let isSelected: Bool
     let onTap: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: onTap) {
             ZStack {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? Color.blue.opacity(0.1) : Color.clear)
+                Circle()
+                    .fill(
+                        isSelected
+                            ? Color.blue.opacity(colorScheme == .dark ? 0.22 : 0.12)
+                            : (isHovered ? QuotioTheme.Colors.cardElevated(for: colorScheme).opacity(0.8) : Color.clear)
+                    )
                     .frame(width: 28, height: 28)
 
+                if isSelected {
+                    Circle()
+                        .strokeBorder(Color.blue.opacity(colorScheme == .dark ? 0.4 : 0.25), lineWidth: 0.5)
+                        .frame(width: 28, height: 28)
+                }
+
                 Image(systemName: isSelected ? "chart.bar.fill" : "chart.bar")
-                    .font(.system(size: 14))
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? .blue : .secondary)
             }
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
         .nativeTooltip(isSelected ? "menubar.hideFromMenuBar".localized() : "menubar.showOnMenuBar".localized())
     }
 }
@@ -911,134 +989,146 @@ struct MenuBarHintView: View {
 
 struct OAuthSheet: View {
     @Environment(QuotaViewModel.self) private var viewModel
+    @Environment(\.colorScheme) private var colorScheme
     let provider: AIProvider
     let onDismiss: () -> Void
-    
+
     @State private var hasStartedAuth = false
     @State private var selectedKiroMethod: AuthCommand = .kiroImport
     @State private var manualOAuthCode = ""
     @State private var modeManager = OperatingModeManager.shared
-    
+
     private var isPolling: Bool {
         viewModel.oauthState?.status == .polling || viewModel.oauthState?.status == .waiting
     }
-    
+
     private var isSuccess: Bool {
         viewModel.oauthState?.status == .success
     }
-    
+
     private var isError: Bool {
         viewModel.oauthState?.status == .error
     }
-    
+
     private var kiroAuthMethods: [AuthCommand] {
         if modeManager.isMonitorMode { return [.kiroAWSLogin] }
         return [.kiroImport, .kiroGoogleLogin, .kiroAWSAuthCode, .kiroAWSLogin]
     }
-    
+
     var body: some View {
-        VStack(spacing: 28) {
-            ProviderIcon(provider: provider, size: 64)
-            
-            VStack(spacing: 8) {
-                Text("oauth.connect".localized() + " " + provider.displayName)
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
-                Text("oauth.authenticateWith".localized() + " " + provider.displayName)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            
-            if provider == .kiro {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("oauth.authMethod".localized())
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    Picker("", selection: $selectedKiroMethod) {
-                        ForEach(kiroAuthMethods, id: \.self) { method in
-                            Text(method.displayName).tag(method)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    
-
-                }
-                .frame(maxWidth: 320)
-            }
-
-            if !modeManager.isMonitorMode,
-               viewModel.proxyManager.isLegacyAuthWarningNeeded(for: provider) {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text(viewModel.proxyManager.upstreamCompatibilityWarning)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: 320, alignment: .leading)
-                .padding(12)
-                .background(Color.orange.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            
-            if let state = viewModel.oauthState, state.provider == provider {
-                OAuthStatusView(status: state.status, error: state.error, state: state.state, authURL: state.authURL, provider: provider)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            }
-
-            if modeManager.isMonitorMode, provider == .claude, viewModel.oauthState?.status == .polling {
-                HStack(spacing: 8) {
-                    TextField("oauth.authorizationCode".localized(), text: $manualOAuthCode)
-                        .textFieldStyle(.roundedBorder)
-                    Button("oauth.complete".localized()) {
-                        Task { await viewModel.completeMonitorOAuthCode(manualOAuthCode, provider: provider) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(manualOAuthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .frame(maxWidth: 360)
-            }
-            
-            HStack(spacing: 16) {
-                Button("action.cancel".localized(), role: .cancel) {
+        VStack(spacing: 0) {
+            // Header with close button
+            HStack {
+                Spacer()
+                QuotioCircularIconButton(systemImage: "xmark") {
                     viewModel.cancelOAuth()
                     onDismiss()
                 }
-                .buttonStyle(.bordered)
-                
-                if isError {
-                    Button {
-                        hasStartedAuth = false
-                        Task {
-                            await viewModel.startOAuth(for: provider, authMethod: provider == .kiro ? selectedKiroMethod : nil)
+                .accessibilityLabel("action.cancel".localized())
+            }
+            .padding(.top, 16)
+            .padding(.trailing, 16)
+
+            VStack(spacing: 24) {
+                ProviderIcon(provider: provider, size: 56)
+
+                VStack(spacing: 6) {
+                    Text("oauth.connect".localized() + " " + provider.displayName)
+                        .font(.title3)
+                        .fontWeight(.bold)
+
+                    Text("oauth.authenticateWith".localized() + " " + provider.displayName)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if provider == .kiro {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("oauth.authMethod".localized())
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Picker("", selection: $selectedKiroMethod) {
+                            ForEach(kiroAuthMethods, id: \.self) { method in
+                                Text(method.displayName).tag(method)
+                            }
                         }
-                    } label: {
-                        Label("oauth.retry".localized(), systemImage: "arrow.clockwise")
+                        .pickerStyle(.menu)
+                        .labelsHidden()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
-                } else if !isSuccess {
-                    Button {
-                        hasStartedAuth = true
-                        Task {
-                            await viewModel.startOAuth(for: provider, authMethod: provider == .kiro ? selectedKiroMethod : nil)
-                        }
-                    } label: {
-                        if isPolling {
-                            SmallProgressView()
-                        } else {
-                            Label("oauth.authenticate".localized(), systemImage: "key.fill")
-                        }
+                    .frame(maxWidth: 320)
+                }
+
+                if !modeManager.isMonitorMode,
+                   viewModel.proxyManager.isLegacyAuthWarningNeeded(for: provider) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(viewModel.proxyManager.upstreamCompatibilityWarning)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(provider.color)
-                    .disabled(isPolling)
+                    .frame(maxWidth: 320, alignment: .leading)
+                    .padding(12)
+                    .background(Color.orange.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                if let state = viewModel.oauthState, state.provider == provider {
+                    OAuthStatusView(status: state.status, error: state.error, state: state.state, authURL: state.authURL, provider: provider)
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+
+                if modeManager.isMonitorMode, provider == .claude, viewModel.oauthState?.status == .polling {
+                    HStack(spacing: 8) {
+                        QuotioCapsuleTextField("oauth.authorizationCode".localized(), text: $manualOAuthCode, systemImage: "key")
+                        Button("oauth.complete".localized()) {
+                            Task { await viewModel.completeMonitorOAuthCode(manualOAuthCode, provider: provider) }
+                        }
+                        .buttonStyle(.quotioPrimaryCapsule)
+                        .disabled(manualOAuthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    .frame(maxWidth: 360)
+                }
+
+                HStack(spacing: 16) {
+                    Button("action.cancel".localized(), role: .cancel) {
+                        viewModel.cancelOAuth()
+                        onDismiss()
+                    }
+                    .buttonStyle(.quotioSecondaryCapsule)
+
+                    if isError {
+                        Button {
+                            hasStartedAuth = false
+                            Task {
+                                await viewModel.startOAuth(for: provider, authMethod: provider == .kiro ? selectedKiroMethod : nil)
+                            }
+                        } label: {
+                            Label("oauth.retry".localized(), systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.quotioPrimaryCapsule)
+                    } else if !isSuccess {
+                        Button {
+                            hasStartedAuth = true
+                            Task {
+                                await viewModel.startOAuth(for: provider, authMethod: provider == .kiro ? selectedKiroMethod : nil)
+                            }
+                        } label: {
+                            if isPolling {
+                                SmallProgressView()
+                            } else {
+                                Label("oauth.authenticate".localized(), systemImage: "key.fill")
+                            }
+                        }
+                        .buttonStyle(.quotioPrimaryCapsule)
+                        .disabled(isPolling)
+                    }
                 }
             }
+            .padding(.horizontal, 36)
+            .padding(.bottom, 28)
         }
-        .padding(40)
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
         .frame(width: 480)
         .frame(minHeight: 350)
         .fixedSize(horizontal: false, vertical: true)

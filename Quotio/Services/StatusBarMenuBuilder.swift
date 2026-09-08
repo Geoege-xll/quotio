@@ -445,7 +445,11 @@ final class MenuActionHandler: NSObject {
 
         NSApplication.shared.activate(ignoringOtherApps: true)
 
-        if let window = NSApplication.shared.windows.first(where: { $0.title == "Quotio" }) {
+        let candidate = NSApplication.shared.windows.first(where: {
+            $0.canBecomeMain && $0.level == .normal
+        })
+
+        if let window = candidate {
             window.makeKeyAndOrderFront(nil)
 
             if window.isMiniaturized {
@@ -453,6 +457,8 @@ final class MenuActionHandler: NSObject {
             }
 
             window.orderFrontRegardless()
+        } else {
+            AppBootstrap.shared.openWindowHandler?()
         }
     }
 }
@@ -919,49 +925,10 @@ private struct MenuAccountCardView: View {
         provider == .antigravity && !data.models.isEmpty
     }
     
+    /// 页面与状态栏共用完整明细，百分比及重置时间均来自同一个上游额度桶。
     private var antigravityGroups: [AntigravityDisplayGroup] {
         guard isAntigravity else { return [] }
-        let summaryModels = data.models.filter { $0.name.hasPrefix("antigravity-") }
-        if !summaryModels.isEmpty {
-            return summaryModels
-                .map { AntigravityDisplayGroup(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime) }
-        }
-
-        var groups: [AntigravityDisplayGroup] = []
-
-        let settings = MenuBarSettingsManager.shared
-        
-        let gemini3ProModels = data.models.filter {
-            $0.name.contains("gemini-3-pro") && !$0.name.contains("image")
-        }
-        if !gemini3ProModels.isEmpty {
-            let aggregatedPercent = settings.aggregateModelPercentages(gemini3ProModels.map(\.percentage))
-            let minModel = gemini3ProModels.min(by: { $0.percentage < $1.percentage })
-            groups.append(AntigravityDisplayGroup(name: "Gemini 3 Pro", percentage: aggregatedPercent, resetTime: minModel?.resetTime))
-        }
-
-        let gemini3FlashModels = data.models.filter { $0.name.contains("gemini-3-flash") }
-        if !gemini3FlashModels.isEmpty {
-            let aggregatedPercent = settings.aggregateModelPercentages(gemini3FlashModels.map(\.percentage))
-            let minModel = gemini3FlashModels.min(by: { $0.percentage < $1.percentage })
-            groups.append(AntigravityDisplayGroup(name: "Gemini 3 Flash", percentage: aggregatedPercent, resetTime: minModel?.resetTime))
-        }
-
-        let geminiImageModels = data.models.filter { $0.name.contains("image") }
-        if !geminiImageModels.isEmpty {
-            let aggregatedPercent = settings.aggregateModelPercentages(geminiImageModels.map(\.percentage))
-            let minModel = geminiImageModels.min(by: { $0.percentage < $1.percentage })
-            groups.append(AntigravityDisplayGroup(name: "Gemini 3 Image", percentage: aggregatedPercent, resetTime: minModel?.resetTime))
-        }
-
-        let claudeModels = data.models.filter { $0.name.contains("claude") }
-        if !claudeModels.isEmpty {
-            let aggregatedPercent = settings.aggregateModelPercentages(claudeModels.map(\.percentage))
-            let minModel = claudeModels.min(by: { $0.percentage < $1.percentage })
-            groups.append(AntigravityDisplayGroup(name: "Claude 4.5", percentage: aggregatedPercent, resetTime: minModel?.resetTime))
-        }
-
-        return groups.sorted { $0.percentage < $1.percentage }
+        return AntigravityDisplayGroup.make(from: data.models)
     }
     
     var body: some View {
@@ -1084,14 +1051,14 @@ private struct MenuAccountCardView: View {
         let isCardStyle = displayStyle == .card
         let models: [ModelBadgeData] = {
             if isAntigravity {
-                return antigravityGroups.map { ModelBadgeData(name: $0.name, percentage: $0.percentage, resetTime: $0.resetTime) }
+                return antigravityGroups.map { ModelBadgeData(name: $0.name, percentage: $0.percentage, resetTime: $0.resetTime, sourceID: $0.id) }
             } else {
                 let meterModels = data.models.filter { !$0.isStandaloneMetric }.map {
-                    ModelBadgeData(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime)
+                    ModelBadgeData(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime, sourceID: $0.id)
                 }
                 guard isCardStyle else { return meterModels }
                 let standaloneModels = data.models.filter(\.isStandaloneMetric).map {
-                    ModelBadgeData(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime, usage: $0.formattedUsage)
+                    ModelBadgeData(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime, usage: $0.formattedUsage, sourceID: $0.id)
                 }
                 return meterModels + standaloneModels
             }
@@ -1113,7 +1080,7 @@ private struct MenuAccountCardView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         FactoryDroidMenuSectionHeader(title: section.title)
                         quotaLayout(models: section.models.map {
-                            ModelBadgeData(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime)
+                            ModelBadgeData(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime, sourceID: $0.id)
                         })
                     }
                 }
@@ -2131,15 +2098,18 @@ private struct ModelBadgeData: Identifiable {
     let percentage: Double
     let resetTime: String?
     let usage: String?
+    let sourceID: String?
 
-    init(name: String, percentage: Double, resetTime: String?, usage: String? = nil) {
+    init(name: String, percentage: Double, resetTime: String?, usage: String? = nil, sourceID: String? = nil) {
         self.name = name
         self.percentage = percentage
         self.resetTime = resetTime
         self.usage = usage
+        self.sourceID = sourceID
     }
 
-    var id: String { name }
+    // 上游不同额度桶可以同名；界面身份必须保留原 ID，避免 SwiftUI 合并行。
+    var id: String { sourceID ?? name }
 
     var formattedResetTime: String? {
         guard let resetTime = resetTime else { return nil }
@@ -2173,14 +2143,6 @@ private struct ModelBadgeData: Identifiable {
     }
 }
 
-private struct AntigravityDisplayGroup: Identifiable {
-    let name: String
-    let percentage: Double
-    let resetTime: String?
-
-    var id: String { name }
-}
-
 private func menuDisplayPercent(remainingPercent: Double, displayMode: QuotaDisplayMode) -> Double {
     displayMode.displayValue(from: remainingPercent)
 }
@@ -2188,8 +2150,8 @@ private func menuDisplayPercent(remainingPercent: Double, displayMode: QuotaDisp
 /// Formatted percentage for menu rows. A negative remaining percentage means
 /// "no data yet" and renders as a placeholder instead of a fake value like 101%.
 private func menuPercentText(remainingPercent: Double, displayMode: QuotaDisplayMode) -> String {
-    guard remainingPercent >= 0 else { return "—" }
-    return "\(Int(menuDisplayPercent(remainingPercent: remainingPercent, displayMode: displayMode)))%"
+    // 与配额页统一未知值、上下界和四舍五入，避免菜单截断为 59% 而页面显示 60%。
+    QuotaPercentagePresentation.text(remainingPercent, showUsed: displayMode == .used)
 }
 
 private func menuStatusColor(remainingPercent: Double, displayMode: QuotaDisplayMode) -> Color {
@@ -2216,7 +2178,12 @@ private struct LowestBarLayout: View {
     private var settings: MenuBarSettingsManager { MenuBarSettingsManager.shared }
 
     private var sorted: [ModelBadgeData] {
-        models.sorted { $0.percentage < $1.percentage }
+        // 未知额度不应排在有效最低额度之前，否则状态栏主行会被占位数据覆盖。
+        models.sorted {
+            let left = QuotaPercentagePresentation.isKnown($0.percentage) ? $0.percentage : Double.infinity
+            let right = QuotaPercentagePresentation.isKnown($1.percentage) ? $1.percentage : Double.infinity
+            return left == right ? $0.id < $1.id : left < right
+        }
     }
 
     private var lowest: ModelBadgeData? {
@@ -2266,7 +2233,7 @@ private struct LowestBarLayout: View {
             // Others as text rows (one per line)
             if !others.isEmpty {
                 VStack(spacing: 4) {
-                    ForEach(others, id: \.name) { (model: ModelBadgeData) in
+                    ForEach(others, id: \.id) { (model: ModelBadgeData) in
                         HStack(spacing: 6) {
                             Text(model.name)
                                 .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -2312,7 +2279,7 @@ private struct RingGridLayout: View {
         
         // Auto-distribute 1-4 columns, cap at 4
         LazyVGrid(columns: columns, spacing: 10) {
-            ForEach(models, id: \.name) { (model: ModelBadgeData) in
+            ForEach(models, id: \.id) { (model: ModelBadgeData) in
                 VStack(spacing: 4) {
                     RingProgressView(percent: menuDisplayPercent(remainingPercent: model.percentage, displayMode: displayMode), size: ringSize, lineWidth: 4, tint: menuStatusColor(remainingPercent: model.percentage, displayMode: displayMode), showLabel: true)
 
@@ -2352,7 +2319,7 @@ private struct CardGridLayout: View {
         let displayMode = settings.quotaDisplayMode
         
         LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(models, id: \.name) { (model: ModelBadgeData) in
+            ForEach(models, id: \.id) { (model: ModelBadgeData) in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(model.name)

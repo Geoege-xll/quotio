@@ -36,11 +36,16 @@ struct AgentSetupScreen: View {
         Group {
             agentListView
         }
+        .quotioPage()
         .navigationTitle("agents.title".localized())
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    Task { await viewModel.refreshAgentStatuses(forceRefresh: true) }
+                    Task {
+                        await viewModel.refreshAgentStatuses(forceRefresh: true)
+                        // 可用模型已迁入本页，导航刷新同时刷新目录，沿用原来的竞态保护。
+                        await quotaViewModel.refreshDashboardModels()
+                    }
                 } label: {
                     if viewModel.isLoading {
                         SmallProgressView()
@@ -67,22 +72,22 @@ struct AgentSetupScreen: View {
     }
     
     private var agentListView: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                headerSection
-                
-                if !installedAgents.isEmpty {
-                    installedSection
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                VStack(spacing: 20) {
+                    headerSection
+                    if !installedAgents.isEmpty { installedSection }
+                    if !notInstalledAgents.isEmpty { notInstalledSection }
+                    // 原目录组件整体迁移，保留展开、复制和键盘焦点恢复，不另造缩减版模型列表。
+                    AvailableModelsSection {
+                        scrollProxy.scrollTo("model-catalog-details", anchor: .bottom)
+                    }
                 }
-                
-                if !notInstalledAgents.isEmpty {
-                    notInstalledSection
-                }
+                .padding(20)
             }
-            .padding(20)
         }
     }
-    
+
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("agents.subtitle".localized())

@@ -40,14 +40,15 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable {
     }
 
     var bundle: Bundle {
-        if let path = Bundle.main.path(forResource: rawValue, ofType: "lproj"),
+        let host = LanguageManager.resourceBundle
+        if let path = host.path(forResource: rawValue, ofType: "lproj"),
            let bundle = Bundle(path: path) {
             return bundle
         }
         #if DEBUG
         Log.debug("LanguageManager: Bundle not found for \\(rawValue), falling back to main bundle")
         #endif
-        return .main
+        return host
     }
 }
 
@@ -58,6 +59,22 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable {
 final class LanguageManager {
 
     static let shared = LanguageManager()
+
+    nonisolated static var resourceBundle: Bundle {
+        if let bundle = Bundle(identifier: AppIdentity.bundleIdentifier) {
+            return bundle
+        }
+        if let bundle = Bundle.allBundles.first(where: { $0.bundlePath.hasSuffix(".app") }) {
+            return bundle
+        }
+        return .main
+    }
+
+    nonisolated static var staticLocale: Locale {
+        let saved = UserDefaults.standard.string(forKey: "appLanguage") ?? "en"
+        let migrated = (saved == "zh") ? "zh-Hans" : saved
+        return Locale(identifier: migrated)
+    }
 
     private(set) var currentLanguage: AppLanguage {
         didSet {
@@ -105,11 +122,12 @@ extension String {
     nonisolated func localizedStatic() -> String {
         let saved = UserDefaults.standard.string(forKey: "appLanguage") ?? "en"
         let migrated = (saved == "zh") ? "zh-Hans" : saved
-        
-        if let path = Bundle.main.path(forResource: migrated, ofType: "lproj"),
+        let host = LanguageManager.resourceBundle
+
+        if let path = host.path(forResource: migrated, ofType: "lproj"),
            let bundle = Bundle(path: path) {
             return NSLocalizedString(self, bundle: bundle, comment: "")
         }
-        return NSLocalizedString(self, bundle: .main, comment: "")
+        return NSLocalizedString(self, bundle: host, comment: "")
     }
 }

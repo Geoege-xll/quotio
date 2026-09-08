@@ -7,6 +7,20 @@ import Foundation
 
 actor AgentConfigurationService {
     private let fileManager = FileManager.default
+    private let homeDirectory: URL
+    private let trashBackup: @Sendable (URL) throws -> Void
+
+    /// 允许测试注入临时用户目录，覆盖真实的读取、备份和重新配置流程，避免触碰用户凭据。
+    /// 正常启动仍使用系统用户目录，现有调用方无需传入额外参数。
+    init(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        trashBackup: @escaping @Sendable (URL) throws -> Void = { url in
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
+    ) {
+        self.homeDirectory = homeDirectory
+        self.trashBackup = trashBackup
+    }
     
     // MARK: - Saved Configuration Models
     
@@ -19,6 +33,15 @@ actor AgentConfigurationService {
         let backupFiles: [BackupFile]
         /// Reasoning effort read from Codex CLI's `model_reasoning_effort` (Codex only).
         var reasoningEffort: CodexReasoningEffort? = nil
+        /// Claude 启动模型与三档别名映射分别回填，避免重新配置时强制切回 Opus。
+        var defaultModel: String? = nil
+        /// 仅保存配置中明确声明的名称；没有声明时由表单和生成器统一回退到请求 ID。
+        var modelDisplayNames: [ModelSlot: String] = [:]
+        /// Claude Code 高级设置只在 Claude 配置读取路径回填；其他代理保留安全默认值。
+        var claudeMaxContextTokens = AgentConfiguration.defaultClaudeMaxContextTokens
+        var claudeAutoCompactPercentage = AgentConfiguration.defaultClaudeAutoCompactPercentage
+        var claudeDisableAutoCompact = false
+        var claudeModel1M: [ModelSlot: Bool] = [:]
     }
     
     /// Represents a backup file that can be restored
@@ -47,6 +70,8 @@ actor AgentConfigurationService {
     /// Read the current saved configuration for an agent
     func readConfiguration(agent: CLIAgent) -> SavedAgentConfig? {
         switch agent {
+        case .pi:
+            return PiAgentSupport.readSavedConfiguration(homeDirectory: homeDirectory, backups: listBackups(agent: agent))
         case .claudeCode:
             return readClaudeCodeConfig()
         case .codexCLI:
@@ -62,7 +87,7 @@ actor AgentConfigurationService {
     
     /// List available backup files for an agent
     func listBackups(agent: CLIAgent) -> [BackupFile] {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         var backups: [BackupFile] = []
         
         for configPath in agent.configPaths {
@@ -77,7 +102,7 @@ actor AgentConfigurationService {
                     let fullPath = "\(directory)/\(file)"
                     // Extract timestamp from filename (e.g., settings.json.backup.1736840000)
                     if let timestampStr = file.components(separatedBy: ".backup.").last,
-                       let timestamp = Double(timestampStr) {
+                       let timestamp = Double(timestampStr), timestamp.isFinite, timestamp >= 0 {
                         let date = Date(timeIntervalSince1970: timestamp)
                         backups.append(BackupFile(path: fullPath, timestamp: date, agent: agent))
                     }
@@ -89,6 +114,26 @@ actor AgentConfigurationService {
         return backups.sorted { $0.timestamp > $1.timestamp }
     }
     
+    /// 只允许删除该代理配置目录中实际列出的普通备份文件，拒绝伪造路径和符号链接。
+    /// 使用系统废纸篓提供恢复能力；注入操作让测试无需改动真实废纸篓。
+    func deleteBackup(_ backup: BackupFile) throws {
+        let url = URL(fileURLWithPath: backup.path)
+        guard listBackups(agent: backup.agent).contains(where: { $0.path == backup.path }),
+              try fileManager.attributesOfItem(atPath: backup.path)[.type] as? FileAttributeType == .typeRegular,
+              try url.deletingLastPathComponent().resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+            throw BackupDeletionError.invalidBackup
+        }
+        try trashBackup(url)
+    }
+
+    enum BackupDeletionError: LocalizedError {
+        case invalidBackup
+
+        var errorDescription: String? {
+            "agents.backups.invalidBackup".localizedStatic()
+        }
+    }
+
     /// Restore configuration from a backup file
     func restoreFromBackup(_ backup: BackupFile) throws {
         // Determine the original config path from the backup path
@@ -109,8 +154,22 @@ actor AgentConfigurationService {
     
     // MARK: - Agent-Specific Read Implementations
     
+    /// `[1m]` is a Claude Code model selector suffix, not part of Quotio's stored
+    /// model ID. Strip exactly one terminal suffix so malformed IDs are not rewritten
+    /// into a different request on read.
+    private func normalizedClaudeModelID(_ value: String) -> (base: String, uses1M: Bool) {
+        let model = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard model.hasSuffix("[1m]") else { return (model, false) }
+        return (String(model.dropLast(4)), true)
+    }
+
+    private func claudeRequestModel(baseModel: String, uses1M: Bool) -> String {
+        let normalized = normalizedClaudeModelID(baseModel).base
+        return uses1M ? normalized + "[1m]" : normalized
+    }
+
     private func readClaudeCodeConfig() -> SavedAgentConfig? {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configPath = "\(home)/.claude/settings.json"
         
         guard fileManager.fileExists(atPath: configPath),
@@ -123,30 +182,64 @@ actor AgentConfigurationService {
         
         let baseURL = env["ANTHROPIC_BASE_URL"]
         let apiKey = env["ANTHROPIC_AUTH_TOKEN"]
-        let opusModel = env["ANTHROPIC_DEFAULT_OPUS_MODEL"]
-        let sonnetModel = env["ANTHROPIC_DEFAULT_SONNET_MODEL"]
-        let haikuModel = env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]
-        
+
         var modelSlots: [ModelSlot: String] = [:]
-        if let opus = opusModel { modelSlots[.opus] = opus }
-        if let sonnet = sonnetModel { modelSlots[.sonnet] = sonnet }
-        if let haiku = haikuModel { modelSlots[.haiku] = haiku }
-        
+        var claudeModel1M: [ModelSlot: Bool] = [:]
+        for slot in ModelSlot.allCases {
+            let key = "ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"
+            guard let requestModel = env[key] else { continue }
+            let normalized = normalizedClaudeModelID(requestModel)
+            modelSlots[slot] = normalized.base
+            if normalized.uses1M {
+                claudeModel1M[slot] = true
+            }
+        }
+
+        let configuredDefaultModel = env["ANTHROPIC_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? (json["model"] as? String)
+        let defaultModel: String?
+        if let configuredDefaultModel {
+            let normalized = normalizedClaudeModelID(configuredDefaultModel)
+            let followsSlot = ModelSlot.allCases.contains { slot in
+                normalized.base == slot.rawValue || normalized.base == modelSlots[slot]
+            }
+            defaultModel = followsSlot ? normalized.base : configuredDefaultModel
+        } else {
+            defaultModel = nil
+        }
+
+        let parsedContextTokens = env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].flatMap(Int.init)
+        let claudeMaxContextTokens = (parsedContextTokens ?? AgentConfiguration.defaultClaudeMaxContextTokens) > 0
+            ? (parsedContextTokens ?? AgentConfiguration.defaultClaudeMaxContextTokens)
+            : AgentConfiguration.defaultClaudeMaxContextTokens
+        let parsedCompactPercentage = env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"].flatMap(Int.init)
+        let claudeAutoCompactPercentage = parsedCompactPercentage.flatMap { (1...100).contains($0) ? $0 : nil }
+            ?? AgentConfiguration.defaultClaudeAutoCompactPercentage
+
         // Check if proxy is configured (localhost or 127.0.0.1 in base URL)
-        let isProxy = baseURL?.contains("127.0.0.1") == true || 
+        let isProxy = baseURL?.contains("127.0.0.1") == true ||
                       baseURL?.contains("localhost") == true
-        
+
         return SavedAgentConfig(
             baseURL: baseURL,
             apiKey: apiKey,
             modelSlots: modelSlots,
             isProxyConfigured: isProxy,
-            backupFiles: listBackups(agent: .claudeCode)
+            backupFiles: listBackups(agent: .claudeCode),
+            defaultModel: defaultModel,
+            modelDisplayNames: Dictionary(uniqueKeysWithValues: ModelSlot.allCases.compactMap { slot in
+                guard let name = env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL_NAME"] else { return nil }
+                return (slot, name)
+            }),
+            claudeMaxContextTokens: claudeMaxContextTokens,
+            claudeAutoCompactPercentage: claudeAutoCompactPercentage,
+            claudeDisableAutoCompact: env["DISABLE_AUTO_COMPACT"] == "1",
+            claudeModel1M: claudeModel1M
         )
     }
     
     private func readCodexConfig() -> SavedAgentConfig? {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configPath = "\(home)/.codex/config.toml"
         
         guard fileManager.fileExists(atPath: configPath),
@@ -154,27 +247,17 @@ actor AgentConfigurationService {
             return nil
         }
         
-        // Simple TOML parsing for the values we need
-        var baseURL: String?
-        var model: String?
+        // 借鉴 cc-switch 的分层读取：只取顶层模型与服务商，不能被 profiles/MCP 表覆盖。
+        // 复用已有的 TOML 扫描器，跳过注释和多行字符串，并支持引号键与行尾注释。
+        let model = parseCodexTOMLString(from: content, key: "model")
+        let provider = parseCodexTOMLString(from: content, key: "model_provider")
         let reasoningEffort = parseTopLevelCodexReasoningEffort(from: content)
-        var isProxy = false
-
-        for line in content.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            if trimmed.hasPrefix("base_url") {
-                if let value = extractTOMLValue(from: trimmed) {
-                    baseURL = value
-                    isProxy = value.contains("127.0.0.1") || value.contains("localhost")
-                }
-            } else if trimmed.hasPrefix("model =") {
-                model = extractTOMLValue(from: trimmed)
-            } else if trimmed.contains("model_provider") && trimmed.contains("cliproxyapi") {
-                isProxy = true
-            }
+        let baseURL = provider.flatMap { provider in
+            parseCodexTOMLString(from: content, key: "base_url", section: ["model_providers", provider])
         }
-        
+        let host = baseURL.flatMap { URL(string: $0)?.host }
+        let isProxy = provider == "cliproxyapi" || host == "127.0.0.1" || host == "localhost"
+
         var modelSlots: [ModelSlot: String] = [:]
         if let m = model {
             modelSlots[.sonnet] = m  // Codex uses single model
@@ -191,7 +274,7 @@ actor AgentConfigurationService {
     }
     
     private func readAmpConfig() -> SavedAgentConfig? {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let settingsPath = "\(home)/.config/amp/settings.json"
         
         guard fileManager.fileExists(atPath: settingsPath),
@@ -214,7 +297,7 @@ actor AgentConfigurationService {
     }
     
     private func readOpenCodeConfig() -> SavedAgentConfig? {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configPath = "\(home)/.config/opencode/opencode.json"
         
         guard fileManager.fileExists(atPath: configPath),
@@ -251,7 +334,7 @@ actor AgentConfigurationService {
     }
     
     private func readFactoryDroidConfig() -> SavedAgentConfig? {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configPath = "\(home)/.factory/config.json"
         
         guard fileManager.fileExists(atPath: configPath),
@@ -386,6 +469,7 @@ actor AgentConfigurationService {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard let equalIndex = trimmed.firstIndex(of: "=") else { return false }
         let key = String(trimmed[..<equalIndex]).trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
         return key == "model_provider" || key == "model" || key == "model_reasoning_effort"
     }
 
@@ -472,24 +556,64 @@ actor AgentConfigurationService {
     /// top-level setting. Returns `nil` when the top-level key is absent, so the
     /// caller keeps its default.
     func parseTopLevelCodexReasoningEffort(from content: String) -> CodexReasoningEffort? {
-        var scanner = CodexTOMLScanner()
-        var effort: CodexReasoningEffort?
+        parseCodexTOMLString(from: content, key: "model_reasoning_effort")
+            .flatMap(CodexReasoningEffort.init(rawValue:))
+    }
 
+    /// 读取指定表中的标量字符串；section 为 nil 时仅匹配顶层。
+    /// 表头后的键始终属于该表，数组表和多行字符串里的伪 model 键不会污染顶层配置。
+    private func parseCodexTOMLString(from content: String, key: String, section: [String]? = nil) -> String? {
+        var scanner = CodexTOMLScanner()
+        var currentSection: [String]?
         for line in content.components(separatedBy: .newlines) {
             guard scanner.isStructuralLine(line) else { continue }
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            // Everything from the first table header on belongs to that table.
-            if parseTOMLSectionName(from: trimmed) != nil {
-                return effort
+            if let name = parseTOMLSectionName(from: line) {
+                // 无法识别的表也已结束顶层区域，不能用 nil 将其误当成顶层。
+                currentSection = parseCodexTOMLTablePath(name) ?? []
+                continue
             }
-
-            if let value = extractCodexTOMLStringValue(from: trimmed, key: "model_reasoning_effort") {
-                effort = CodexReasoningEffort(rawValue: value)
+            guard currentSection == section else { continue }
+            if let value = extractCodexTOMLStringValue(from: line, key: key) {
+                return value
             }
         }
+        return nil
+    }
 
-        return effort
+    /// 按 TOML 键路径拆分表头，引号内的点属于服务商 ID，而不是表层级分隔符。
+    /// 例如 [model_providers."local.proxy"] 应匹配顶层 model_provider = "local.proxy"。
+    private func parseCodexTOMLTablePath(_ name: String) -> [String]? {
+        var tokens: [String] = []
+        var token = ""
+        var quote: Character?
+        var escaped = false
+        for character in name {
+            if let activeQuote = quote {
+                token.append(character)
+                if escaped {
+                    escaped = false
+                } else if activeQuote == "\"" && character == "\\" {
+                    escaped = true
+                } else if character == activeQuote {
+                    quote = nil
+                }
+            } else if character == "\"" || character == "'" {
+                quote = character
+                token.append(character)
+            } else if character == "." {
+                tokens.append(token)
+                token = ""
+            } else {
+                token.append(character)
+            }
+        }
+        guard quote == nil else { return nil }
+        tokens.append(token)
+        let path = tokens.compactMap { raw -> String? in
+            let value = raw.trimmingCharacters(in: .whitespaces)
+            return value.isEmpty ? nil : parseCodexTOMLScalarString(value)
+        }
+        return path.count == tokens.count ? path : nil
     }
 
     /// Reads the value of a TOML assignment to `key`, tolerating quoted keys,
@@ -718,12 +842,22 @@ actor AgentConfigurationService {
         availableModels: [AvailableModel] = []
     ) async throws -> AgentConfigResult {
         
+        // Pi 使用官方独立 provider 插件，代理与默认模式均交给同一服务处理。
+        if agent == .pi {
+            return try await PiAgentConfigurationService(homeDirectory: homeDirectory).generate(
+                config: config, mode: mode, detectionService: detectionService
+            )
+        }
+
         // Check if we should generate default (non-proxy) configuration
         if config.setupMode == .defaultSetup {
             return try await generateDefaultConfiguration(agent: agent, mode: mode)
         }
 
         switch agent {
+        case .pi:
+            // 入口已统一分发 Pi，保留显式分支避免新增智能体后遗漏枚举处理。
+            return .failure(error: "Pi configuration must use the dedicated provider service.")
         case .claudeCode:
             return generateClaudeCodeConfig(config: config, mode: mode, storageOption: storageOption)
 
@@ -746,6 +880,9 @@ actor AgentConfigurationService {
     /// Generates configuration that removes Quotio proxy settings while preserving user settings
     private func generateDefaultConfiguration(agent: CLIAgent, mode: ConfigurationMode) async throws -> AgentConfigResult {
         switch agent {
+        case .pi:
+            // 入口已统一分发 Pi，保留显式分支避免新增智能体后遗漏枚举处理。
+            return .failure(error: "Pi configuration must use the dedicated provider service.")
         case .claudeCode:
             return generateClaudeCodeDefaultConfig(mode: mode)
         case .codexCLI:
@@ -760,18 +897,24 @@ actor AgentConfigurationService {
     }
     
     private func generateClaudeCodeDefaultConfig(mode: ConfigurationMode) -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configDir = "\(home)/.claude"
         let configPath = "\(configDir)/settings.json"
         
-        // Keys to remove (Quotio-managed proxy config)
+        // 映射与显示元数据必须一起清理，否则恢复默认后仍会留下旧代理模型的名称或说明。
         let keysToRemove = [
             "ANTHROPIC_BASE_URL",
             "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL"
-        ]
+            "ANTHROPIC_MODEL",
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+            "DISABLE_AUTO_COMPACT",
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+            "CLAUDE_CODE_SUBAGENT_MODEL"
+        ] + ModelSlot.allCases.flatMap { slot in
+            let key = "ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"
+            return [key, key + "_NAME", key + "_DESCRIPTION"]
+        }
         
         if mode == .automatic && fileManager.fileExists(atPath: configPath) {
             do {
@@ -779,11 +922,13 @@ actor AgentConfigurationService {
                 let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
                 var existingSettings = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
                 
-                // Create backup
-                let backupPath = "\(configPath).backup.\(Int(Date().timeIntervalSince1970))"
-                try fileManager.copyItem(atPath: configPath, toPath: backupPath)
+                // 同一秒内反复重新配置或恢复默认也必须保留独立备份。
+                _ = try backupIfPresent(configPath)
                 
-                // Remove Quotio env keys
+                // 删除前记录受管模型，支持任意代理 ID 和别名；不再用 gpt/gemini 子串猜测归属。
+                let oldEnv = existingSettings["env"] as? [String: String] ?? [:]
+                let modelKeys = ["ANTHROPIC_MODEL"] + ModelSlot.allCases.map { "ANTHROPIC_DEFAULT_\($0.envSuffix)_MODEL" }
+                let managedModels = Set(modelKeys.compactMap { oldEnv[$0] })
                 if var env = existingSettings["env"] as? [String: String] {
                     for key in keysToRemove {
                         env.removeValue(forKey: key)
@@ -791,9 +936,9 @@ actor AgentConfigurationService {
                     existingSettings["env"] = env.isEmpty ? nil : env
                 }
                 
-                // Remove model if it was set by Quotio to a proxy model
+                // 仅清理与受管默认值或槽映射相同的顶层模型，保留用户另行设置的模型。
                 if let modelName = existingSettings["model"] as? String,
-                   modelName.contains("gemini") || modelName.contains("gpt") {
+                   managedModels.contains(modelName) {
                     existingSettings.removeValue(forKey: "model")
                 }
                 
@@ -819,11 +964,7 @@ actor AgentConfigurationService {
         // Manual mode - show what would be removed
         let instructions = """
         To revert to default, remove these environment variables from ~/.claude/settings.json:
-        - ANTHROPIC_BASE_URL
-        - ANTHROPIC_AUTH_TOKEN
-        - ANTHROPIC_DEFAULT_OPUS_MODEL
-        - ANTHROPIC_DEFAULT_SONNET_MODEL
-        - ANTHROPIC_DEFAULT_HAIKU_MODEL
+        \(keysToRemove.map { "- " + $0 }.joined(separator: "\n"))
         """
         
         return .success(
@@ -845,7 +986,7 @@ actor AgentConfigurationService {
     }
     
     private func generateCodexDefaultConfig(mode: ConfigurationMode) -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configPath = "\(home)/.codex/config.toml"
         let authPath = "\(home)/.codex/auth.json"
 
@@ -906,7 +1047,7 @@ actor AgentConfigurationService {
     }
     
     private func generateAmpDefaultConfig(mode: ConfigurationMode) -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let settingsPath = "\(home)/.config/amp/settings.json"
         
         if mode == .automatic && fileManager.fileExists(atPath: settingsPath) {
@@ -952,7 +1093,7 @@ actor AgentConfigurationService {
     }
     
     private func generateOpenCodeDefaultConfig(mode: ConfigurationMode) -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configPath = "\(home)/.config/opencode/opencode.json"
         
         if mode == .automatic && fileManager.fileExists(atPath: configPath) {
@@ -1006,7 +1147,7 @@ actor AgentConfigurationService {
     }
     
     private func generateFactoryDroidDefaultConfig(mode: ConfigurationMode) -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configPath = "\(home)/.factory/config.json"
         
         if mode == .automatic && fileManager.fileExists(atPath: configPath) {
@@ -1070,32 +1211,78 @@ actor AgentConfigurationService {
     /// - Each backup is unique and never overwritten
     /// - All previous backups are preserved
     private func generateClaudeCodeConfig(config: AgentConfiguration, mode: ConfigurationMode, storageOption: ConfigStorageOption) -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configDir = "\(home)/.claude"
         let configPath = "\(configDir)/settings.json"
 
-        let opusModel = config.modelSlots[.opus] ?? "gemini-claude-opus-4-5-thinking"
-        let sonnetModel = config.modelSlots[.sonnet] ?? "gemini-claude-sonnet-4-5"
-        let haikuModel = config.modelSlots[.haiku] ?? "gemini-3-flash-preview"
         let baseURL = config.proxyURL.replacingOccurrences(of: "/v1", with: "")
 
-        // Quotio-managed env keys (will be updated/added)
-        let quotioEnvConfig: [String: String] = [
+        // Store base IDs in the form model and apply `[1m]` only to the request
+        // values emitted for Claude Code. This keeps disabling 1M reversible.
+        var baseModels: [ModelSlot: String] = [:]
+        var requestModels: [ModelSlot: String] = [:]
+        for slot in ModelSlot.allCases {
+            let selectedModel = config.modelSlots[slot]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let baseModel = selectedModel.flatMap { $0.isEmpty ? nil : $0 }
+                ?? AvailableModel.defaultModels[slot]!.name
+            baseModels[slot] = normalizedClaudeModelID(baseModel).base
+            requestModels[slot] = claudeRequestModel(
+                baseModel: baseModel,
+                uses1M: config.usesClaude1MContext(for: slot)
+            )
+        }
+
+        // Keep the existing launch-model selection unchanged unless it follows a
+        // role that is explicitly opted into 1M. This preserves aliases and custom
+        // launch IDs while ensuring the active 1M role is actually requested.
+        let configuredDefaultModel = config.claudeModel
+        let normalizedDefaultModel = normalizedClaudeModelID(configuredDefaultModel)
+        let defaultModelSlot = ModelSlot.allCases.first { slot in
+            normalizedDefaultModel.base == slot.rawValue || normalizedDefaultModel.base == baseModels[slot]
+        }
+        let effectiveDefaultModel: String
+        if let defaultModelSlot, config.usesClaude1MContext(for: defaultModelSlot) {
+            effectiveDefaultModel = requestModels[defaultModelSlot] ?? configuredDefaultModel
+        } else {
+            effectiveDefaultModel = configuredDefaultModel
+        }
+
+        // 三个槽是 Claude Code 的官方别名映射，值必须保留代理实际接受的模型 ID。
+        // 不单独硬编码备用版本，以免界面默认值升级后，配置生成器仍写入旧版本。
+        var quotioEnvConfig: [String: String] = [
             "ANTHROPIC_BASE_URL": baseURL,
             "ANTHROPIC_AUTH_TOKEN": config.apiKey,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": opusModel,
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnetModel,
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": haikuModel
+            "ANTHROPIC_MODEL": effectiveDefaultModel,
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": String(config.effectiveClaudeMaxContextTokens),
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": String(config.claudeAutoCompactPercentage),
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+            "CLAUDE_CODE_SUBAGENT_MODEL": requestModels[.haiku] ?? ""
         ]
+        if config.claudeDisableAutoCompact {
+            quotioEnvConfig["DISABLE_AUTO_COMPACT"] = "1"
+        }
 
-        let shellExports = """
-        # CLIProxyAPI Configuration for Claude Code
-        export ANTHROPIC_BASE_URL="\(baseURL)"
-        export ANTHROPIC_AUTH_TOKEN="\(config.apiKey)"
-        export ANTHROPIC_DEFAULT_OPUS_MODEL="\(opusModel)"
-        export ANTHROPIC_DEFAULT_SONNET_MODEL="\(sonnetModel)"
-        export ANTHROPIC_DEFAULT_HAIKU_MODEL="\(haikuModel)"
-        """
+        for slot in ModelSlot.allCases {
+            let requestModel = requestModels[slot] ?? AvailableModel.defaultModels[slot]!.name
+            let key = "ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"
+            quotioEnvConfig[key] = requestModel
+
+            // 官方 _NAME 控制模型选择器标题，_DESCRIPTION 同时用于 /model 的补全说明。
+            // 仅设置映射时，Claude Code 会显示「Custom Opus/Sonnet/Haiku model」。
+            // 名称可由用户单独编辑；说明同时保留实际 ID，让补全菜单也能区分展示名与请求目标。
+            let displayName = config.claudeDisplayName(for: slot)
+            quotioEnvConfig[key + "_NAME"] = displayName
+            quotioEnvConfig[key + "_DESCRIPTION"] = displayName == requestModel
+                ? requestModel
+                : "\(displayName) · \(requestModel)"
+        }
+
+        // JSON 与 Shell 导出共用同一份字段，保证两种配置方式的映射和显示完全一致。
+        // 单引号保护模型 ID 和凭据中的 $、反引号等字符；内嵌单引号拆分后再拼接。
+        let shellExports = "# CLIProxyAPI Configuration for Claude Code\n" + quotioEnvConfig.keys.sorted().map { key in
+            let value = quotioEnvConfig[key]!.replacingOccurrences(of: "'", with: "'\"'\"'")
+            return "export \(key)='\(value)'"
+        }.joined(separator: "\n")
 
         do {
             // Read existing settings.json to preserve user configuration
@@ -1107,17 +1294,20 @@ actor AgentConfigurationService {
                 existingConfig = parsed
             }
 
-            // Merge env object: preserve user's existing env keys, update only Quotio-managed keys
-            // User keys like MCP_API_KEY, DISABLE_INTERLEAVED_THINKING are preserved
-            // Quotio keys (ANTHROPIC_*) are updated with new values
+            // Merge env object: preserve user's existing env keys, update only Quotio-managed keys.
+            // `DISABLE_AUTO_COMPACT` has no false value: remove a stale Quotio entry
+            // before merging when the user re-enables automatic compaction.
             var mergedEnv = existingConfig["env"] as? [String: String] ?? [:]
+            if !config.claudeDisableAutoCompact {
+                mergedEnv.removeValue(forKey: "DISABLE_AUTO_COMPACT")
+            }
             for (key, value) in quotioEnvConfig {
                 mergedEnv[key] = value
             }
             existingConfig["env"] = mergedEnv
 
             // Update model field (other top-level keys are automatically preserved)
-            existingConfig["model"] = opusModel
+            existingConfig["model"] = effectiveDefaultModel
 
             // Generate JSON from merged config
             let jsonData = try JSONSerialization.data(withJSONObject: existingConfig, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
@@ -1148,10 +1338,8 @@ actor AgentConfigurationService {
                 if shouldWriteJson {
                     try fileManager.createDirectory(atPath: configDir, withIntermediateDirectories: true)
                     
-                    if fileManager.fileExists(atPath: configPath) {
-                        backupPath = "\(configPath).backup.\(Int(Date().timeIntervalSince1970))"
-                        try? fileManager.copyItem(atPath: configPath, toPath: backupPath!)
-                    }
+                    // 重新配置必须先成功备份；重名时顺延时间戳，不覆盖已有备份。
+                    backupPath = try backupIfPresent(configPath)
                     
                     try jsonData.write(to: URL(fileURLWithPath: configPath))
                 }
@@ -1193,13 +1381,13 @@ actor AgentConfigurationService {
     }
     
     private func generateCodexConfig(config: AgentConfiguration, mode: ConfigurationMode) async throws -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let codexDir = "\(home)/.codex"
         let configPath = "\(codexDir)/config.toml"
         let authPath = "\(codexDir)/auth.json"
 
         let managedConfigTOML = buildManagedCodexTOML(
-            model: config.modelSlots[.sonnet] ?? "gpt-5-codex",
+            model: config.codexModel,
             proxyURL: config.proxyURL,
             reasoningEffort: config.codexReasoningEffort
         )
@@ -1284,7 +1472,7 @@ actor AgentConfigurationService {
     }
     
     private func generateAmpConfig(config: AgentConfiguration, mode: ConfigurationMode) async throws -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configDir = "\(home)/.config/amp"
         let dataDir = "\(home)/.local/share/amp"
         let settingsPath = "\(configDir)/settings.json"
@@ -1479,7 +1667,7 @@ actor AgentConfigurationService {
     }
     
     private func generateOpenCodeConfig(config: AgentConfiguration, mode: ConfigurationMode, availableModels: [AvailableModel]) -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configDir = "\(home)/.config/opencode"
         let configPath = "\(configDir)/opencode.json"
         let baseURL = config.proxyURL.replacingOccurrences(of: "/v1", with: "")
@@ -1630,7 +1818,7 @@ actor AgentConfigurationService {
     }
 
     private func generateFactoryDroidConfig(config: AgentConfiguration, mode: ConfigurationMode, availableModels: [AvailableModel]) -> AgentConfigResult {
-        let home = fileManager.homeDirectoryForCurrentUser.path
+        let home = homeDirectory.path
         let configDir = "\(home)/.factory"
         let configPath = "\(configDir)/config.json"
 

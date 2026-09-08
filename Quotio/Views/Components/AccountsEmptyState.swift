@@ -19,10 +19,10 @@ struct AccountsEmptyState: View {
         VStack(spacing: 20) {
             // Illustration
             ZStack {
-                Circle()
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .fill(Color.accentColor.opacity(0.1))
                     .frame(width: 80, height: 80)
-                
+
                 Image(systemName: "person.2.badge.key")
                     .font(.system(size: 32))
                     .foregroundStyle(.secondary)

@@ -12,13 +12,16 @@ import os.log
 @Observable
 final class AgentSetupViewModel {
     private let detectionService = AgentDetectionService()
-    private let configurationService = AgentConfigurationService()
+    private let configurationService: AgentConfigurationService
     private let shellManager = ShellProfileManager()
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Quotio", category: "AgentSetup")
 
     var agentStatuses: [AgentStatus] = []
     var isLoading = false
     var isConfiguring = false
+    /// 初次回填结束前禁用编辑与保存，防止用户选择被稍后返回的旧配置覆盖。
+    var isLoadingConfiguration = false
+    var isDeletingBackups = false
     var isTesting = false
     var selectedAgent: CLIAgent?
     var configResult: AgentConfigResult?
@@ -53,7 +56,10 @@ final class AgentSetupViewModel {
     /// Reference to QuotaViewModel for quota checking
     weak var quotaViewModel: QuotaViewModel?
 
-    init() {}
+    /// 可注入临时目录中的配置服务，用于验证备份操作不会影响未保存的表单状态。
+    init(configurationService: AgentConfigurationService = AgentConfigurationService()) {
+        self.configurationService = configurationService
+    }
 
     func setup(proxyManager: CLIProxyManager, quotaViewModel: QuotaViewModel? = nil) {
         self.proxyManager = proxyManager
@@ -90,6 +96,7 @@ final class AgentSetupViewModel {
         }
 
         selectedAgent = agent
+        isLoadingConfiguration = true
 
         // Use tunnel URL if active, otherwise use local proxy endpoint
         let endpoint: String
@@ -118,7 +125,7 @@ final class AgentSetupViewModel {
             
             // Guard that selectedAgent still matches after async work
             guard !Task.isCancelled, self.selectedAgent == agent else { return }
-            
+            self.isLoadingConfiguration = false
             await self.loadModels()
         }
     }
@@ -126,10 +133,12 @@ final class AgentSetupViewModel {
     /// Load existing configuration from agent's config files and apply to current configuration
     private func loadExistingConfiguration(for agent: CLIAgent) async {
         // Read saved configuration
-        savedConfig = await configurationService.readConfiguration(agent: agent)
-        
-        // Load available backups
-        availableBackups = await configurationService.listBackups(agent: agent)
+        let loadedConfig = await configurationService.readConfiguration(agent: agent)
+        let loadedBackups = await configurationService.listBackups(agent: agent)
+        // 每次挂起后确认仍在配置原代理，避免关闭或切换页面后的结果污染新表单。
+        guard !Task.isCancelled, selectedAgent == agent else { return }
+        savedConfig = loadedConfig
+        availableBackups = loadedBackups
         
         // Pre-populate configuration with saved values
         guard let saved = savedConfig else { return }
@@ -140,6 +149,15 @@ final class AgentSetupViewModel {
         // Update current configuration with saved model slots
         for (slot, model) in saved.modelSlots {
             currentConfiguration?.modelSlots[slot] = model
+        }
+
+        if agent == .claudeCode {
+            currentConfiguration?.claudeDefaultModel = saved.defaultModel
+            currentConfiguration?.claudeModelDisplayNames = saved.modelDisplayNames
+            currentConfiguration?.claudeMaxContextTokens = saved.claudeMaxContextTokens
+            currentConfiguration?.claudeAutoCompactPercentage = saved.claudeAutoCompactPercentage
+            currentConfiguration?.claudeDisableAutoCompact = saved.claudeDisableAutoCompact
+            currentConfiguration?.claudeModel1M = saved.claudeModel1M
         }
 
         // Restore saved Codex reasoning effort
@@ -181,7 +199,67 @@ final class AgentSetupViewModel {
 
 
     func updateModelSlot(_ slot: ModelSlot, model: String) {
+        // 旧版自动生成的名称与 ID 相同，应继续跟随模型；用户自定义的名称则保持不变。
+        if let previousModel = currentConfiguration?.modelSlots[slot],
+           currentConfiguration?.claudeModelDisplayNames?[slot] == previousModel {
+            currentConfiguration?.claudeModelDisplayNames?.removeValue(forKey: slot)
+        }
         currentConfiguration?.modelSlots[slot] = model
+    }
+
+    func updateModelDisplayName(_ slot: ModelSlot, name: String) {
+        if currentConfiguration?.claudeModelDisplayNames == nil {
+            currentConfiguration?.claudeModelDisplayNames = [:]
+        }
+        currentConfiguration?.claudeModelDisplayNames?[slot] = name
+    }
+
+    func updateClaude1MContext(_ enabled: Bool, for slot: ModelSlot) {
+        currentConfiguration?.claudeModel1M[slot] = enabled
+    }
+
+    func updateClaudeMaxContextTokens(_ tokens: Int) {
+        currentConfiguration?.claudeMaxContextTokens = tokens
+    }
+
+    func updateClaudeAutoCompactPercentage(_ percentage: Int) {
+        currentConfiguration?.claudeAutoCompactPercentage = percentage
+    }
+
+    func updateClaudeDisableAutoCompact(_ disabled: Bool) {
+        currentConfiguration?.claudeDisableAutoCompact = disabled
+    }
+
+    /// 批量移到废纸篓；中途失败也重新读取列表，准确反映已完成的删除。
+    /// 这里不能调用配置回填，否则会覆盖用户尚未保存的模型与名称编辑。
+    func deleteBackups(_ backups: [AgentConfigurationService.BackupFile]) async {
+        guard let agent = selectedAgent, !isDeletingBackups,
+              backups.allSatisfy({ $0.agent == agent }) else { return }
+        isDeletingBackups = true
+        errorMessage = nil
+        defer { isDeletingBackups = false }
+        do {
+            for backup in backups {
+                try await configurationService.deleteBackup(backup)
+            }
+        } catch {
+            errorMessage = String(format: "agents.backups.deleteFailed".localized(), error.localizedDescription)
+        }
+        let remaining = await configurationService.listBackups(agent: agent)
+        guard selectedAgent == agent else { return }
+        availableBackups = remaining
+    }
+
+    /// 默认模型与三个槽独立更新，切换默认项不会重写槽映射。
+    func updateDefaultModel(_ model: String) {
+        if selectedAgent == .claudeCode {
+            currentConfiguration?.claudeModel = model
+        } else if selectedAgent == .pi {
+            // 复用单模型槽存储，但不使用 Codex 的兜底模型和思考强度。
+            currentConfiguration?.modelSlots[.sonnet] = model
+        } else if selectedAgent == .codexCLI {
+            currentConfiguration?.codexModel = model
+        }
     }
 
     func updateReasoningEffort(_ effort: CodexReasoningEffort) {
@@ -189,8 +267,19 @@ final class AgentSetupViewModel {
     }
 
     func applyConfiguration() async {
-        guard let agent = selectedAgent,
+        guard !isLoadingConfiguration, let agent = selectedAgent,
               let config = currentConfiguration else { return }
+
+        if agent == .claudeCode {
+            guard config.claudeMaxContextTokens > 0 else {
+                errorMessage = "agents.claude.advanced.context.validation".localized()
+                return
+            }
+            guard (1...100).contains(config.claudeAutoCompactPercentage) else {
+                errorMessage = "agents.claude.advanced.compaction.validation".localized()
+                return
+            }
+        }
 
         isConfiguring = true
         defer { isConfiguring = false }
@@ -325,6 +414,8 @@ final class AgentSetupViewModel {
     }
 
     func dismissConfiguration() {
+        configurationLoadTask?.cancel()
+        isLoadingConfiguration = false
         selectedAgent = nil
         configResult = nil
         testResult = nil
@@ -358,6 +449,7 @@ final class AgentSetupViewModel {
     @discardableResult
     func loadModels(forceRefresh: Bool = false) async -> Bool {
         guard let config = modelRequestConfiguration() else { return false }
+        let requestedAgent = selectedAgent
 
         isFetchingModels = true
         defer { isFetchingModels = false }
@@ -366,6 +458,7 @@ final class AgentSetupViewModel {
         do {
             let fetchedModels = try await configurationService.fetchAvailableModels(config: config)
             let processedModels = processModels(fetchedModels)
+            guard selectedAgent == requestedAgent else { return false }
             self.availableModels = processedModels
             loadedFromRemote = true
 
@@ -375,7 +468,12 @@ final class AgentSetupViewModel {
         } catch {
             // On error, use default models if list is empty
             logger.error("[AgentSetupViewModel] Failed to load models: \(error.localizedDescription)")
-            if availableModels.isEmpty {
+            // Pi 不提供猜测的内置模型；目录失败时只保留用户已配置的选择。
+            if requestedAgent == .pi {
+                guard selectedAgent == requestedAgent else { return false }
+                availableModels = []
+                errorMessage = "agents.pi.modelsFailed".localized()
+            } else if availableModels.isEmpty {
                 self.availableModels = AvailableModel.allModels
                 logger.debug("[AgentSetupViewModel] Using \(AvailableModel.allModels.count) default models")
             }

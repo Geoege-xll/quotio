@@ -33,8 +33,9 @@ nonisolated enum OpenRouterQuotaMapper {
         if let data = credits.data, credits.succeeded,
            let body = object(data) {
             let payload = dictionary(body["data"]) ?? body
-            let purchased = max(0, number(payload["total_credits"]) ?? 0)
-            if let spentValue = number(payload["total_usage"]) {
+            let purchasedValue = number(payload["total_credits"])
+            if let purchasedValue, let spentValue = number(payload["total_usage"]) {
+                let purchased = max(0, purchasedValue)
                 let spent = max(0, spentValue)
                 if purchased > 0 {
                     models.append(ModelQuota(
@@ -65,13 +66,20 @@ nonisolated enum OpenRouterQuotaMapper {
                 }
             }
             if let limit = number(payload["limit"]), limit > 0 {
-                let used = number(payload["usage"]) ?? max(0, limit - (number(payload["limit_remaining"]) ?? limit))
-                models.append(ModelQuota(
-                    name: "openrouter-key-limit",
-                    percentage: remainingPercentage(used: used, limit: limit),
-                    resetTime: "",
-                    presentation: .progress(used: used, limit: limit, unit: .usd)
-                ))
+                // usage 是账号密钥的累计消费，不能用来扣减每月/每日重置后的限额。
+                // 服务端 limit_remaining 已包含周期和 BYOK 计费规则，优先使用该权威值。
+                let used = number(payload["limit_remaining"]).map { max(0, limit - $0) }
+                    ?? currentLimitUsage(payload)
+                if let used {
+                    models.append(ModelQuota(
+                        name: "openrouter-key-limit",
+                        percentage: remainingPercentage(used: used, limit: limit),
+                        resetTime: "",
+                        presentation: .progress(used: used, limit: limit, unit: .usd)
+                    ))
+                } else {
+                    models.append(ModelQuota(name: "openrouter-key-limit", percentage: -1, resetTime: ""))
+                }
             }
         }
 
@@ -90,6 +98,24 @@ nonisolated enum OpenRouterQuotaMapper {
 
     private static func remainingPercentage(used: Double, limit: Double) -> Double {
         max(0, min(100, (limit - used) / limit * 100))
+    }
+
+    /// 缺少服务端剩余额度时，只能使用同一周期的消费；未知周期或缺失的 BYOK 消费保持未知。
+    private static func currentLimitUsage(_ payload: [String: Any]) -> Double? {
+        let suffix: String
+        switch payload["limit_reset"] as? String {
+        case "daily": suffix = "_daily"
+        case "weekly": suffix = "_weekly"
+        case "monthly": suffix = "_monthly"
+        case nil: suffix = ""
+        default: return nil
+        }
+        guard let usage = number(payload["usage" + suffix]) else { return nil }
+        if bool(payload["include_byok_in_limit"]) == true {
+            guard let byok = number(payload["byok_usage" + suffix]) else { return nil }
+            return max(0, usage + byok)
+        }
+        return max(0, usage)
     }
 
     private static func object(_ data: Data) -> [String: Any]? {

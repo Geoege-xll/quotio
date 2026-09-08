@@ -11,6 +11,8 @@ import SwiftUI
 // MARK: - Add Provider Popover
 
 struct AddProviderPopover: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let providers: [AIProvider]
     let existingCounts: [AIProvider: Int]  // Number of existing accounts per provider
     var onSelectProvider: (AIProvider) -> Void
@@ -24,14 +26,27 @@ struct AddProviderPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Header
-            Text("providers.addAccount".localized())
-                .font(.headline)
+            // Header with close button
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("providers.addAccount".localized())
+                        .font(.headline)
 
-            // Hint: can add multiple accounts
-            Text("providers.addMultipleHint".localized())
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                    // Hint: can add multiple accounts
+                    Text("providers.addMultipleHint".localized())
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                // Close button (26pt circular target per design spec)
+                QuotioCircularIconButton(systemImage: "xmark") {
+                    onDismiss()
+                }
+                .keyboardShortcut(.escape)
+                .accessibilityLabel("action.cancel".localized())
+            }
 
             // Provider grid
             LazyVGrid(columns: columns, spacing: 12) {
@@ -46,45 +61,69 @@ struct AddProviderPopover: View {
                 }
             }
 
-            Divider()
-            
-            // Scan for IDEs option
-            Button {
-                onScanIDEs()
-                onDismiss()
-            } label: {
-                HStack {
-                    Image(systemName: "sparkle.magnifyingglass")
-                        .foregroundStyle(.blue)
-                    Text("ideScan.scanExisting".localized())
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+            // Inset well for utility entries (zero-divider architecture)
+            VStack(spacing: 6) {
+                // Scan for IDEs option
+                Button {
+                    onScanIDEs()
+                    onDismiss()
+                } label: {
+                    HStack {
+                        Image(systemName: "sparkle.magnifyingglass")
+                            .foregroundStyle(.blue)
+                        Text("ideScan.scanExisting".localized())
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                            .fill(QuotioTheme.Colors.cardInset(for: colorScheme))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                            .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                    )
+                    .contentShape(Rectangle())
                 }
-            }
-            .buttonStyle(.menuRow)
-            .focusEffectDisabled()
-            
-            // Add Custom Provider option
-            Button {
-                onAddCustomProvider()
-                onDismiss()
-            } label: {
-                HStack {
-                    Image(systemName: "puzzlepiece.extension")
-                        .foregroundStyle(.purple)
-                    Text("customProviders.add".localized())
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+
+                // Add Custom Provider option
+                Button {
+                    onAddCustomProvider()
+                    onDismiss()
+                } label: {
+                    HStack {
+                        Image(systemName: "puzzlepiece.extension")
+                            .foregroundStyle(.purple)
+                        Text("customProviders.add".localized())
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                            .fill(QuotioTheme.Colors.cardInset(for: colorScheme))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                            .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                    )
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
             }
-            .buttonStyle(.menuRow)
-            .focusEffectDisabled()
         }
         .padding(16)
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
         .frame(width: 320)
         .focusEffectDisabled()
     }
@@ -93,6 +132,7 @@ struct AddProviderPopover: View {
 // MARK: - Provider Button
 
 private struct ProviderButton: View {
+    @Environment(\.colorScheme) private var colorScheme
     let provider: AIProvider
     let existingCount: Int  // Number of existing accounts for this provider
     let action: () -> Void
@@ -122,10 +162,17 @@ private struct ProviderButton: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .frame(width: 80, height: 70)
+            .frame(width: 80, height: 72)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isHovered ? provider.color.opacity(0.1) : Color.clear)
+                RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                    .fill(isHovered ? provider.color.opacity(0.14) : QuotioTheme.Colors.cardInset(for: colorScheme))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                    .strokeBorder(
+                        isHovered ? provider.color.opacity(0.35) : QuotioTheme.Colors.sidebarBorder(for: colorScheme),
+                        lineWidth: 0.5
+                    )
             )
         }
         .buttonStyle(.gridItem(hoverColor: provider.color.opacity(0.1)))

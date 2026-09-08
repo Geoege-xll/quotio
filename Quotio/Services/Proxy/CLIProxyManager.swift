@@ -72,6 +72,16 @@ final class CLIProxyManager {
     private var testProcess: Process?
     private var authProcess: Process?
     private(set) var proxyStatus = ProxyStatus()
+    /// 只暴露当前由 Quotio 持有且仍存活的进程标识；不从端口或旧记录猜测 PID。
+    var processIdentifier: Int32? {
+        guard let process, process.isRunning else { return nil }
+        return process.processIdentifier
+    }
+
+    /// 每次启停都会更换会话，供目录请求识别快速重启前的过期响应。
+    private(set) var runtimeSessionID = UUID()
+    private(set) var isStopping = false
+    @ObservationIgnored private var stopTask: Task<Void, Never>?
     private(set) var isStarting = false
     private(set) var isDownloading = false
     private(set) var isRegeneratingKey = false
@@ -752,6 +762,9 @@ final class CLIProxyManager {
     }
     
     func start(resetCrashRecoveryState: Bool = true) async throws {
+        // 等待真实端口清理结束，防止旧停止任务误杀新启动的进程。
+        if let stopTask { await stopTask.value }
+        guard !isStarting else { return }
         guard isBinaryInstalled else {
             throw ProxyError.binaryNotFound
         }
@@ -764,6 +777,7 @@ final class CLIProxyManager {
         }
         
         isStarting = true
+        runtimeSessionID = UUID()
         lastError = nil
         
         defer { isStarting = false }
@@ -871,76 +885,42 @@ final class CLIProxyManager {
     }
     
     func stop() {
+        guard !isStopping else { return }
         terminateAuthProcess()
         stopHealthMonitor()
         cancelCrashRestart()
-        
-        // Run blocking operations in background to avoid freezing MainActor.
-        //
-        // Trade-off note: If start() is called immediately after stop(), there is a small
-        // window where the detached task could kill the newly started process (since
-        // killProcessOnPortSync kills by PORT, not PID). This is an acceptable trade-off
-        // because UI responsiveness is more important than this rare edge case.
-        // A 150ms buffer is added below to reduce (but not eliminate) this race window.
+
         let currentProcess = process
         let port = proxyStatus.port
         markExpectedTermination(currentProcess)
-        
-        Task.detached(priority: .userInitiated) {
-            // Force terminate the main proxy process
-            if let proc = currentProcess, proc.isRunning {
-                let pid = proc.processIdentifier
-                proc.terminate()
-                
-                let deadline = Date().addingTimeInterval(2.0)
-                while proc.isRunning && Date() < deadline {
-                    usleep(100_000)  // 100ms, avoid Thread.sleep in async context
-                }
-                
-                if proc.isRunning {
-                    kill(pid, SIGKILL)
-                }
-            }
-            
-            Self.killProcessOnPortSync(port)
-        }
-        
+        isStopping = true
+        runtimeSessionID = UUID()
         process = nil
         proxyStatus.running = false
+
+        // 停止状态覆盖实际后台清理周期；所有启动入口会等待此任务，不能用延时模拟完成。
+        stopTask = Task { @MainActor [weak self] in
+            await Task.detached(priority: .userInitiated) {
+                if let proc = currentProcess, proc.isRunning {
+                    let pid = proc.processIdentifier
+                    proc.terminate()
+                    let deadline = Date().addingTimeInterval(2.0)
+                    while proc.isRunning && Date() < deadline {
+                        usleep(100_000)
+                    }
+                    if proc.isRunning { kill(pid, SIGKILL) }
+                }
+                Self.killProcessOnPortSync(port)
+            }.value
+            self?.isStopping = false
+            self?.stopTask = nil
+        }
     }
 
-    /// Stop the proxy and wait for process/port cleanup to complete.
-    /// Used by recovery paths that immediately restart, so the detached cleanup in stop()
-    /// cannot race with and kill the newly started process by port.
+    /// 恢复和升级路径共享同一个停止任务，避免并行执行两次端口清理。
     func stopAndWait() async {
-        terminateAuthProcess()
-        stopHealthMonitor()
-        cancelCrashRestart()
-
-        let currentProcess = process
-        let port = proxyStatus.port
-        markExpectedTermination(currentProcess)
-
-        process = nil
-        proxyStatus.running = false
-
-        await Task.detached(priority: .userInitiated) {
-            if let proc = currentProcess, proc.isRunning {
-                let pid = proc.processIdentifier
-                proc.terminate()
-
-                let deadline = Date().addingTimeInterval(2.0)
-                while proc.isRunning && Date() < deadline {
-                    usleep(100_000)
-                }
-
-                if proc.isRunning {
-                    kill(pid, SIGKILL)
-                }
-            }
-
-            Self.killProcessOnPortSync(port)
-        }.value
+        stop()
+        if let stopTask { await stopTask.value }
     }
     
     // ════════════════════════════════════════════════════════════════════════

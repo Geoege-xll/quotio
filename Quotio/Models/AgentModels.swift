@@ -9,6 +9,7 @@ import SwiftUI
 // MARK: - CLI Agent Types
 
 nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable {
+    case pi = "pi"
     case claudeCode = "claude-code"
     case codexCLI = "codex"
     case ampCLI = "amp"
@@ -19,6 +20,7 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
 
     var displayName: String {
         switch self {
+        case .pi: return "Pi"
         case .claudeCode: return "Claude Code"
         case .codexCLI: return "Codex CLI"
         case .ampCLI: return "Amp CLI"
@@ -29,6 +31,7 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
 
     var description: String {
         switch self {
+        case .pi: return "Pi coding agent with the official CLIProxyAPI provider"
         case .claudeCode: return "Anthropic's official CLI for Claude models"
         case .codexCLI: return "OpenAI's Codex CLI for GPT-5 models"
         case .ampCLI: return "Sourcegraph's Amp coding assistant"
@@ -39,6 +42,7 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
 
     var configType: AgentConfigType {
         switch self {
+        case .pi: return .file
         case .claudeCode: return .both
         case .codexCLI: return .file
         case .ampCLI: return .both
@@ -49,6 +53,7 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
 
     var binaryNames: [String] {
         switch self {
+        case .pi: return ["pi"]
         case .claudeCode: return ["claude"]
         case .codexCLI: return ["codex"]
         case .ampCLI: return ["amp"]
@@ -59,6 +64,7 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
 
     var configPaths: [String] {
         switch self {
+        case .pi: return PiAgentSupport.configURLs(homeDirectory: FileManager.default.homeDirectoryForCurrentUser).map(\.path)
         case .claudeCode: return ["~/.claude/settings.json"]
         case .codexCLI: return ["~/.codex/config.toml", "~/.codex/auth.json"]
         case .ampCLI: return ["~/.config/amp/settings.json", "~/.local/share/amp/secrets.json"]
@@ -69,6 +75,8 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
 
     var docsURL: URL? {
         switch self {
+        // 文档地址使用固定且有效的 URL，与其他智能体的属性类型保持一致。
+        case .pi: return URL(string: "https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent")!
         case .claudeCode: return URL(string: "https://docs.anthropic.com/en/docs/claude-code")
         case .codexCLI: return URL(string: "https://github.com/openai/codex")
         case .ampCLI: return URL(string: "https://ampcode.com/manual")
@@ -79,6 +87,7 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
 
     var systemIcon: String {
         switch self {
+        case .pi: return "terminal.fill"
         case .claudeCode: return "brain.head.profile"
         case .codexCLI: return "chevron.left.forwardslash.chevron.right"
         case .ampCLI: return "bolt.fill"
@@ -89,6 +98,8 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
 
     var color: Color {
         switch self {
+        // 十六进制颜色解析为可选值，提供系统橙色兜底以满足非可选返回类型。
+        case .pi: return Color(hex: "F97316") ?? .orange
         case .claudeCode: return Color(hex: "D97706") ?? .orange
         case .codexCLI: return Color(hex: "10A37F") ?? .green
         case .ampCLI: return Color(hex: "FF5543") ?? .red
@@ -354,13 +365,14 @@ nonisolated struct AgentStatus: Identifiable, Sendable {
 
     var id: String { agent.id }
 
-    var statusText: String {
+    /// 模型只提供本地化键；由视图按当前语言解析，切换语言时不会留下硬编码英文状态。
+    var statusLocalizationKey: String {
         if !installed {
-            return "Not Installed"
+            return "agents.notInstalled"
         } else if configured {
-            return "Configured"
+            return "agents.configured"
         } else {
-            return "Installed"
+            return "agents.installed"
         }
     }
 
@@ -388,6 +400,92 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
     /// Only used when `agent == .codexCLI`.
     var codexReasoningEffort: CodexReasoningEffort
 
+    /// Codex 的独立备用模型沿用原生成器的取值，不再借用 Claude 的 Sonnet 默认槽。
+    /// 已保存的模型和用户在界面中的选择始终优先，不因刷新模型列表而被替换。
+    static let defaultCodexModel = "gpt-5-codex"
+    static let defaultClaudeMaxContextTokens = 200_000
+    static let defaultClaudeAutoCompactPercentage = 90
+
+    /// 独立保存 Claude 的启动模型；可选字段兼容没有该键的旧 Codable 数据。
+    /// nil 时跟随 Opus 槽，保持旧版首次配置的实际行为，而不是复制槽中的模型 ID。
+    var claudeDefaultModel: String?
+
+    /// 显示名称与请求 ID 分开存储；可选字典兼容旧配置，缺省或留空时展示实际模型 ID。
+    var claudeModelDisplayNames: [ModelSlot: String]?
+
+    /// Claude Code 的普通上下文窗口。任一模型槽位启用 1M 时，生成器临时写入 1,000,000，
+    /// 但不改写这里的用户选择，以便关闭 1M 后恢复该值。
+    var claudeMaxContextTokens: Int
+    /// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 的用户选择，必须为 1...100。
+    var claudeAutoCompactPercentage: Int
+    /// `DISABLE_AUTO_COMPACT=1` 只在启用时写入；关闭时移除 Quotio 管理的键。
+    var claudeDisableAutoCompact: Bool
+    /// 每个 Claude 角色独立决定是否在最终请求模型 ID 追加 `[1m]`。
+    var claudeModel1M: [ModelSlot: Bool]
+
+    enum CodingKeys: String, CodingKey {
+        case agent, modelSlots, proxyURL, apiKey, useOAuth, setupMode
+        case codexReasoningEffort, claudeDefaultModel, claudeModelDisplayNames
+        case claudeMaxContextTokens, claudeAutoCompactPercentage
+        case claudeDisableAutoCompact, claudeModel1M
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agent = try container.decode(CLIAgent.self, forKey: .agent)
+        modelSlots = try container.decode([ModelSlot: String].self, forKey: .modelSlots)
+        proxyURL = try container.decode(String.self, forKey: .proxyURL)
+        apiKey = try container.decode(String.self, forKey: .apiKey)
+        useOAuth = try container.decode(Bool.self, forKey: .useOAuth)
+        setupMode = try container.decode(ConfigurationSetup.self, forKey: .setupMode)
+        codexReasoningEffort = try container.decodeIfPresent(CodexReasoningEffort.self, forKey: .codexReasoningEffort) ?? .defaultEffort
+        claudeDefaultModel = try container.decodeIfPresent(String.self, forKey: .claudeDefaultModel)
+        claudeModelDisplayNames = try container.decodeIfPresent([ModelSlot: String].self, forKey: .claudeModelDisplayNames)
+        let decodedContextTokens = try container.decodeIfPresent(Int.self, forKey: .claudeMaxContextTokens)
+        claudeMaxContextTokens = decodedContextTokens.map { $0 > 0 ? $0 : Self.defaultClaudeMaxContextTokens }
+            ?? Self.defaultClaudeMaxContextTokens
+        let decodedCompactPercentage = try container.decodeIfPresent(Int.self, forKey: .claudeAutoCompactPercentage)
+        claudeAutoCompactPercentage = decodedCompactPercentage.map { (1...100).contains($0) ? $0 : Self.defaultClaudeAutoCompactPercentage }
+            ?? Self.defaultClaudeAutoCompactPercentage
+        claudeDisableAutoCompact = try container.decodeIfPresent(Bool.self, forKey: .claudeDisableAutoCompact) ?? false
+        claudeModel1M = try container.decodeIfPresent([ModelSlot: Bool].self, forKey: .claudeModel1M) ?? [:]
+    }
+
+    func claudeDisplayName(for slot: ModelSlot) -> String {
+        let name = claudeModelDisplayNames?[slot]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !name.isEmpty { return name }
+        let model = modelSlots[slot]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return model.isEmpty ? (AvailableModel.defaultModels[slot]?.name ?? "") : model
+    }
+
+    func usesClaude1MContext(for slot: ModelSlot) -> Bool {
+        claudeModel1M[slot] ?? false
+    }
+
+    var effectiveClaudeMaxContextTokens: Int {
+        ModelSlot.allCases.contains { usesClaude1MContext(for: $0) }
+            ? 1_000_000
+            : claudeMaxContextTokens
+    }
+
+    var claudeModel: String {
+        get {
+            let model = claudeDefaultModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return model.isEmpty ? ModelSlot.opus.rawValue : model
+        }
+        set { claudeDefaultModel = newValue }
+    }
+
+    /// 为兼容已保存的 AgentConfiguration，单模型仍存放在原来的 sonnet 字段中。
+    /// 通过专用属性统一处理空值，避免界面显示的模型与生成器的备用值不一致。
+    var codexModel: String {
+        get {
+            let model = modelSlots[.sonnet]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return model.isEmpty ? Self.defaultCodexModel : model
+        }
+        set { modelSlots[.sonnet] = newValue }
+    }
+
     init(agent: CLIAgent, proxyURL: String, apiKey: String, setupMode: ConfigurationSetup = .proxy) {
         self.agent = agent
         self.proxyURL = proxyURL
@@ -395,29 +493,30 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
         self.useOAuth = false
         self.setupMode = setupMode
         self.codexReasoningEffort = .defaultEffort
-        self.modelSlots = Dictionary(uniqueKeysWithValues: ModelSlot.allCases.compactMap { slot in
-            AvailableModel.defaultModels[slot].map { (slot, $0.name) }
-        })
-    }
-
-    /// Initialize with saved model slots (for restoring existing configuration)
-    init(agent: CLIAgent, proxyURL: String, apiKey: String, setupMode: ConfigurationSetup = .proxy, savedModelSlots: [ModelSlot: String]) {
-        self.agent = agent
-        self.proxyURL = proxyURL
-        self.apiKey = apiKey
-        self.useOAuth = false
-        self.setupMode = setupMode
-        self.codexReasoningEffort = .defaultEffort
-
-        // Start with defaults, then overlay saved slots
-        var slots = Dictionary(uniqueKeysWithValues: ModelSlot.allCases.compactMap { slot in
-            AvailableModel.defaultModels[slot].map { (slot, $0.name) }
-        })
-        for (slot, model) in savedModelSlots {
-            slots[slot] = model
+        self.claudeMaxContextTokens = Self.defaultClaudeMaxContextTokens
+        self.claudeAutoCompactPercentage = Self.defaultClaudeAutoCompactPercentage
+        self.claudeDisableAutoCompact = false
+        self.claudeModel1M = [:]
+        // Pi 必须使用 CPA 实际返回的模型，不继承 Claude 槽默认值。
+        if agent == .pi {
+            self.modelSlots = [:]
+        } else if agent == .codexCLI {
+            self.modelSlots = [.sonnet: Self.defaultCodexModel]
+        } else {
+            self.modelSlots = Dictionary(uniqueKeysWithValues: ModelSlot.allCases.compactMap { slot in
+                AvailableModel.defaultModels[slot].map { (slot, $0.name) }
+            })
         }
-        self.modelSlots = slots
     }
+
+    /// 先应用该代理自己的默认值，再覆盖已保存的选择，两个初始化入口使用同一规则。
+    init(agent: CLIAgent, proxyURL: String, apiKey: String, setupMode: ConfigurationSetup = .proxy, savedModelSlots: [ModelSlot: String]) {
+        self.init(agent: agent, proxyURL: proxyURL, apiKey: apiKey, setupMode: setupMode)
+        for (slot, model) in savedModelSlots {
+            self.modelSlots[slot] = model
+        }
+    }
+
 }
 
 // MARK: - Raw Configuration Output (for Manual Mode)

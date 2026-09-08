@@ -79,9 +79,11 @@ enum OperatingMode: String, Codable, CaseIterable, Identifiable, Sendable {
     var visiblePages: [NavigationPage] {
         switch self {
         case .monitor:
-            return [.dashboard, .quota, .providers, .settings, .about]
+            // 本地客户端用量和调用分析均不要求运行代理。
+            return [.dashboard, .usageStatistics, .callAnalytics, .quota, .providers, .settings, .about]
         case .localProxy:
-            return [.dashboard, .quota, .providers, .agents, .apiKeys, .logs, .settings, .about]
+            // 日志归属设置中的诊断工具，不再作为一级侧栏页面。
+            return [.dashboard, .usageStatistics, .callAnalytics, .quota, .providers, .agents, .apiKeys, .settings, .about]
         }
     }
     

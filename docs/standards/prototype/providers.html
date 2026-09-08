@@ -1,0 +1,116 @@
+<!doctype html><html lang="zh-Hans" data-theme="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quotio · 提供商原型</title>
+<link rel="stylesheet" href="prototype.css"><script src="prototype.js" defer></script></head>
+
+<body data-page="providers">
+<div class="demo"><strong>交互原型 · 演示数据</strong><label>外观 <select id="theme"><option value="dark">深色</option><option value="light">浅色</option></select></label><label>演示状态 <select id="provider-scenario"><option value="connected">已有账号</option><option value="empty">尚无账号</option><option value="stopped">CPA 未运行</option><option value="failure">授权失败</option></select></label></div>
+
+<div class="app">
+<aside>
+<div class="brand">Quotio</div>
+
+<nav class="nav"><a id="nav-dashboard" class="" href="dashboard.html">仪表盘</a><a id="nav-providers" class="active" href="providers.html">提供商</a><span>配额</span><span>AI 代理设置</span><span>设置</span></nav>
+
+<div class="mode">本地代理模式</div>
+</aside>
+
+<main data-prototype-page-content>
+<div class="row spread page-head"><h1>提供商</h1><span class="muted">本地代理</span></div>
+
+<div class="stack">
+<section class="card">
+<h2>提供商</h2>
+<!-- 与现有 Dashboard providerSection 一致：连接标签与未连接按钮属于同一流式容器。 -->
+<div class="provider-flow">
+<span class="chip" data-connected-provider="claude">Claude Code <b>2</b></span>
+<span class="chip" data-connected-provider="codex">Codex <b>2</b></span>
+<span class="chip" data-connected-provider="antigravity">Antigravity <b>1</b></span>
+<button id="add-claude" data-add-provider="claude" hidden>＋ Claude Code</button>
+<button id="add-codex" data-add-provider="codex" hidden>＋ Codex</button>
+<button id="add-qwen" data-add-provider="qwen">＋ Qwen Code</button>
+<button id="add-iflow" data-add-provider="iflow">＋ iFlow</button>
+<button id="add-antigravity" data-add-provider="antigravity" hidden>＋ Antigravity</button>
+<button id="add-vertex" data-add-provider="vertex">＋ Vertex AI</button>
+<button id="add-kiro" data-add-provider="kiro">＋ Kiro</button>
+<button id="add-copilot" data-add-provider="copilot">＋ GitHub Copilot</button>
+</div>
+<div id="provider-action" class="notice" role="status" hidden><p id="action-message"></p>
+<div class="row" style="margin-top:10px"><button id="action-cancel">取消</button><button id="action-retry" hidden>重试</button></div>
+</div>
+</section>
+
+
+<section class="card">
+<div class="row spread"><h2>你的账号</h2><small id="account-ready">5 个就绪</small></div>
+
+<div id="account-list">
+<div class="account row spread">
+<div class="row"><span class="letter">C</span>
+<div><strong>Claude</strong><p class="muted">工作账号 · 演示账号</p></div>
+</div>
+
+<div class="row"><span id="account-state" class="badge good">已启用</span><button id="account-toggle">禁用</button></div>
+</div>
+
+<div class="account row spread">
+<div><strong>Claude</strong><p class="muted">个人账号 · 演示账号</p></div>
+<span class="badge good">已启用</span></div>
+
+<div class="account row spread">
+<div><strong>Codex</strong><p class="muted">工作账号 · 演示账号</p></div>
+<span class="badge good">已启用</span></div>
+
+<div class="account row spread">
+<div><strong>Codex</strong><p class="muted">个人账号 · 演示账号</p></div>
+<span class="badge good">已启用</span></div>
+
+<div class="account row spread">
+<div><strong>Antigravity</strong><p class="muted">开发账号 · 演示账号</p></div>
+<span class="badge good">已启用</span></div>
+</div>
+<p id="account-empty" class="empty" hidden>暂无账号</p></section>
+
+<section class="card"><h2>自定义提供商</h2><p class="muted" style="margin-top:10px">现有自定义提供商列表保持在账号下方。</p>
+<div class="account row spread"><span>示例兼容服务</span><span class="badge">演示配置</span></div>
+</section>
+</div>
+</main>
+</div>
+
+<details class="prototype-contract"><summary>Page design and interaction contract</summary>
+<section data-contract-section="purpose"><h2>页面目的与布局</h2><p>直接将仪表盘 providerSection 的同一条 FlowLayout 移到此页顶部：已连接提供商为账号数标签，紧跟未连接且 supportsLocalProxySetup 的添加按钮。常规窗口单行，窄窗口自然换行；没有总体计数、额外添加标题或帮助说明。下方保持你的账号 → 自定义提供商。原型仅展示迁移区域和必要上下文，不重新设计完整 OAuth、文件导入、账号或自定义提供商编辑器。</p></section>
+
+<section data-contract-section="navigation"><h2>页面导航</h2><p>侧边栏在两个固定页面之间导航；其它侧边栏文字是现有页面的背景定位，不提供伪导航。演示条、构造数据与契约不进入生产。</p></section>
+
+<section data-contract-section="interactions"><h2>交互</h2><ul>
+<li data-contract-for="theme">theme：选择浅色或深色，立即切换两套语义色阶；仅原型演示控件。</li>
+
+<li data-contract-for="nav-dashboard">nav-dashboard：打开仪表盘原型 dashboard.html。</li>
+
+<li data-contract-for="nav-providers">nav-providers：打开提供商原型 providers.html。</li>
+
+<li data-contract-for="provider-scenario">provider-scenario：切换已有账号、空账号、CPA 停止及授权失败演示；连接标签和未连接添加按钮与账号列表同步；空账号时八项均为添加按钮。</li>
+
+<li data-contract-for="add-claude">add-claude：仅在该提供商未连接时显示，演示现有 Claude Code OAuth 入口；代理停止时提示先启动，提供进行中和结果反馈，不访问真实账号或文件。</li>
+<li data-contract-for="add-codex">add-codex：仅在该提供商未连接时显示，演示现有 Codex OAuth 入口；代理停止时提示先启动，提供进行中和结果反馈，不访问真实账号或文件。</li>
+<li data-contract-for="add-qwen">add-qwen：仅在该提供商未连接时显示，演示现有 Qwen Code OAuth 入口；代理停止时提示先启动，提供进行中和结果反馈，不访问真实账号或文件。</li>
+<li data-contract-for="add-iflow">add-iflow：仅在该提供商未连接时显示，演示现有 iFlow OAuth 入口；代理停止时提示先启动，提供进行中和结果反馈，不访问真实账号或文件。</li>
+<li data-contract-for="add-antigravity">add-antigravity：仅在该提供商未连接时显示，演示现有 Antigravity OAuth 入口；代理停止时提示先启动，提供进行中和结果反馈，不访问真实账号或文件。</li>
+<li data-contract-for="add-vertex">add-vertex：仅在该提供商未连接时显示，演示现有 Vertex AI JSON 文件导入 入口；代理停止时提示先启动，提供进行中和结果反馈，不访问真实账号或文件。</li>
+<li data-contract-for="add-kiro">add-kiro：仅在该提供商未连接时显示，演示现有 Kiro OAuth 入口；代理停止时提示先启动，提供进行中和结果反馈，不访问真实账号或文件。</li>
+<li data-contract-for="add-copilot">add-copilot：仅在该提供商未连接时显示，演示现有 GitHub Copilot OAuth 入口；代理停止时提示先启动，提供进行中和结果反馈，不访问真实账号或文件。</li>
+<li data-contract-for="action-cancel">action-cancel：取消当前演示授权/导入，恢复可操作状态。</li>
+
+<li data-contract-for="action-retry">action-retry：在失败提示后重试同一演示操作。</li>
+
+<li data-contract-for="account-toggle">account-toggle：切换示例账号启用/禁用状态并同步就绪计数，不改变账号总数。</li>
+</ul></section>
+
+<section data-contract-section="states"><h2>状态与适配</h2><p>默认同一行先显示 Claude Code 2、Codex 2、Antigravity 1 三个标签，再显示 Qwen Code、iFlow、Vertex AI、Kiro、GitHub Copilot 添加按钮；示例账号可禁用且就绪计数同步。空账号状态清空连接标签和账号列表，在同一个流式容器显示全部八项添加按钮。已连接提供商不重复出现添加按钮。CPA 停止时显示现有代理前置提示。仅在操作发生时展开反馈区，授权与导入展示进行中、完成、失败和取消；结果为原型内演示提示，不创建真实账号。 所有状态使用文字而非仅颜色；键盘 Tab 可到达控件，焦点环可见。窄窗口侧栏折为顶栏，提供商按钮与账号操作自然换行，账号名称保持可读。浅深色均使用系统字体，支持文本缩放和减少动态效果。</p></section>
+
+<section data-contract-section="exceptions"><h2>例外与边界</h2><p>无特殊规范例外。页面完全离线，所有数字、账号和状态均为明确构造的演示数据；不访问真实 API、文件或凭据。本地添加项严格依据当前 supportsManualAuth && !isQuotaTrackingOnly：Claude Code、Codex、Qwen Code、iFlow、Antigravity、Vertex AI、Kiro、GitHub Copilot。Vertex 走导入，其余沿用原 OAuth 分支，不添加 Gemini 或 API Key 提供商。监控模式、真实账号管理与代理副作用沿用生产既有逻辑，不由原型重新定义。</p></section>
+</details>
+
+<div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

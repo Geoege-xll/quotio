@@ -51,9 +51,11 @@ final class QuotaViewModel {
 
     @ObservationIgnored private var lastKnownAccountStatuses: [String: String] = [:]
     
+    /// 启动时先展示整体运行状态；账号额度仍可从侧边栏直接进入。
     var currentPage: NavigationPage = .dashboard
     var authFiles: [AuthFile] = []
-    var usageStats: UsageStats?
+    /// 仪表盘与统计页共享同一个队列消费者，历史快照随应用生命周期恢复。
+    let usageMonitor = UsageStatisticsStore()
     var apiKeys: [String] = []
     var isLoading = false
     private(set) var refreshingProviders: Set<AIProvider> = []
@@ -156,7 +158,12 @@ final class QuotaViewModel {
     }
     
     /// Quota data per provider per account (email -> QuotaData)
-    var providerQuotas: [AIProvider: [String: ProviderQuotaData]] = [:]
+    var providerQuotas: [AIProvider: [String: ProviderQuotaData]] = [:] {
+        // 字典中的账号数不变也可能更新额度；任何数据写回都通知原生菜单栏。
+        // SwiftUI 配额页和 NSStatusItem 从同一份新快照刷新，不依赖窗口是否打开。
+        didSet { notifyQuotaDataChanged() }
+    }
+    @ObservationIgnored private var quotaNotificationTask: Task<Void, Never>?
     
     /// Subscription info per provider per account (provider -> email -> SubscriptionInfo)
     var subscriptionInfos: [AIProvider: [String: SubscriptionInfo]] = [:]
@@ -235,7 +242,14 @@ final class QuotaViewModel {
 
     /// Post notification to trigger UI updates (works even when window is closed)
     private func notifyQuotaDataChanged() {
-        NotificationCenter.default.post(name: Self.quotaDataDidChangeNotification, object: nil)
+        // 多账号批量写入与既有显式通知合并到下一轮，避免连续重建原生菜单。
+        guard quotaNotificationTask == nil else { return }
+        quotaNotificationTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            self.quotaNotificationTask = nil
+            NotificationCenter.default.post(name: Self.quotaDataDidChangeNotification, object: nil)
+        }
     }
 
     private func beginScopedRefresh(provider: AIProvider, account: QuotaAccountID? = nil) -> Bool {
@@ -277,12 +291,29 @@ final class QuotaViewModel {
 
     init() {
         self.proxyManager = CLIProxyManager.shared
+        observeUsageLifecycle()
+        Task { await usageMonitor.restore() }
         loadPersistedIDEQuotas()
         setupRefreshCadenceCallback()
         setupWarmupCallback()
         restartWarmupScheduler()
         lastProxyURL = normalizedProxyURL(UserDefaults.standard.string(forKey: "proxyURL"))
         setupProxyURLObserver()
+    }
+
+    /// 在组合层监听真实代理会话，无窗口/登录启动和代理自动恢复也会启动采集。
+    /// Observation 的回调是一次性的；每次变化后回到 MainActor 重新订阅。
+    private func observeUsageLifecycle() {
+        withObservationTracking {
+            if proxyManager.proxyStatus.running {
+                usageMonitor.start(baseURL: proxyManager.baseURL, managementKey: proxyManager.managementKey,
+                                   sessionID: proxyManager.runtimeSessionID)
+            } else {
+                usageMonitor.stop()
+            }
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeUsageLifecycle() }
+        }
     }
 
     private func setupProxyURLObserver() {
@@ -861,7 +892,9 @@ final class QuotaViewModel {
     
     /// Refresh Claude Code quota using CLI
     private func refreshClaudeCodeQuotasInternal() async {
-        let quotas = await claudeCodeFetcher.fetchAsProviderQuota()
+        if await refreshCPAQuotas(provider: .claude) { return }
+        // 用户主动刷新必须获取新值，不能继续命中五分钟的直连缓存。
+        let quotas = await claudeCodeFetcher.fetchAsProviderQuota(forceRefresh: true)
         if quotas.isEmpty {
             // Only remove if no other source has Claude data
             if providerQuotas[.claude]?.isEmpty ?? true {
@@ -1402,6 +1435,60 @@ final class QuotaViewModel {
     var totalAccounts: Int { authFiles.count }
     var readyAccounts: Int { authFiles.filter { $0.isReady }.count }
     
+    private(set) var modelCatalog = ModelCatalogState()
+    @ObservationIgnored private var modelCatalogSessionID: UUID?
+
+    /// 单次读取先等待当前代理的客户端凭据，再查询模型；不能依赖稍后才加载的 apiKeys 缓存。
+    /// 会话标识与请求令牌分别保护重启和并发刷新，配置页的临时 endpoint/key 不参与仪表盘查询。
+    func refreshDashboardModels() async {
+        let session = proxyManager.runtimeSessionID
+        if modelCatalogSessionID != session || !proxyManager.proxyStatus.running {
+            modelCatalog.reset()
+            modelCatalogSessionID = session
+        }
+        guard proxyManager.proxyStatus.running else { return }
+        let request = modelCatalog.beginLoading()
+        do {
+            let loader = DashboardModelCatalogLoader.local(
+                baseURL: proxyManager.baseURL,
+                managementKey: proxyManager.managementKey
+            )
+            let entries = try await loader.load()
+            guard !Task.isCancelled, proxyManager.proxyStatus.running,
+                  proxyManager.runtimeSessionID == session else { return }
+            modelCatalog.complete(entries: entries, fetchedAt: Date(), requestID: request)
+        } catch {
+            guard !Task.isCancelled, proxyManager.proxyStatus.running,
+                  proxyManager.runtimeSessionID == session else { return }
+            modelCatalog.fail(requestID: request)
+        }
+    }
+
+    /// 仪表盘手动刷新序号只驱动目录重新读取，不混用配额轮询状态。
+    private(set) var dashboardRefreshID = UUID()
+    private(set) var isRefreshingDashboard = false
+    private(set) var dashboardRefreshTime: Date?
+
+    func refreshDashboard() async {
+        guard !isRefreshingDashboard, proxyManager.proxyStatus.running else { return }
+        isRefreshingDashboard = true
+        defer { isRefreshingDashboard = false }
+        dashboardRefreshID = UUID()
+        await refreshData()
+        await usageMonitor.refresh()
+        if errorMessage == nil { dashboardRefreshTime = Date() }
+    }
+
+    /// 安装失败通过现有可呈现错误状态回传，视图不承担下载与文件操作。
+    func installDashboardProxy() async {
+        errorMessage = nil
+        do {
+            try await proxyManager.downloadAndInstallBinary()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func startProxy() async {
         guard !isStartingProxyFlow else { return }
         isStartingProxyFlow = true
@@ -1553,13 +1640,7 @@ final class QuotaViewModel {
 
             self.authFiles = newAuthFiles
 
-            do {
-                self.usageStats = try await client.fetchUsageStats()
-            } catch APIError.httpError(404) {
-                self.usageStats = nil
-                Log.quota("Usage stats endpoint is not supported by this CLIProxyAPI version")
-            }
-
+            // 用量队列由独立服务采集；配额刷新不能二次消费，也不因旧 /usage 的 404 隐藏数据。
             self.apiKeys = try await client.fetchAPIKeys()
             
             // Clear any previous error on success
@@ -1677,6 +1758,7 @@ final class QuotaViewModel {
     }
 
     private func refreshAntigravityQuotasInternal() async {
+        if await refreshCPAQuotas(provider: .antigravity) { return }
         // Fetch both quotas and subscriptions in one call (avoids duplicate API calls)
         let (quotas, subscriptions) = await antigravityFetcher.fetchAllAntigravityData()
         
@@ -1696,6 +1778,7 @@ final class QuotaViewModel {
     /// Refresh Antigravity quotas without re-detecting active account
     /// Used after switching accounts (active account already set by switch operation)
     private func refreshAntigravityQuotasWithoutDetect() async {
+        if await refreshCPAQuotas(provider: .antigravity) { return }
         let (quotas, subscriptions) = await antigravityFetcher.fetchAllAntigravityData()
         
         providerQuotas[.antigravity] = quotas
@@ -1742,6 +1825,7 @@ final class QuotaViewModel {
     }
     
     private func refreshOpenAIQuotasInternal() async {
+        if await refreshCPAQuotas(provider: .codex) { return }
         let quotas = await openAIFetcher.fetchAllCodexQuotas()
         providerQuotas[.codex] = quotas
     }
@@ -1802,6 +1886,9 @@ final class QuotaViewModel {
         case .devin:
             providerQuotas[provider] = await devinFetcher.fetchAsProviderQuota()
         case .grok:
+            // 代理模式按 CPA 的凭据索引查询，避免本机凭据与页面账号不一致。
+            // 使用 break 保留分支后的刷新收尾逻辑；监控模式仍由原生获取器处理。
+            if await refreshCPAQuotas(provider: .grok) { break }
             providerQuotas[provider] = await grokFetcher.fetchAllQuotas()
         case .openRouter:
             providerQuotas[provider] = await openRouterFetcher.fetchAllQuotas()
@@ -1817,6 +1904,11 @@ final class QuotaViewModel {
     func refreshQuota(for account: QuotaAccountID) async {
         guard beginScopedRefresh(provider: account.provider, account: account) else { return }
         defer { endScopedRefresh(provider: account.provider, account: account) }
+
+        if await refreshCPAQuotas(provider: account.provider, accountKey: account.accountKey) {
+            await finishScopedRefresh(provider: account.provider)
+            return
+        }
 
         let quota: ProviderQuotaData?
         var subscription: SubscriptionInfo?
@@ -1837,10 +1929,23 @@ final class QuotaViewModel {
         case .trae:
             quota = await traeFetcher.fetchAsProviderQuota()[account.accountKey]
         case .glm:
-            guard let customProvider = CustomProviderService.shared.providers.first(where: {
-                $0.type == .glmCompatibility && $0.isEnabled && $0.name == account.accountKey
-            }), let apiKey = customProvider.apiKeys.first?.apiKey else { return }
-            quota = try? await glmFetcher.fetchQuota(apiKey: apiKey, baseURL: customProvider.baseURL)
+            // 一个配置可包含多个独立密钥，不能再按配置名称默认刷新第一个密钥。
+            let credentials = CustomProviderService.shared.providers
+                .filter { $0.type == .glmCompatibility && $0.isEnabled }
+                .flatMap { provider in
+                    provider.apiKeys.map { (provider: provider, key: $0) }
+                }
+            let exactMatch = credentials.first {
+                GLMQuotaFetcher.quotaAccountKey(providerID: $0.provider.id, apiKeyID: $0.key.id)
+                    == account.accountKey
+            }
+            // 兼容旧版缓存的名称键，但名称有歧义时拒绝猜测，等待完整刷新生成稳定身份。
+            let legacyMatches = credentials.filter { $0.provider.name == account.accountKey }
+            guard let match = exactMatch ?? (legacyMatches.count == 1 ? legacyMatches.first : nil) else { return }
+            // 先补齐显示信息，再一次性赋给统一刷新结果，保持其他提供商分支的不可变约束。
+            var fetchedQuota = try? await glmFetcher.fetchQuota(apiKey: match.key.apiKey, baseURL: match.provider.baseURL)
+            fetchedQuota?.accountDisplayName = match.provider.name
+            quota = fetchedQuota
         case .warp:
             guard let entry = WarpService.shared.tokens.first(where: {
                 $0.isEnabled && $0.name == account.accountKey
@@ -1894,6 +1999,80 @@ final class QuotaViewModel {
 
     func refreshQuotaForProvider(_ provider: AIProvider) async {
         await refreshQuota(for: provider)
+    }
+
+    /// 代理运行时复用 CPA 的账号索引和鉴权，批量与单账号刷新走完全相同的路径。
+    /// 返回 true 表示本次已由 CPA 接管；失败保留旧值并标记过期，不能再用本机另一账号覆盖。
+    /// 此方法只调用配额接口，绝不消费 /usage-queue 或改写客户端历史账本。
+    private func refreshCPAQuotas(provider: AIProvider, accountKey: String? = nil) async -> Bool {
+        guard !modeManager.isMonitorMode, proxyManager.proxyStatus.running,
+              let apiClient, CPAQuotaFetcher.supports(provider) else { return false }
+        let fetcher = CPAQuotaFetcher(client: apiClient)
+        do {
+            let currentFiles = try await apiClient.fetchAuthFiles()
+            // 列表与快照使用同一批 CPA 凭据，避免列表仍拿旧邮箱键而新结果已经改用凭据键。
+            authFiles = currentFiles
+            let providerFiles = currentFiles.filter { $0.providerType == provider && !$0.disabled }
+            let files: [AuthFile]
+            if let accountKey {
+                let exactMatches = providerFiles.filter { $0.quotaLookupKey == accountKey }
+                let legacyMatches = providerFiles.filter { $0.legacyQuotaLookupKeys.contains(accountKey) }
+                // 旧菜单或缓存可能只记录邮箱。只有一对一匹配才允许迁移，绝不猜测同邮箱凭据。
+                files = exactMatches.isEmpty
+                    ? (legacyMatches.count == 1 ? legacyMatches : [])
+                    : exactMatches
+                guard !files.isEmpty else {
+                    providerQuotas[provider]?.removeValue(forKey: accountKey)
+                    if provider == .antigravity { subscriptionInfos[provider]?.removeValue(forKey: accountKey) }
+                    monitorAccountIssues[QuotaAccountID(provider: provider, accountKey: accountKey)] = MonitorRefreshIssue(
+                        message: "monitor.refresh.failed".localized(), occurredAt: Date()
+                    )
+                    return true
+                }
+                if files.first?.quotaLookupKey != accountKey {
+                    providerQuotas[provider]?.removeValue(forKey: accountKey)
+                    monitorAccountIssues.removeValue(forKey: QuotaAccountID(provider: provider, accountKey: accountKey))
+                    if provider == .antigravity { subscriptionInfos[provider]?.removeValue(forKey: accountKey) }
+                }
+            } else {
+                files = providerFiles
+            }
+            if accountKey == nil {
+                let activeKeys = Set(files.map(\.quotaLookupKey))
+                providerQuotas[provider] = providerQuotas[provider, default: [:]].filter { activeKeys.contains($0.key) }
+                // 套餐和额度必须采用相同账号身份；移除旧邮箱槽位，避免套餐被另一个项目复用。
+                if provider == .antigravity {
+                    // 外层按提供商隔离，只清理当前提供商的账号，不能过滤其他提供商的订阅。
+                    subscriptionInfos[provider] = subscriptionInfos[provider, default: [:]].filter { activeKeys.contains($0.key) }
+                }
+            }
+            await withTaskGroup(of: (String, ProviderQuotaData?).self) { group in
+                for file in files {
+                    group.addTask { (file.quotaLookupKey, try? await fetcher.fetch(file: file)) }
+                }
+                for await (key, quota) in group {
+                    let id = QuotaAccountID(provider: provider, accountKey: key)
+                    if var quota {
+                        // 内部键只负责隔离凭据，界面继续显示可读邮箱或账号标签，不泄露认证信息。
+                        if quota.accountDisplayName == nil {
+                            quota.accountDisplayName = files.first { $0.quotaLookupKey == key }?.quotaDisplayName
+                        }
+                        providerQuotas[provider, default: [:]][key] = quota
+                        if provider == .antigravity {
+                            // 附加套餐查询失败时移除旧套餐，避免新额度快照搭配陈旧权益信息。
+                            subscriptionInfos[provider, default: [:]][key] = quota.subscriptionInfo
+                        }
+                        monitorAccountIssues.removeValue(forKey: id)
+                    } else {
+                        monitorAccountIssues[id] = MonitorRefreshIssue(message: "monitor.refresh.failed".localized(), occurredAt: Date())
+                    }
+                }
+            }
+            monitorIssues.removeValue(forKey: provider)
+        } catch {
+            monitorIssues[provider] = MonitorRefreshIssue(message: "monitor.refresh.failed".localized(), occurredAt: Date())
+        }
+        return true
     }
 
     /// Runs a provider-scoped Copilot refresh and reconciles the result.
@@ -2690,38 +2869,77 @@ final class QuotaViewModel {
         }
     }
     
-    func addAPIKey(_ key: String) async {
-        guard let client = apiClient else { return }
-        guard !key.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        
+    private(set) var isMutatingAPIKeys = false
+
+    /// 写入结果显式返回页面：只有服务端确认成功，才允许销毁编辑草稿。
+    /// 串行化修改操作，避免重复点击导致并发覆盖；成功后直接更新已确认的本地值。
+    @discardableResult
+    func addAPIKey(_ key: String) async -> Bool {
+        guard !isMutatingAPIKeys else { return false }
+        guard let client = apiClient else {
+            errorMessage = "apiKeys.manager.disconnected".localized()
+            return false
+        }
+        let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !apiKeys.contains(value) else {
+            errorMessage = "apiKeys.manager.invalid".localized()
+            return false
+        }
+        isMutatingAPIKeys = true
+        defer { isMutatingAPIKeys = false }
         do {
-            try await client.addAPIKey(key)
-            await fetchAPIKeys()
+            try await client.addAPIKey(value)
+            apiKeys.append(value)
+            errorMessage = nil
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
-    
-    func updateAPIKey(old: String, new: String) async {
-        guard let client = apiClient else { return }
-        guard !new.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        
+
+    @discardableResult
+    func updateAPIKey(old: String, new: String) async -> Bool {
+        guard !isMutatingAPIKeys else { return false }
+        guard let client = apiClient else {
+            errorMessage = "apiKeys.manager.disconnected".localized()
+            return false
+        }
+        let value = new.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value == old || !apiKeys.contains(value) else {
+            errorMessage = "apiKeys.manager.invalid".localized()
+            return false
+        }
+        isMutatingAPIKeys = true
+        defer { isMutatingAPIKeys = false }
         do {
-            try await client.updateAPIKey(old: old, new: new)
-            await fetchAPIKeys()
+            try await client.updateAPIKey(old: old, new: value)
+            apiKeys = apiKeys.map { $0 == old ? value : $0 }
+            errorMessage = nil
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
-    
-    func deleteAPIKey(_ key: String) async {
-        guard let client = apiClient else { return }
-        
+
+    @discardableResult
+    func deleteAPIKey(_ key: String) async -> Bool {
+        guard !isMutatingAPIKeys else { return false }
+        guard let client = apiClient else {
+            errorMessage = "apiKeys.manager.disconnected".localized()
+            return false
+        }
+        isMutatingAPIKeys = true
+        defer { isMutatingAPIKeys = false }
         do {
             try await client.deleteAPIKey(value: key)
-            await fetchAPIKeys()
+            apiKeys.removeAll { $0 == key }
+            errorMessage = nil
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
     
@@ -2911,43 +3129,36 @@ final class QuotaViewModel {
         for selectedItem in settings.selectedItems {
             guard let provider = selectedItem.aiProvider else { continue }
             
-            let shortAccount = shortenAccountKey(selectedItem.accountKey)
-            
-            if let accountQuotas = providerQuotas[provider],
-               let quotaData = accountQuotas[selectedItem.accountKey],
-               !quotaData.models.isEmpty {
-                // Filter out -1 (unknown) percentages when calculating lowest
-                let validPercentages = quotaData.models.map(\.percentage).filter { $0 >= 0 }
-                let lowestPercent = validPercentages.min() ?? (quotaData.models.first?.percentage ?? -1)
-                items.append(MenuBarQuotaDisplayItem(
-                    id: selectedItem.id,
-                    providerSymbol: provider.menuBarSymbol,
-                    accountShort: shortAccount,
-                    percentage: lowestPercent,
-                    provider: provider
-                ))
-            } else {
-                items.append(MenuBarQuotaDisplayItem(
-                    id: selectedItem.id,
-                    providerSymbol: provider.menuBarSymbol,
-                    accountShort: shortAccount,
-                    percentage: -1,
-                    provider: provider
-                ))
-            }
+            let data = resolveMenuBarQuota(for: selectedItem, provider: provider)
+            items.append(MenuBarQuotaDisplayItem(
+                id: selectedItem.id,
+                providerSymbol: provider.menuBarSymbol,
+                accountShort: data?.accountDisplayName ?? selectedItem.accountKey,
+                percentage: data.map { settings.quotaSummaryPercentage(for: provider, models: $0.models) } ?? -1,
+                provider: provider,
+                isForbidden: data?.isForbidden ?? false,
+                quotaPair: settings.stackPairedQuotaMetrics
+                    ? data.flatMap { MenuBarQuotaPair.resolve(for: provider, from: $0.models) } : nil
+            ))
         }
         
         return items
     }
     
-    private func shortenAccountKey(_ key: String) -> String {
-        if let atIndex = key.firstIndex(of: "@") {
-            let user = String(key[..<atIndex].prefix(4))
-            let domainStart = key.index(after: atIndex)
-            let domain = String(key[domainStart...].prefix(1))
-            return "\(user)@\(domain)"
+    /// 优先精确凭据键；仅在唯一匹配时兼容旧显示名，不允许同名账号借用其它凭据额度。
+    private func resolveMenuBarQuota(for item: MenuBarQuotaItem, provider: AIProvider) -> ProviderQuotaData? {
+        guard let accounts = providerQuotas[provider] else { return nil }
+        if let exact = accounts[item.accountKey] { return exact }
+        let cleanKey = item.accountKey.hasSuffix(".json") ? String(item.accountKey.dropLast(5)) : item.accountKey
+        if let exact = accounts[cleanKey] { return exact }
+        let matches = accounts.values.filter {
+            $0.accountDisplayName == item.accountKey || $0.accountDisplayName == cleanKey
         }
-        return String(key.prefix(6))
+        if matches.count == 1 { return matches.first }
+        if matches.count > 1 { return nil }
+        if provider == .codex { return accounts[item.accountKey.codexFilenameKey] }
+        if provider == .copilot, let key = item.accountKey.copilotFilenameKey { return accounts[key] }
+        return nil
     }
 }
 

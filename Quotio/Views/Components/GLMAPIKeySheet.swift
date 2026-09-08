@@ -11,6 +11,7 @@ import SwiftUI
 struct GLMAPIKeySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(QuotaViewModel.self) private var viewModel
+    @Environment(\.colorScheme) private var colorScheme
 
     let provider: CustomProvider?
     let onSave: (CustomProvider) -> Void
@@ -33,8 +34,6 @@ struct GLMAPIKeySheet: View {
         VStack(spacing: 0) {
             headerView
 
-            Divider()
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     apiKeySection
@@ -43,11 +42,10 @@ struct GLMAPIKeySheet: View {
                 .padding(20)
             }
 
-            Divider()
-
             footerView
         }
-        .frame(width: 480, height: 320)
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .frame(width: 480, height: 330)
         .onAppear {
             loadProviderData()
         }
@@ -80,14 +78,10 @@ struct GLMAPIKeySheet: View {
 
             Spacer()
 
-            Button {
+            QuotioCircularIconButton(systemImage: "xmark") {
                 dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .accessibilityLabel("action.cancel".localized())
         }
         .padding(20)
     }
@@ -104,14 +98,10 @@ struct GLMAPIKeySheet: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                SecureField("glm.apiKeyPlaceholder".localized(), text: $apiKey)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
+                QuotioCapsuleSecureField("glm.apiKeyPlaceholder".localized(), text: $apiKey, systemImage: "key")
             }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .quotioInsetCard()
     }
 
     // MARK: - Endpoint Section
@@ -126,18 +116,35 @@ struct GLMAPIKeySheet: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                Picker("", selection: $endpoint) {
+                Menu {
                     ForEach(GLMEndpoint.allCases) { ep in
-                        Text(ep.displayName).tag(ep)
+                        Button(ep.displayName) {
+                            endpoint = ep
+                        }
                     }
+                } label: {
+                    HStack {
+                        Text(endpoint.displayName)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .background(
+                        Capsule().fill(QuotioTheme.Colors.cardInset(for: colorScheme))
+                    )
+                    .overlay(
+                        Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                    )
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
+                .menuStyle(.borderlessButton)
             }
         }
-        .padding(16)
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .quotioInsetCard()
     }
 
     // MARK: - Footer
@@ -147,6 +154,7 @@ struct GLMAPIKeySheet: View {
             Button("action.cancel".localized()) {
                 dismiss()
             }
+            .buttonStyle(.quotioSecondaryCapsule)
             .keyboardShortcut(.escape)
 
             Spacer()
@@ -155,7 +163,7 @@ struct GLMAPIKeySheet: View {
                 saveProvider()
             }
             .keyboardShortcut(.return, modifiers: .command)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.quotioPrimaryCapsule)
         }
         .padding(20)
     }

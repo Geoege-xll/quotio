@@ -12,7 +12,7 @@
 // ========================
 
 // Development Bundle Identifier (separate from production)
-PRODUCT_BUNDLE_IDENTIFIER = app.bytrong.quotio.dev
+PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus.dev
 
 // Development App Name (to distinguish in Dock/Finder)
 PRODUCT_NAME = Quotio Dev

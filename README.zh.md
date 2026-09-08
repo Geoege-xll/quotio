@@ -1,206 +1,83 @@
-# Quotio
+# QuotioPlus
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="screenshots/menu_bar_dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="screenshots/menu_bar.png" />
-    <img alt="Quotio Banner" src="screenshots/menu_bar.png" width="720" />
-  </picture>
-</p>
+<img src="docs/branding/quotio-plus-icon.png" width="128" alt="QuotioPlus cat app icon">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg?style=flat" alt="Platform macOS" />
-  <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat" alt="Language Swift" />
-  <img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat" alt="License MIT" />
-  <a href="README.md"><img src="https://img.shields.io/badge/lang-English-blue.svg?style=flat" alt="English" /></a>
-  <a href="README.vi.md"><img src="https://img.shields.io/badge/lang-Tiếng%20Việt-red.svg?style=flat" alt="Vietnamese" /></a>
-  <a href="README.fr.md"><img src="https://img.shields.io/badge/lang-Français-blue.svg?style=flat" alt="French" /></a>
-</p>
+[English](README.md) · **简体中文**
 
-<p align="center">
-  <a href="https://trendshift.io/repositories/16304?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-16304" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/16304" alt="nguyenphutrong%2Fquotio | Trendshift" width="250" height="55"/></a>
-  <a href="https://trendshift.io/repositories/16304?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16304" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16304/daily?language=Swift" alt="nguyenphutrong%2Fquotio | Trendshift" width="250" height="55"/></a>
-  <a href="https://trendshift.io/repositories/16304?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16304" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16304/daily" alt="nguyenphutrong%2Fquotio | Trendshift" width="250" height="55"/></a>
-  <a href="https://trendshift.io/repositories/16304?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16304" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16304/weekly?language=Swift" alt="nguyenphutrong%2Fquotio | Trendshift" width="250" height="55"/></a>
-  <a href="https://trendshift.io/repositories/16304?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16304" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16304/weekly" alt="nguyenphutrong%2Fquotio | Trendshift" width="250" height="55"/></a>
-  <a href="https://trendshift.io/repositories/16304?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16304" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16304/monthly?language=Swift" alt="nguyenphutrong%2Fquotio | Trendshift" width="250" height="55"/></a>
-</p>
+**QuotioPlus 1.0.0** 是基于 [Trong Nguyen（@nguyenphutrong）](https://github.com/nguyenphutrong) 的开源项目 [Quotio](https://github.com/nguyenphutrong/quotio) 进行二次开发的原生 macOS 应用，用于管理 AI 账号、代理服务、客户端配置、配额和使用统计。
 
-<p align="center">
-  <strong>macOS 上 AI 编程助手的终极控制中心。</strong>
-</p>
+> **来源声明与致谢**：本项目是在原作者代码基础上的独立二次开发版本。感谢 Trong Nguyen 和 Quotio 的所有贡献者开放源码、持续维护，为本项目提供了基础。我们保留原项目的版权声明与 MIT 许可证；QuotioPlus 的版本、更新和问题反馈由本仓库独立维护。
 
-Quotio 是一款原生 macOS 应用，用于管理 **CLIProxyAPI** ——为你的 AI 编程代理提供动力的本地代理服务器。它帮助你在一个地方管理多个 AI 账号、跟踪配额并配置 CLI 工具。
+[下载 1.0.0](https://github.com/Geoege-xll/quotio/releases/tag/v1.0.0) · [发行说明](docs/releases/1.0.0.md) · [反馈问题](https://github.com/Geoege-xll/quotio/issues) · [原作者项目](https://github.com/nguyenphutrong/quotio)
 
-## ✨ 功能特性
+## 项目截图
 
-- **🔌 多提供商支持**：通过 OAuth 或 API Key 连接 Claude、OpenAI Codex、Qwen、Vertex AI、iFlow、Antigravity、Kiro、Trae 和 GitHub Copilot 账号。
-- **📊 独立配额模式**：无需运行代理服务器即可查看配额和账号，适合快速检查。
-- **🚀 一键 Agent 配置**：自动检测并配置 Claude Code、OpenCode 等 AI 编程工具。
-- **📈 实时仪表盘**：实时监控请求流量、token 使用量和成功率。
-- **📉 智能配额管理**：按账号可视化配额追踪，并支持自动故障转移策略（轮询 / 先满）。
-- **🔑 API Key 管理**：为本地代理生成并管理 API Key。
-- **🖥️ 菜单栏集成**：在菜单栏快速查看服务器状态、配额概览和自定义提供商图标。
-- **🔔 通知提醒**：当配额不足、账号冷却或服务异常时推送提醒。
-- **🔄 自动更新**：内置 Sparkle 更新器，平滑升级。
-- **🌍 多语言支持**：英文、越南语和简体中文。
+以下为 QuotioPlus 1.0.0 的简体中文界面实拍。画面中的数值来自本地已采集历史；未取得的指标继续显示为未知。
 
-## 🤖 支持的生态
+**仪表盘：可折叠筛选区、四个主要指标与紧凑的次级统计。**
 
-### AI 提供商
-| 提供商 | 认证方式 |
-|----------|-------------|
-| Anthropic Claude | OAuth |
-| OpenAI Codex | OAuth |
-| Qwen Code | OAuth |
-| Vertex AI | Service Account JSON |
-| iFlow | OAuth |
-| Antigravity | OAuth |
-| Kiro | OAuth |
-| GitHub Copilot | OAuth |
+![QuotioPlus 仪表盘：折叠筛选与用量总览](screenshots/v1.0.0/dashboard.png)
 
-### IDE 配额追踪（仅监控）
-| IDE | 说明 |
-|-----|-------------|
-| Cursor | 安装并登录后自动检测 |
-| Trae | 安装并登录后自动检测 |
+| 用量统计 | 智能体配置 |
+| --- | --- |
+| [![用量统计：来源筛选、Token 概览与活动热力图](screenshots/v1.0.0/client-usage.png)](screenshots/v1.0.0/client-usage.png) | [![智能体配置：Claude Code、Codex CLI 与 Pi](screenshots/v1.0.0/agent-setup.png)](screenshots/v1.0.0/agent-setup.png) |
 
-> **注意**：这些 IDE 仅用于配额使用监控，不能作为代理的提供商。
+点击预览图可查看完整截图。
 
-### 兼容的 CLI Agent
-Quotio 可以自动配置以下工具使用你的集中式代理：
-- Claude Code
-- Codex CLI
-- Amp CLI
-- OpenCode
-- Factory Droid
+## 1.0.0 的主要功能
 
-## 🚀 安装
+- **账号与代理管理**：统一管理多提供商账号、OAuth/API Key、本地代理与配额监控，支持菜单栏快速查看状态。
+- **仪表盘**：展示请求量、Token、成功率、缓存、延迟等指标；支持折叠筛选区和完整筛选弹窗。
+- **客户端用量统计**：读取 Claude Code、Codex、OpenCode、Pi 的本地记录，按时间、来源和模型展示 Token 使用情况。
+- **调用分析**：查看工具、MCP、技能与代理调用分布，支持来源、类型和时间范围筛选。
+- **请求明细与价格统计**：查看本地采集的 CPA 请求，配置模型价格并估算费用；缺失的信息明确显示为未知。
+- **智能体配置**：支持模型映射、默认模型和提供商配置，兼容 Pi 的 Homebrew、npm 等安装方式。
+- **统计性能优化**：统一使用 SQLite，展示读取持久化汇总，扫描按变化内容处理，减少大历史数据的重复加载与内存占用。
+- **存储维护**：在「设置 → 诊断与维护 → 维护入口 → 存储与数据」清理缓存、按模块清除统计或回收数据库空闲空间。
+- **独立更新与上游维护**：应用更新使用本仓库；原作者项目的更新检查单独放在「诊断与维护」，便于后续同步源码。
 
-### 系统要求
-- macOS 14.0（Sonoma）或更高版本
-- OAuth 认证需要互联网连接
+客户端 Token、CPA 网关请求和工具调用是不同统计口径，分别展示。清理统计不会删除客户端源日志，现存日志可在后续采集时重新导入。
 
-### Homebrew（推荐）
+## 安装
+
+要求 **macOS 14 或更新版本**。从本仓库的 [Releases](https://github.com/Geoege-xll/quotio/releases) 下载 `Quotio-1.0.0.dmg` 或 ZIP，应用显示名称为 **QuotioPlus**，发布构建同时支持 Apple Silicon 和 Intel Mac。
+
+每个发行版会注明是否经过 Developer ID 签名及 Apple 公证。未配置发布证书时，安装包使用临时签名，macOS 可能要求额外确认。自动安装更新仅在本项目的 Sparkle 签名配置完整时启用；其他构建通过本仓库发布页手动更新。
+
+当前没有本二开版的官方 Homebrew 安装入口。原作者的 `nguyenphutrong/tap` 安装的是上游 Quotio。
+
+## 从源码构建
+
 ```bash
-brew tap nguyenphutrong/tap
-brew install --cask quotio
+git clone https://github.com/Geoege-xll/quotio.git
+cd quotio
+open Quotio.xcodeproj
 ```
 
-### 下载
-从 [Releases](https://github.com/nguyenphutrong/quotio/releases) 页面下载最新的 `.dmg`。
+使用 Xcode 26.1 或更新版本，选择 `Quotio` scheme 后构建运行。也可从终端构建：
 
-官方发布包使用 Developer ID 签名并经过 Apple 公证，无需绕过 Gatekeeper。
+```bash
+xcodebuild -project Quotio.xcodeproj -scheme Quotio \
+  -configuration Debug -destination 'platform=macOS' build
+```
 
-### 从源码构建
+应用 Bundle ID 为 `com.app.george.quotioplus`。本地签名或开发覆盖配置放在不受版本管理的 `Config/Local.xcconfig`，示例见 [Local.xcconfig.example](Config/Local.xcconfig.example)。发布流程见 [RELEASE.md](RELEASE.md)。
 
-1. **克隆仓库：**
-   ```bash
-   git clone https://github.com/nguyenphutrong/quotio.git
-   cd Quotio
-   ```
+## 开源来源与感谢
 
-2. **在 Xcode 中打开：**
-   ```bash
-   open Quotio.xcodeproj
-   ```
+| 项目 | 在 QuotioPlus 中的作用 |
+| --- | --- |
+| [Quotio · Trong Nguyen 与贡献者](https://github.com/nguyenphutrong/quotio) | 二次开发的主要代码基础：原生应用、账号、配额、代理和客户端管理。 |
+| [CLIProxyAPI · router-for-me](https://github.com/router-for-me/CLIProxyAPI) | 应用管理的代理服务。 |
+| [EasyCLIProxyAPI · router-for-me](https://github.com/router-for-me/EasyCLIProxyAPI) | 仪表盘 usage 统计口径、筛选和展示行为的参考。 |
+| [AIUsage · sylearn 与贡献者](https://github.com/sylearn/AIUsage) | 用量统计、调用分析和部分原生界面的移植与参考，详见[来源说明](docs/licenses/AIUsage-attribution.md)。 |
+| [cc-switch · farion1231 与贡献者](https://github.com/farion1231/cc-switch) | 客户端配置与模型映射行为的参考。 |
+| [Sparkle](https://github.com/sparkle-project/Sparkle) | macOS 应用更新框架。 |
 
-3. **构建并运行：**
-   - 选择 “Quotio” scheme
-   - 按下 `Cmd + R` 构建并运行
+感谢以上作者和社区贡献者。本仓库保留上游提交历史，并将本项目首发前的开发改动整理为一个 `1.0.0` 版本提交，方便阅读、发布和后续维护。
 
-> 应用首次启动时会自动下载 `CLIProxyAPI` 二进制文件。
+## 许可证与维护
 
-## 📖 使用方法
+应用主体沿用 [MIT License](LICENSE)，保留原作者 `Copyright (c) 2025 Trong Nguyen`。AIUsage 移植部分保留来源、修改说明及 [Apache License 2.0](docs/licenses/AIUsage-Apache-2.0.txt)。其他依赖分别遵循其许可证。
 
-### 1. 启动服务器
-打开 Quotio，在仪表盘点击 **Start** 初始化本地代理服务器。
-
-### 2. 连接账号
-进入 **Providers** 标签页 → 点击一个提供商 → 通过 OAuth 认证或导入凭据。
-
-### 3. 配置 Agent
-进入 **Agents** 标签页 → 选择已安装的 Agent → 点击 **Configure** → 选择自动或手动模式。
-
-### 4. 监控使用情况
-- **Dashboard**：整体健康状态与流量
-- **Quota**：按账号查看使用情况
-- **Logs**：用于调试的原始请求/响应日志
-
-## ⚙️ 设置
-
-- **端口**：更改代理监听端口
-- **路由策略**：轮询（Round Robin）或先满（Fill First）
-- **自动启动**：Quotio 打开时自动启动代理
-- **通知**：开关各类提醒
-
-## 📸 截图
-
-### 仪表盘
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/dashboard_dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="screenshots/dashboard.png" />
-  <img alt="Dashboard" src="screenshots/dashboard.png" />
-</picture>
-
-### 提供商
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/provider_dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="screenshots/provider.png" />
-  <img alt="Providers" src="screenshots/provider.png" />
-</picture>
-
-### Agent 配置
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/agent_setup_dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="screenshots/agent_setup.png" />
-  <img alt="Agent Setup" src="screenshots/agent_setup.png" />
-</picture>
-
-### 配额监控
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/quota_dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="screenshots/quota.png" />
-  <img alt="Quota Monitoring" src="screenshots/quota.png" />
-</picture>
-
-### API 密钥
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/api_keys_dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="screenshots/api_keys.png" />
-  <img alt="API Keys" src="screenshots/api_keys.png" />
-</picture>
-
-### 设置
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/settings_dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="screenshots/settings.png" />
-  <img alt="Settings" src="screenshots/settings.png" />
-</picture>
-
-### 菜单栏
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="screenshots/menu_bar_dark.png" />
-  <source media="(prefers-color-scheme: light)" srcset="screenshots/menu_bar.png" />
-  <img alt="Menu Bar" src="screenshots/menu_bar.png" width="720" />
-</picture>
-
-## 🤝 贡献
-
-1. Fork 本项目
-2. 创建功能分支（`git checkout -b feature/amazing-feature`）
-3. 提交修改（`git commit -m 'Add amazing feature'`）
-4. 推送到分支（`git push origin feature/amazing-feature`）
-5. 创建 Pull Request
-
-## 💖 贡献者
-
-没有你们，我们无法做到这一切。感谢！🙏
-
-<a href="https://github.com/nguyenphutrong/quotio/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=nguyenphutrong/quotio" />
-</a>
-
-## 📄 许可证
-
-MIT License。详见 `LICENSE`。
+二开维护和上游同步方式见 [二次开发维护指南](docs/SECONDARY_DEVELOPMENT.md)。本项目的问题请在 [Geoege-xll/quotio Issues](https://github.com/Geoege-xll/quotio/issues) 提交。

@@ -3,7 +3,10 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_NAME="Quotio"
-GITHUB_REPO="nguyenphutrong/quotio"
+# 与应用 Bundle 共用仓库配置；不能用上游脚本默认值生成二开版的下载链接。
+UPDATE_CONFIG="${PROJECT_DIR}/Config/Updates.xcconfig"
+GITHUB_REPO="$(awk '/^QUOTIO_RELEASE_REPOSITORY = / { print $3; exit }' "${UPDATE_CONFIG}")"
+SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-$(awk '/^SPARKLE_PUBLIC_ED_KEY = / { print $3; exit }' "${UPDATE_CONFIG}")}"
 PROJECT_FILE="${PROJECT_DIR}/${PROJECT_NAME}.xcodeproj"
 PBXPROJ="${PROJECT_FILE}/project.pbxproj"
 CHANGELOG="${PROJECT_DIR}/CHANGELOG.md"
@@ -231,6 +234,11 @@ generate_appcast() {
     signature="$(printf '%s\n' "${sign_output}" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' | head -n 1)"
     [ -n "${signature}" ] || fail "Sparkle did not return an EdDSA signature"
 
+    # 用包内公钥验证刚生成的签名，防止 CI 私钥与应用内公钥不配对，导致发布后无法升级。
+    local bundled_public_key
+    bundled_public_key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "${APP_PATH}/Contents/Info.plist")"
+    xcrun swift "${PROJECT_DIR}/scripts/verify_update_signature.swift" "${zip_file}" "${bundled_public_key}" "${signature}"
+
     zip_name="$(basename "${zip_file}")"
     zip_size="$(stat -f%z "${zip_file}")"
     case "${version}" in
@@ -324,6 +332,17 @@ require_command codesign
 require_command shasum
 require_command hdiutil
 
+# 发布参数在改版本、清理构建产物之前校验；不读取或打印私钥内容。
+[[ "${GITHUB_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "invalid release repository in Config/Updates.xcconfig"
+if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${GITHUB_REPOSITORY}" != "${GITHUB_REPO}" ]; then
+    fail "workflow repository does not match Config/Updates.xcconfig"
+fi
+if [ "${GENERATE_APPCAST}" = true ]; then
+    [ -n "${SPARKLE_PRIVATE_KEY:-}" ] || fail "SPARKLE_PRIVATE_KEY is required for appcast generation"
+    [ -n "${SPARKLE_PUBLIC_ED_KEY}" ] || fail "configure the project's SPARKLE_PUBLIC_ED_KEY before publishing"
+    [ "${SPARKLE_PUBLIC_ED_KEY}" != "HBpWFjUcNUuuZfdxhVlw2Mc87IT8tj1C68rufluZ0M4=" ] || fail "the upstream Sparkle public key cannot be used for this fork"
+fi
+
 if [ "${DISTRIBUTION}" = true ]; then
     require_command security
     require_command file
@@ -363,6 +382,7 @@ ARCHIVE_ARGS=(
     CODE_SIGN_IDENTITY="-"
     CODE_SIGNING_REQUIRED=NO
     CODE_SIGNING_ALLOWED=NO
+    "SPARKLE_PUBLIC_ED_KEY=${SPARKLE_PUBLIC_ED_KEY}"
 )
 if [ -n "${POSTHOG_PROJECT_TOKEN:-}" ]; then
     ARCHIVE_ARGS+=("POSTHOG_PROJECT_TOKEN=${POSTHOG_PROJECT_TOKEN}")

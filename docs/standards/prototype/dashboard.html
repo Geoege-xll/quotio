@@ -1,0 +1,176 @@
+<!doctype html><html lang="zh-Hans" data-theme="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quotio · 仪表盘原型</title>
+<link rel="stylesheet" href="prototype.css"><script src="prototype.js" defer></script></head>
+
+<body data-page="dashboard">
+<div class="demo"><strong>交互原型 · 演示数据</strong><label>外观 <select id="theme"><option value="dark">深色</option><option value="light">浅色</option></select></label><label>演示状态 <select id="scenario"><option value="running">运行正常</option><option value="stopped">服务停止</option><option value="uninstalled">尚未安装</option><option value="starting">启动中</option><option value="stopping">停止中</option><option value="failure">启动失败</option><option value="loading">模型加载中</option><option value="empty">空模型目录</option><option value="error">模型加载失败</option><option value="stale">刷新失败 · 旧目录</option><option value="new">首次使用</option><option value="network">允许网络访问</option><option value="unknown">运行中 · 未知 PID</option></select></label></div>
+
+<div class="app">
+<aside>
+<div class="brand">Quotio</div>
+
+<nav class="nav"><a id="nav-dashboard" class="active" href="dashboard.html">仪表盘</a><a id="nav-providers" class="" href="providers.html">提供商</a><span>配额</span><span>AI 代理设置</span><span>设置</span></nav>
+
+<div class="mode">本地代理模式</div>
+</aside>
+
+<main data-prototype-page-content>
+<div class="row spread page-head"><h1>仪表盘</h1><span class="muted">本地代理</span></div>
+
+<div class="stack">
+<section class="card runtime">
+<!-- 状态与启停按钮放在标题行右侧同组，按钮紧随状态，保留原有 ID 与状态行为。 -->
+<div class="row spread"><h2>CPA 运行服务</h2><div class="row"><span id="runtime-badge" class="badge good">● 运行正常</span><button id="runtime-toggle">■ 停止 CPA</button></div></div>
+<p id="runtime-sub" class="muted sub">仅限本机 · PID 77531</p><small>本机地址</small>
+<div class="address"><code>http://127.0.0.1:8317</code><button id="copy-base">复制</button></div>
+
+<div class="row spread">
+<button id="runtime-refresh">↻ 刷新</button>
+<button id="copy-api" class="endpoint-secondary">复制 API 地址 /v1</button></div>
+<p id="runtime-error" class="notice" hidden></p></section>
+
+
+<section id="guide" class="card" hidden>
+<div class="row spread"><h2>开始使用</h2><button id="guide-dismiss">关闭引导</button></div>
+
+<div class="row" style="margin-top:12px"><button id="guide-provider">添加提供商</button><button id="guide-agent">配置 CLI 代理</button></div>
+
+<div id="guide-picker" class="notice" hidden><p>选择提供商（演示已有授权与导入入口）</p>
+<div class="row"><button id="guide-oauth">Claude · OAuth</button><button id="guide-import">Vertex · 导入 JSON</button></div>
+</div>
+</section>
+
+
+<section class="kpis" aria-label="使用情况摘要">
+<div class="metric"><p>账号</p><strong id="accounts-count">5</strong><small id="ready-count">5 个就绪</small></div>
+
+<div class="metric"><p>请求</p><strong>1,284</strong><small>总计</small></div>
+
+<div class="metric"><p>Token</p><strong>8.2M</strong><small>已处理</small></div>
+
+<div class="metric"><p>成功率</p><strong>99%</strong><small>13 次失败</small></div>
+</section>
+
+
+<section class="card">
+<div class="row spread">
+<div><h2>CPA 可用模型 <span id="model-count" class="badge">12</span></h2><small id="model-time">刚刚更新</small></div>
+<button id="model-refresh">↻ 刷新模型</button></div>
+<p id="catalog-notice" class="notice" role="status" hidden></p>
+<div id="model-list">
+<section class="group" data-owner="openai">
+<div class="row group-head"><h3>openai</h3><small>6 个模型</small></div>
+
+<div class="grid"><button id="model-1" class="model" data-model="gpt-5.6-sol" data-owner="openai" data-overflow="false"><span>gpt-5.6-sol</span><b aria-hidden="true">›</b></button><button id="model-2" class="model" data-model="gpt-5.6-terra" data-owner="openai" data-overflow="false"><span>gpt-5.6-terra</span><b aria-hidden="true">›</b></button><button id="model-3" class="model" data-model="gpt-5.6-luna" data-owner="openai" data-overflow="false"><span>gpt-5.6-luna</span><b aria-hidden="true">›</b></button><button id="model-4" class="model" data-model="gpt-5.5" data-owner="openai" data-overflow="true"><span>gpt-5.5</span><b aria-hidden="true">›</b></button><button id="model-5" class="model" data-model="gpt-5.4" data-owner="openai" data-overflow="true"><span>gpt-5.4</span><b aria-hidden="true">›</b></button><button id="model-6" class="model" data-model="gpt-5.3-codex" data-owner="openai" data-overflow="true"><span>gpt-5.3-codex</span><b aria-hidden="true">›</b></button></div>
+</section>
+
+<section class="group" data-owner="anthropic">
+<div class="row group-head"><h3>anthropic</h3><small>3 个模型</small></div>
+
+<div class="grid"><button id="model-7" class="model" data-model="claude-opus-4-6" data-owner="anthropic" data-overflow="false"><span>claude-opus-4-6</span><b aria-hidden="true">›</b></button><button id="model-8" class="model" data-model="claude-sonnet-4-6" data-owner="anthropic" data-overflow="false"><span>claude-sonnet-4-6</span><b aria-hidden="true">›</b></button><button id="model-9" class="model" data-model="claude-haiku-4-5" data-owner="anthropic" data-overflow="false"><span>claude-haiku-4-5</span><b aria-hidden="true">›</b></button></div>
+</section>
+
+<section class="group" data-owner="google">
+<div class="row group-head"><h3>google</h3><small>2 个模型</small></div>
+
+<div class="grid"><button id="model-10" class="model" data-model="gemini-2.5-pro" data-owner="google" data-overflow="false"><span>gemini-2.5-pro</span><b aria-hidden="true">›</b></button><button id="model-11" class="model" data-model="gemini-2.5-flash" data-owner="google" data-overflow="false"><span>gemini-2.5-flash</span><b aria-hidden="true">›</b></button></div>
+</section>
+
+<section class="group" data-owner="未提供归属">
+<div class="row group-head"><h3>未提供归属</h3><small>1 个模型</small></div>
+
+<div class="grid"><button id="model-12" class="model" data-model="example-model-with-a-very-long-full-identifier-2026-09-05" data-owner="未提供归属" data-overflow="false"><span>example-model-with-a-very-long-full-identifier-2026-09-05</span><b aria-hidden="true">›</b></button></div>
+</section>
+</div>
+<p id="model-empty" class="empty" hidden></p>
+<section id="model-detail" class="detail" hidden>
+<div class="row spread"><h3>模型详情</h3><button id="detail-close">关闭</button></div>
+<small>完整模型 ID</small><code id="detail-id"></code><p id="detail-owner" class="muted"></p><p class="muted">接口归属仅为模型元数据，不代表实际路由账号。</p><button id="detail-copy" style="margin-top:12px">复制完整 ID</button></section>
+<!-- 页脚位于说明与详情之后：计数在左，带边框的展开按钮在模型区域右下角。 -->
+<div id="model-footer" class="row spread" style="margin-top:16px"><small id="model-visible-count">已展示 9 / 共 12 个模型</small><button id="model-more" aria-expanded="false">展开全部模型</button></div>
+</section>
+
+<section class="card">
+<div class="row spread"><h2>隧道</h2><span class="badge">未连接</span></div>
+<p class="muted" style="margin-top:8px">通过安全隧道从其它设备访问本地代理。</p><button id="tunnel-manage" style="margin-top:12px">管理隧道</button><p id="tunnel-preview" class="notice" hidden>隧道管理入口（演示）：生产继续打开现有隧道管理面板，保留连接、停止及复制公网地址流程。</p></section>
+</div>
+</main>
+</div>
+
+<details class="prototype-contract"><summary>Page design and interaction contract</summary>
+<section data-contract-section="purpose"><h2>页面目的与布局</h2><p>本地代理仪表盘按 CPA 运行服务 → 条件新手引导 → 四项低强调统计 → CPA 可用模型 → 现有隧道信息排序。运行卡标题在左，右侧同组依次为运行状态、启动/停止按钮；地址下方仅保留刷新与 /v1 复制。合并旧 API 地址区域，保留 /v1 复制。提供商汇总已迁移到提供商页面。运行状态和模型真实性优先于装饰；借鉴 AIUsage 分组网格，不新增业务能力。模型区域最底部在说明与详情之后设置页脚：左侧已展示/总数，右侧带边框的展开全部模型/收起模型按钮。</p></section>
+
+<section data-contract-section="navigation"><h2>页面导航</h2><p>侧边栏在两个固定页面之间导航；其它侧边栏文字是现有页面的背景定位，不提供伪导航。演示条、构造数据与契约不进入生产。</p></section>
+
+<section data-contract-section="interactions"><h2>交互</h2><ul>
+<li data-contract-for="theme">theme：选择浅色或深色，立即切换两套语义色阶；仅原型演示控件。</li>
+
+<li data-contract-for="nav-dashboard">nav-dashboard：打开仪表盘原型 dashboard.html。</li>
+
+<li data-contract-for="nav-providers">nav-providers：打开提供商原型 providers.html。</li>
+
+<li data-contract-for="tunnel-manage">tunnel-manage：展开现有隧道管理入口说明；保留实际管理按钮位置，原型不连接公网或改写隧道配置。</li>
+
+<li data-contract-for="scenario">scenario：切换已声明演示状态，运行卡保留在首位；网络开放时改为“允许网络访问 · 本机连接地址”，未知 PID 明确未提供。</li>
+
+<li data-contract-for="runtime-toggle">runtime-toggle：位于运行卡标题行右侧、紧随状态徽标；运行时显示停止中，完成后变为已停止并清空模型；停止时显示启动中，完成后加载模型；未安装时先演示安装；失败时重试。</li>
+
+<li data-contract-for="runtime-refresh">runtime-refresh：显示正在刷新后更新运行状态与目录，繁忙状态禁用重复操作。</li>
+
+<li data-contract-for="copy-base">copy-base：复制本机基础地址 http://127.0.0.1:8317。</li>
+
+<li data-contract-for="copy-api">copy-api：复制客户端 API 地址 http://127.0.0.1:8317/v1。</li>
+
+<li data-contract-for="model-refresh">model-refresh：运行时展示加载反馈，刷新失败保留旧目录并注明旧数据，首次失败不显示模型；停止或繁忙时禁用。</li>
+
+
+
+<li data-contract-for="model-more">model-more：位于目录最底部右侧，以带边框按钮在初始每组最多三个模型和全部模型之间切换；有折叠条目时显示“展开全部模型”，已展开时显示“收起模型”。左侧同步已展示/总数。不提供搜索或过滤。</li>
+
+<li data-contract-for="detail-copy">detail-copy：复制当前选中的完整原始模型 ID。</li>
+
+<li data-contract-for="detail-close">detail-close：关闭内联详情并把焦点还给刚才的模型按钮。</li>
+
+<li data-contract-for="guide-dismiss">guide-dismiss：隐藏条件新手引导，不影响运行卡和统计。</li>
+
+<li data-contract-for="guide-provider">guide-provider：打开原型内的提供商选择面板，可演示 OAuth 或 Vertex 文件导入入口。</li>
+
+<li data-contract-for="guide-agent">guide-agent：展示已有 CLI 配置流程的入口说明；原型不改配置。</li>
+
+<li data-contract-for="guide-oauth">guide-oauth：演示现有 OAuth 授权进度与结果。</li>
+
+<li data-contract-for="guide-import">guide-import：演示现有 Vertex JSON 文件导入结果，不读取真实文件。</li>
+
+<li data-contract-for="model-1">model-1：打开 gpt-5.6-sol 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-2">model-2：打开 gpt-5.6-terra 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-3">model-3：打开 gpt-5.6-luna 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-4">model-4：打开 gpt-5.5 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-5">model-5：打开 gpt-5.4 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-6">model-6：打开 gpt-5.3-codex 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-7">model-7：打开 claude-opus-4-6 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-8">model-8：打开 claude-sonnet-4-6 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-9">model-9：打开 claude-haiku-4-5 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-10">model-10：打开 gemini-2.5-pro 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-11">model-11：打开 gemini-2.5-flash 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+
+<li data-contract-for="model-12">model-12：打开 example-model-with-a-very-long-full-identifier-2026-09-05 的内联详情；展示完整 ID 与接口归属，不推断实际服务账号、路由、别名或协议。</li>
+</ul></section>
+
+<section data-contract-section="states"><h2>状态与适配</h2><p>默认运行成功。状态菜单覆盖未安装、已停止、启动中、停止中、启动失败、未知 PID、网络开放、模型首次加载、空目录、首次失败、旧数据失败、首次引导。停止清空目录，失败不伪造条目；旧目录显式标识上次更新。复制失败有反馈。不提供搜索及无匹配状态；页脚计数反映展开或收起后的已展示数和全部目录总数，无目录时隐藏页脚。四项指标保留原副说明，首次引导不替代提供商汇总。 所有状态使用文字而非仅颜色；键盘 Tab 可到达控件，焦点环可见。窄窗口侧栏折为顶栏、统计折为两列、模型折为单列，长 ID 在详情换行。浅深色均使用系统字体，支持文本缩放和减少动态效果。</p></section>
+
+<section data-contract-section="exceptions"><h2>例外与边界</h2><p>无特殊规范例外。页面完全离线，所有数字、账号、状态和模型均为明确构造的演示数据；不访问真实 API、文件或凭据。复制仅复制公开演示文本；浏览器禁止剪贴板时提示手动选择，不伪报成功。监控模式、真实账号管理与代理副作用沿用生产既有逻辑，不由原型重新定义。</p></section>
+</details>
+
+<div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

@@ -10,10 +10,11 @@ struct AgentConfigSheet: View {
     let agent: CLIAgent
     
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var previewConfig: AgentConfigResult?
-    @State private var showRestoreConfirm = false
-    @State private var backupToRestore: AgentConfigurationService.BackupFile?
-    
+    @State private var aliasStore = CPAModelAliasesViewModel()
+    @State private var showModelAliases = false
+    @FocusState private var isCloseFocused: Bool
     private var hasResult: Bool {
         viewModel.configResult != nil
     }
@@ -30,30 +31,48 @@ struct AgentConfigSheet: View {
         VStack(spacing: 0) {
             headerView
             
-            Divider()
-            
             ScrollView {
                 VStack(spacing: 16) {
                     if hasResult {
                         resultView
                     } else {
                         configurationView
+                            .disabled(viewModel.isLoadingConfiguration)
                     }
                 }
                 .padding(20)
             }
             .scrollIndicators(.automatic, axes: .vertical)
             
-            Divider()
-            
             footerView
         }
         .frame(width: 720, height: 600)
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .task { await aliasStore.load(client: viewModel.quotaViewModel?.apiClient) }
+        .sheet(isPresented: $showModelAliases, onDismiss: {
+            // 关闭管理窗口后读取 CPA 最新目录，保留用户尚未保存的槽位和默认模型选择。
+            Task {
+                await viewModel.loadModels(forceRefresh: true)
+                await aliasStore.load(client: viewModel.quotaViewModel?.apiClient)
+            }
+        }) {
+            CPAModelAliasManagerSheet(store: aliasStore, client: viewModel.quotaViewModel?.apiClient)
+        }
         .onAppear {
             viewModel.resetSheetState()
             if isManualMode {
                 generatePreview()
             }
+        }
+        .onChange(of: viewModel.isLoadingConfiguration) { _, isLoading in
+            // 回填完成后重建手动预览，避免把加载前的默认模型展示成已有配置。
+            if !isLoading && isManualMode { generatePreview() }
+        }
+        .onChange(of: viewModel.currentConfiguration?.modelSlots) {
+            if isManualMode { generatePreview() }
+        }
+        .onChange(of: viewModel.currentConfiguration?.claudeModelDisplayNames) {
+            if isManualMode { generatePreview() }
         }
         .onChange(of: viewModel.configurationMode) { _, newMode in
             if newMode == .manual {
@@ -78,10 +97,10 @@ struct AgentConfigSheet: View {
     private var headerView: some View {
         HStack(spacing: 16) {
             ZStack {
-                Circle()
+                RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
                     .fill(agent.color.opacity(0.15))
                     .frame(width: 44, height: 44)
-                
+
                 Image(systemName: agent.systemIcon)
                     .font(.title3)
                     .foregroundStyle(agent.color)
@@ -98,15 +117,14 @@ struct AgentConfigSheet: View {
             
             Spacer()
             
-            Button {
+            QuotioCircularIconButton(systemImage: "xmark") {
                 viewModel.dismissConfiguration()
                 dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .focused($isCloseFocused)
+            .overlay(Circle().strokeBorder(isCloseFocused ? Color.accentColor : .clear, lineWidth: 2))
+            .accessibilityLabel("action.close".localized())
+            .help("action.close".localized())
         }
         .padding(16)
     }
@@ -114,6 +132,14 @@ struct AgentConfigSheet: View {
     private var configurationView: some View {
         VStack(spacing: 16) {
             setupModeSection
+
+            // 在提交前说明插件安装及默认模式的边界，预览不会执行安装命令。
+            if agent == .pi {
+                Label("agents.pi.setupInfo".localized(), systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             
             modeSelectionSection
             
@@ -125,12 +151,53 @@ struct AgentConfigSheet: View {
             if viewModel.selectedSetupMode == .proxy {
                 connectionInfoSection
                 
-                if agent == .claudeCode {
-                    modelSlotsSection
+                if agent == .codexCLI || agent == .pi {
+                    VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("agents.modelSlots".localized()).font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button("cpaAliases.manage".localized()) { showModelAliases = true }
+                            .buttonStyle(.quotioMicroCapsule)
+                    }
+                    AgentDefaultModelPicker(
+                        agent: agent,
+                        selectedModel: Binding(
+                            get: {
+                                agent == .pi
+                                    ? (viewModel.currentConfiguration?.modelSlots[.sonnet] ?? "")
+                                    : (viewModel.currentConfiguration?.codexModel ?? AgentConfiguration.defaultCodexModel)
+                            },
+                            set: { model in
+                                viewModel.updateDefaultModel(model)
+                                if isManualMode { generatePreview() }
+                            }
+                        ),
+                        availableModels: viewModel.availableModels,
+                        isFetchingModels: viewModel.isFetchingModels,
+                        onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
+                        aliases: aliasStore.aliases
+                    )
+                    // CPA 固定别名会覆盖客户端强度，界面不能再展示一个看似能生效的编辑器。
+                    let model = viewModel.currentConfiguration?.codexModel ?? AgentConfiguration.defaultCodexModel
+                    if agent == .codexCLI && !CPAModelAliasPolicy.entries(for: model, in: aliasStore.aliases).contains(where: { $0.effort != nil }) {
+                        reasoningEffortSection
+                    }
+                    }
+                    .quotioInsetCard()
                 }
 
-                if agent == .codexCLI {
-                    reasoningEffortSection
+                if agent == .claudeCode {
+                    ClaudeModelMappingView(viewModel: viewModel, aliases: aliasStore.aliases, onManageAliases: { showModelAliases = true }) {
+                        if isManualMode { generatePreview() }
+                    }
+                    ClaudeAdvancedSettingsSection(viewModel: viewModel) {
+                        if isManualMode { generatePreview() }
+                    }
+                }
+
+                if let error = aliasStore.errorMessage, agent == .claudeCode || agent == .codexCLI || agent == .pi {
+                    Label(error, systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 if isManualMode {
@@ -143,7 +210,7 @@ struct AgentConfigSheet: View {
             }
             
             if !viewModel.availableBackups.isEmpty {
-                backupSection
+                AgentBackupSection(viewModel: viewModel)
             }
         }
     }
@@ -186,21 +253,19 @@ struct AgentConfigSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
-    
+
     private var defaultModeInfoSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("agents.defaultSetup".localized())
                 .font(.subheadline)
                 .fontWeight(.medium)
-            
+
             Text("agents.defaultSetup.info".localized())
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            
+
             if let saved = viewModel.savedConfig, saved.isProxyConfigured {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -211,68 +276,18 @@ struct AgentConfigSheet: View {
                 }
                 .padding(8)
                 .background(Color.orange.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous))
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
-    
-    // MARK: - Backup Section
-    
-    private var backupSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("agents.restoreBackup".localized())
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                Spacer()
-                
-                Text(String(format: "agents.availableBackups".localized(), viewModel.availableBackups.count))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(viewModel.availableBackups.prefix(5)) { backup in
-                        BackupButton(backup: backup) {
-                            backupToRestore = backup
-                            showRestoreConfirm = true
-                        }
-                    }
-                }
-            }
-            
-            Text("agents.restoreBackup.info".localized())
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .alert("agents.restoreBackup.confirm.title".localized(), isPresented: $showRestoreConfirm) {
-            Button("action.cancel".localized(), role: .cancel) {
-                backupToRestore = nil
-            }
-            if let backup = backupToRestore {
-                Button("agents.restoreAction".localized(), role: .destructive) {
-                    Task { await viewModel.restoreFromBackup(backup) }
-                }
-            }
-        } message: {
-            Text("agents.restoreBackup.confirm.message".localized())
-        }
-    }
-    
+
     private var modeSelectionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("agents.configMode".localized())
                 .font(.subheadline)
                 .fontWeight(.medium)
-            
+
             HStack(spacing: 12) {
                 ForEach(ConfigurationMode.allCases) { mode in
                     ModeButton(
@@ -283,17 +298,15 @@ struct AgentConfigSheet: View {
                 }
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
-    
+
     private var storageOptionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("agents.storageOption".localized())
                 .font(.subheadline)
                 .fontWeight(.medium)
-            
+
             HStack(spacing: 12) {
                 ForEach(ConfigStorageOption.allCases) { option in
                     StorageOptionButton(
@@ -304,25 +317,21 @@ struct AgentConfigSheet: View {
                 }
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
-    
+
     private var connectionInfoSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("agents.connectionInfo".localized())
                 .font(.subheadline)
                 .fontWeight(.medium)
-            
+
             VStack(spacing: 6) {
                 InfoRow(label: "agents.proxyURL".localized(), value: viewModel.currentConfiguration?.proxyURL ?? "")
                 InfoRow(label: "agents.apiKey".localized(), value: maskedAPIKey, isMasked: true)
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
     
     private var maskedAPIKey: String {
@@ -330,48 +339,6 @@ struct AgentConfigSheet: View {
             return "••••••••"
         }
         return String(key.prefix(4)) + "••••" + String(key.suffix(4))
-    }
-    
-    private var modelSlotsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("agents.modelSlots".localized())
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                Spacer()
-                
-                Button {
-                    Task { await viewModel.loadModels(forceRefresh: true) }
-                } label: {
-                    if viewModel.isFetchingModels {
-                        SmallProgressView()
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.caption)
-                    }
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh models from proxy".localized())
-                .disabled(viewModel.isFetchingModels)
-            }
-            
-            VStack(spacing: 8) {
-                ForEach(ModelSlot.allCases) { slot in
-                    ModelSlotRow(
-                        slot: slot,
-                        selectedModel: viewModel.currentConfiguration?.modelSlots[slot] ?? "",
-                        availableModels: viewModel.availableModels,
-                        onModelChange: { model in
-                            viewModel.updateModelSlot(slot, model: model)
-                        }
-                    )
-                }
-            }
-        }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
     
     /// Named efforts plus, when the existing config holds a value Quotio does
@@ -409,16 +376,16 @@ struct AgentConfigSheet: View {
                     }
                 }
                 .pickerStyle(.menu)
+                .modifier(AgentConfigMenuStyle())
                 .frame(maxWidth: 280)
+                .accessibilityLabel("agents.reasoningEffort".localized())
             }
 
             Text("agents.reasoningEffort.info".localized())
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.top, 4)
     }
 
     private var oauthToggleSection: some View {
@@ -430,26 +397,24 @@ struct AgentConfigSheet: View {
                 Text("agents.useOAuth".localized())
                     .font(.subheadline)
                     .fontWeight(.medium)
-                
+
                 Text("agents.useOAuthDesc".localized())
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
-    
+
     private var manualPreviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("agents.rawConfigs".localized())
                     .font(.subheadline)
                     .fontWeight(.medium)
-                
+
                 Spacer()
-                
+
                 if let config = previewConfig, !config.rawConfigs.isEmpty {
                     Button {
                         copyPreviewToClipboard()
@@ -457,11 +422,11 @@ struct AgentConfigSheet: View {
                         Label("action.copyAll".localized(), systemImage: "doc.on.doc")
                             .font(.caption)
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.quotioMicroCapsule)
                     .controlSize(.small)
                 }
             }
-            
+
             if let config = previewConfig, !config.rawConfigs.isEmpty {
                 if config.rawConfigs.count > 1 {
                     Picker("Config", selection: $viewModel.selectedRawConfigIndex) {
@@ -472,7 +437,7 @@ struct AgentConfigSheet: View {
                     }
                     .pickerStyle(.segmented)
                 }
-                
+
                 if viewModel.selectedRawConfigIndex < config.rawConfigs.count {
                     RawConfigView(config: config.rawConfigs[viewModel.selectedRawConfigIndex]) {
                         copyPreviewToClipboard(index: viewModel.selectedRawConfigIndex)
@@ -489,34 +454,32 @@ struct AgentConfigSheet: View {
                 .padding(.vertical, 20)
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
-    
+
     private func copyPreviewToClipboard(index: Int? = nil) {
         guard let config = previewConfig else { return }
-        
+
         let content: String
         if let idx = index, idx < config.rawConfigs.count {
             content = config.rawConfigs[idx].content
         } else {
             content = config.rawConfigs.map { $0.content }.joined(separator: "\n\n---\n\n")
         }
-        
+
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(content, forType: .string)
     }
-    
+
     private var testConnectionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("agents.testConnection".localized())
                     .font(.subheadline)
                     .fontWeight(.medium)
-                
+
                 Spacer()
-                
+
                 Button {
                     Task { await viewModel.testConnection() }
                 } label: {
@@ -530,18 +493,17 @@ struct AgentConfigSheet: View {
                     }
                     .font(.caption)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.quotioMicroCapsule)
                 .controlSize(.small)
                 .disabled(viewModel.isTesting)
+                .opacity(viewModel.isTesting ? 0.5 : 1)
             }
-            
+
             if let result = viewModel.testResult {
                 TestResultView(result: result)
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
     
     @ViewBuilder
@@ -571,69 +533,65 @@ struct AgentConfigSheet: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
-                    .padding(12)
-                    .background(Color(.controlBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                
+                    .quotioInsetCard(padding: 12)
+
                 if result.mode == .automatic {
                     automaticModeResult(result)
                 }
-                
+
                 if result.mode == .manual && !result.rawConfigs.isEmpty {
                     manualModeResult(result)
                 }
             }
         }
     }
-    
+
     private func automaticModeResult(_ result: AgentConfigResult) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("agents.filesModified".localized())
                 .font(.subheadline)
                 .fontWeight(.medium)
-            
+
             VStack(alignment: .leading, spacing: 6) {
                 if let configPath = result.configPath {
                     FilePathRow(icon: "doc.fill", label: "Config", path: configPath)
                 }
-                
+
                 if let authPath = result.authPath {
                     FilePathRow(icon: "key.fill", label: "Auth", path: authPath)
                 }
-                
+
                 if result.shellConfig != nil {
                     FilePathRow(icon: "terminal", label: "Shell", path: viewModel.detectedShell.profilePath)
                 }
-                
+
                 if let backupPath = result.backupPath {
                     FilePathRow(icon: "clock.arrow.circlepath", label: "Backup", path: backupPath)
                 }
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
-    
+
     private func manualModeResult(_ result: AgentConfigResult) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("agents.rawConfigs".localized())
                     .font(.subheadline)
                     .fontWeight(.medium)
-                
+
                 Spacer()
-                
+
                 Button {
                     viewModel.copyAllRawConfigsToClipboard()
                 } label: {
                     Label("action.copyAll".localized(), systemImage: "doc.on.doc")
                         .font(.caption)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.quotioMicroCapsule)
                 .controlSize(.small)
             }
-            
+
             if result.rawConfigs.count > 1 {
                 Picker("Config", selection: $viewModel.selectedRawConfigIndex) {
                     ForEach(result.rawConfigs.indices, id: \.self) { index in
@@ -643,16 +601,14 @@ struct AgentConfigSheet: View {
                 }
                 .pickerStyle(.segmented)
             }
-            
+
             if viewModel.selectedRawConfigIndex < result.rawConfigs.count {
                 RawConfigView(config: result.rawConfigs[viewModel.selectedRawConfigIndex]) {
                     viewModel.copyRawConfigToClipboard(index: viewModel.selectedRawConfigIndex)
                 }
             }
         }
-        .padding(14)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .quotioInsetCard()
     }
     
     private var errorResultView: some View {
@@ -671,9 +627,7 @@ struct AgentConfigSheet: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
-                    .padding(12)
-                    .background(Color(.controlBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .quotioInsetCard(padding: 12)
             }
         }
     }
@@ -687,13 +641,14 @@ struct AgentConfigSheet: View {
                     viewModel.dismissConfiguration()
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.quotioPrimaryCapsule)
                 .keyboardShortcut(.return)
             } else {
                 Button("action.cancel".localized(), role: .cancel) {
                     viewModel.dismissConfiguration()
                     dismiss()
                 }
+                .buttonStyle(.quotioSecondaryCapsule)
                 .keyboardShortcut(.escape)
                 
                 Spacer()
@@ -710,9 +665,11 @@ struct AgentConfigSheet: View {
                         Text(viewModel.configurationMode == .automatic ? "agents.apply".localized() : "agents.saveConfig".localized())
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.quotioPrimaryCapsule)
                 .tint(agent.color)
-                .disabled(viewModel.isConfiguring)
+                .accentColor(agent.color)
+                .disabled(viewModel.isConfiguring || viewModel.isLoadingConfiguration || viewModel.isDeletingBackups)
+                .opacity(viewModel.isConfiguring || viewModel.isLoadingConfiguration || viewModel.isDeletingBackups ? 0.5 : 1)
                 .keyboardShortcut(.return)
             }
         }
@@ -720,99 +677,242 @@ struct AgentConfigSheet: View {
     }
 }
 
+private struct ClaudeAdvancedSettingsSection: View {
+    @Bindable var viewModel: AgentSetupViewModel
+    let onSettingsChange: () -> Void
+
+    private var uses1MContext: Bool {
+        guard let configuration = viewModel.currentConfiguration else { return false }
+        return ModelSlot.allCases.contains { configuration.usesClaude1MContext(for: $0) }
+    }
+
+    private var maxContextBinding: Binding<Int> {
+        Binding(
+            get: {
+                viewModel.currentConfiguration?.claudeMaxContextTokens
+                    ?? AgentConfiguration.defaultClaudeMaxContextTokens
+            },
+            set: {
+                viewModel.updateClaudeMaxContextTokens($0)
+                onSettingsChange()
+            }
+        )
+    }
+
+    private var autoCompactBinding: Binding<Int> {
+        Binding(
+            get: {
+                viewModel.currentConfiguration?.claudeAutoCompactPercentage
+                    ?? AgentConfiguration.defaultClaudeAutoCompactPercentage
+            },
+            set: {
+                viewModel.updateClaudeAutoCompactPercentage($0)
+                onSettingsChange()
+            }
+        )
+    }
+
+    private var disableAutoCompactBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.currentConfiguration?.claudeDisableAutoCompact ?? false },
+            set: {
+                viewModel.updateClaudeDisableAutoCompact($0)
+                onSettingsChange()
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            contextField
+            autoCompactField
+            disableAutoCompactToggle
+        }
+        .quotioInsetCard()
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("agents.claude.advanced".localized())
+                .font(.subheadline)
+                .fontWeight(.medium)
+            Spacer()
+            if uses1MContext {
+                Label(
+                    "agents.claude.advanced.context.effective1M".localized(),
+                    systemImage: "arrow.up.right.circle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var contextField: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("agents.claude.advanced.context".localized())
+                    .font(.subheadline)
+                Text("agents.claude.advanced.context.info".localized())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            TextField(
+                "agents.claude.advanced.context".localized(),
+                value: maxContextBinding,
+                format: .number
+            )
+            .multilineTextAlignment(.trailing)
+            .modifier(AgentConfigNumericFieldStyle())
+            .frame(width: 126)
+            .accessibilityLabel("agents.claude.advanced.context".localized())
+            Text("agents.claude.advanced.tokens".localized())
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var autoCompactField: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("agents.claude.advanced.compaction".localized())
+                    .font(.subheadline)
+                Text("agents.claude.advanced.compaction.info".localized())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            TextField(
+                "agents.claude.advanced.compaction".localized(),
+                value: autoCompactBinding,
+                format: .number
+            )
+            .multilineTextAlignment(.trailing)
+            .modifier(AgentConfigNumericFieldStyle())
+            .frame(width: 74)
+            .accessibilityLabel("agents.claude.advanced.compaction".localized())
+            Text("%")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var disableAutoCompactToggle: some View {
+        Toggle(isOn: disableAutoCompactBinding) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("agents.claude.advanced.disableAutoCompact".localized())
+                    .font(.subheadline)
+                Text("agents.claude.advanced.disableAutoCompact.info".localized())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityHint("agents.claude.advanced.disableAutoCompact.info".localized())
+    }
+}
+
+private struct AgentConfigNumericFieldStyle: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .focused($isFocused)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 32)
+            .background(Capsule().fill(QuotioTheme.Colors.cardTag(for: colorScheme)))
+            .overlay(
+                Capsule().strokeBorder(
+                    isFocused ? Color.accentColor : QuotioTheme.Colors.sidebarBorder(for: colorScheme),
+                    lineWidth: isFocused ? 1.5 : 0.5
+                )
+            )
+    }
+}
+
 private struct ModeButton: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
     let mode: ConfigurationMode
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button {
             action()
         } label: {
-            VStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: mode.icon)
-                    .font(.title3)
+                    .font(.callout)
                 Text(mode.displayName)
                     .font(.caption)
                     .fontWeight(.medium)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color(.controlBackgroundColor))
+            .padding(.horizontal, 12)
+            .frame(minHeight: 36)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : QuotioTheme.Colors.cardTag(for: colorScheme))
             .foregroundStyle(isSelected ? .primary : .secondary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(Capsule())
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: isSelected ? 2 : 1)
+                Capsule()
+                    .strokeBorder(isSelected ? Color.accentColor : QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: isSelected ? 1.5 : 0.5)
             )
+            .contentShape(Capsule())
         }
         .buttonStyle(.borderless)
+        .opacity(isEnabled ? 1 : 0.5)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
 private struct SetupModeButton: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
     let setup: ConfigurationSetup
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button {
             action()
         } label: {
-            VStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: setup.icon)
-                    .font(.title3)
+                    .font(.callout)
                 Text(setup.displayName)
                     .font(.caption)
                     .fontWeight(.medium)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color(.controlBackgroundColor))
-            .foregroundStyle(isSelected ? .primary : .secondary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: isSelected ? 2 : 1)
-            )
-        }
-        .buttonStyle(.borderless)
-    }
-}
-
-private struct BackupButton: View {
-    let backup: AgentConfigurationService.BackupFile
-    let action: () -> Void
-    
-    var body: some View {
-        Button {
-            action()
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.callout)
-                Text(backup.displayName)
-                    .font(.caption2)
-                    .lineLimit(1)
-            }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(.controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .frame(minHeight: 36)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : QuotioTheme.Colors.cardTag(for: colorScheme))
+            .foregroundStyle(isSelected ? .primary : .secondary)
+            .clipShape(Capsule())
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                Capsule()
+                    .strokeBorder(isSelected ? Color.accentColor : QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: isSelected ? 1.5 : 0.5)
             )
+            .contentShape(Capsule())
         }
         .buttonStyle(.borderless)
+        .opacity(isEnabled ? 1 : 0.5)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
 private struct StorageOptionButton: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
     let option: ConfigStorageOption
     let isSelected: Bool
     let action: () -> Void
-    
+
     private var displayName: String {
         switch option {
         case .jsonOnly: return "agents.storage.jsonOnly".localized()
@@ -820,29 +920,33 @@ private struct StorageOptionButton: View {
         case .both: return "agents.storage.both".localized()
         }
     }
-    
+
     var body: some View {
         Button {
             action()
         } label: {
-            VStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: option.icon)
-                    .font(.title3)
+                    .font(.callout)
                 Text(displayName)
                     .font(.caption)
                     .fontWeight(.medium)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color(.controlBackgroundColor))
+            .padding(.horizontal, 12)
+            .frame(minHeight: 36)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : QuotioTheme.Colors.cardTag(for: colorScheme))
             .foregroundStyle(isSelected ? .primary : .secondary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(Capsule())
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: isSelected ? 2 : 1)
+                Capsule()
+                    .strokeBorder(isSelected ? Color.accentColor : QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: isSelected ? 1.5 : 0.5)
             )
+            .contentShape(Capsule())
         }
         .buttonStyle(.borderless)
+        .opacity(isEnabled ? 1 : 0.5)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -865,61 +969,6 @@ private struct InfoRow: View {
                 .foregroundStyle(isMasked ? .secondary : .primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-        }
-    }
-}
-
-private struct ModelSlotRow: View {
-    let slot: ModelSlot
-    let selectedModel: String
-    let availableModels: [AvailableModel]
-    let onModelChange: (String) -> Void
-    
-    private var effectiveSelection: String {
-        // Check if selected model exists in available list
-        if !selectedModel.isEmpty && availableModels.contains(where: { $0.name == selectedModel }) {
-            return selectedModel
-        }
-        // Check if default model is available
-        if let defaultModel = AvailableModel.defaultModels[slot],
-           availableModels.contains(where: { $0.name == defaultModel.name }) {
-            return defaultModel.name
-        }
-        // Final fallback to first available model
-        return availableModels.first?.name ?? ""
-    }
-    
-    var body: some View {
-        HStack {
-            Text(slot.displayName)
-                .font(.caption)
-                .fontWeight(.medium)
-            
-            Spacer(minLength: 12)
-            
-            Picker("", selection: Binding(
-                get: { effectiveSelection },
-                set: { onModelChange($0) }
-            )) {
-                let providers = Set(availableModels.map { $0.provider }).sorted()
-                
-                ForEach(providers, id: \.self) { provider in
-                    Section(header: Text(provider.capitalized)) {
-                        ForEach(availableModels.filter { $0.provider == provider }) { model in
-                            Text(model.displayName)
-                                .tag(model.name)
-                        }
-                    }
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(maxWidth: 280)
-        }
-        .onAppear {
-            // Trigger fallback update if model is empty or not in available list
-            if selectedModel.isEmpty || !availableModels.contains(where: { $0.name == selectedModel }) {
-                onModelChange(effectiveSelection)
-            }
         }
     }
 }
@@ -947,7 +996,7 @@ private struct TestResultView: View {
         }
         .padding(10)
         .background(result.success ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous))
     }
 }
 
@@ -978,6 +1027,7 @@ private struct FilePathRow: View {
 }
 
 private struct RawConfigView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let config: RawConfigOutput
     let onCopy: () -> Void
     
@@ -1004,13 +1054,13 @@ private struct RawConfigView: View {
                     .foregroundStyle(.blue)
                     .clipShape(Capsule())
                 
-                Button {
-                    onCopy()
-                } label: {
+                Button(action: onCopy) {
                     Image(systemName: "doc.on.doc")
                         .font(.caption)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.quotioMicroCapsule)
+                .accessibilityLabel("action.copy".localized())
+                .help("action.copy".localized())
             }
             
             ScrollView {
@@ -1022,8 +1072,8 @@ private struct RawConfigView: View {
             .scrollIndicators(.automatic, axes: .vertical)
             .frame(minHeight: 150, maxHeight: 320)
             .padding(10)
-            .background(Color.black.opacity(0.03))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .background(QuotioTheme.Colors.cardInset(for: colorScheme))
+            .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous))
         }
     }
 }

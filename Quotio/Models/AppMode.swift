@@ -68,7 +68,8 @@ enum AppMode: String, Codable, CaseIterable, Identifiable {
     var visiblePages: [NavigationPage] {
         switch self {
         case .full:
-            return [.dashboard, .quota, .providers, .agents, .apiKeys, .logs, .settings, .about]
+            // 与当前运行模式的侧栏规则保持一致，日志入口保留在诊断与维护。
+            return [.dashboard, .quota, .providers, .agents, .apiKeys, .settings, .about]
         case .quotaOnly:
             return [.dashboard, .quota, .providers, .settings, .about]
         }

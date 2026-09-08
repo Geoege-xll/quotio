@@ -140,6 +140,10 @@ nonisolated struct ModelQuota: Codable, Identifiable, Sendable {
     // Optional tooltip message (e.g., Warp bonus userFacingMessage)
     var tooltip: String?
 
+    /// 保留上游名称及明确的额度周期；旧缓存缺少这些可选字段时仍可正常解码。
+    var sourceDisplayName: String?
+    var antigravityWindow: AntigravityQuotaWindow?
+
     init(
         name: String,
         percentage: Double,
@@ -148,7 +152,9 @@ nonisolated struct ModelQuota: Codable, Identifiable, Sendable {
         used: Int? = nil,
         limit: Int? = nil,
         remaining: Int? = nil,
-        tooltip: String? = nil
+        tooltip: String? = nil,
+        sourceDisplayName: String? = nil,
+        antigravityWindow: AntigravityQuotaWindow? = nil
     ) {
         self.name = name
         self.percentage = percentage
@@ -158,6 +164,8 @@ nonisolated struct ModelQuota: Codable, Identifiable, Sendable {
         self.limit = limit
         self.remaining = remaining
         self.tooltip = tooltip
+        self.sourceDisplayName = sourceDisplayName
+        self.antigravityWindow = antigravityWindow
     }
 
     var id: String { name }
@@ -209,6 +217,7 @@ nonisolated struct ModelQuota: Codable, Identifiable, Sendable {
     }
 
     var displayName: String {
+        if let sourceDisplayName, !sourceDisplayName.isEmpty { return sourceDisplayName }
         switch name {
         // Antigravity Gemini models
         case "gemini-3-pro-high": return "Gemini 3 Pro"
@@ -369,6 +378,8 @@ nonisolated struct ProviderQuotaData: Codable, Sendable {
     var tokenExpiresAt: Date?  // For Kiro: token expiry time
     var analytics: QuotaAnalytics?
     var accountDisplayName: String?
+    /// CPA 配额响应携带同一账号查询出的订阅信息，供发布层同步订阅卡片；旧快照缺失时保持 nil。
+    var subscriptionInfo: SubscriptionInfo?
 
     init(
         models: [ModelQuota] = [],
@@ -377,7 +388,8 @@ nonisolated struct ProviderQuotaData: Codable, Sendable {
         planType: String? = nil,
         tokenExpiresAt: Date? = nil,
         analytics: QuotaAnalytics? = nil,
-        accountDisplayName: String? = nil
+        accountDisplayName: String? = nil,
+        subscriptionInfo: SubscriptionInfo? = nil
     ) {
         self.models = models
         self.lastUpdated = lastUpdated
@@ -386,6 +398,7 @@ nonisolated struct ProviderQuotaData: Codable, Sendable {
         self.tokenExpiresAt = tokenExpiresAt
         self.analytics = analytics
         self.accountDisplayName = accountDisplayName
+        self.subscriptionInfo = subscriptionInfo
     }
 
     /// Format token expiry time in user's local timezone
@@ -507,19 +520,6 @@ nonisolated struct SubscriptionInfo: Codable, Sendable {
 
 // MARK: - API Response Models
 
-nonisolated private struct QuotaAPIResponse: Codable, Sendable {
-    let models: [String: ModelInfo]
-}
-
-nonisolated private struct ModelInfo: Codable, Sendable {
-    let quotaInfo: QuotaInfo?
-}
-
-nonisolated private struct QuotaInfo: Codable, Sendable {
-    let remainingFraction: Double?
-    let resetTime: String?
-}
-
 nonisolated private struct TokenRefreshResponse: Codable, Sendable {
     let accessToken: String
     let expiresIn: Int
@@ -581,13 +581,11 @@ nonisolated struct AntigravityAuthFile: Codable, Sendable {
 // MARK: - Fetcher
 
 actor AntigravityQuotaFetcher {
-    private let quotaAPIURL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-    private let quotaSummaryAPIURL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
-    private let loadProjectAPIURL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+    private let loadProjectAPIURL = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
     private let tokenURL = "https://oauth2.googleapis.com/token"
     private let clientId = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
     private let clientSecret = "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"
-    private let userAgent = "antigravity/1.11.3 Darwin/arm64"
+    private let userAgent = AntigravityQuotaEndpoints.userAgent
     private let nativeCacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Quotio/Monitor/antigravity-shadow-v1.json")
 
@@ -609,9 +607,9 @@ actor AntigravityQuotaFetcher {
         var refreshFingerprint: String
     }
 
-    init() {
-        let config = ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 15)
-        self.session = URLSession(configuration: config)
+    /// 注入会话用于验证汇总优先与回退行为，测试不访问真实账号或网络。
+    init(session: URLSession? = nil) {
+        self.session = session ?? URLSession(configuration: ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 15))
     }
 
     /// Update the URLSession with current proxy settings
@@ -681,94 +679,26 @@ actor AntigravityQuotaFetcher {
         }
     }
 
-    func fetchQuota(accessToken: String) async throws -> ProviderQuotaData {
-        let projectId = await fetchProjectId(accessToken: accessToken)
-
-        if let summaryModels = await fetchQuotaSummaryModels(accessToken: accessToken, projectId: projectId) {
-            return ProviderQuotaData(models: summaryModels, lastUpdated: Date())
-        }
-
-        guard let url = URL(string: quotaAPIURL) else {
-            throw QuotaFetchError.invalidURL
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.addValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        var payload: [String: Any] = [:]
-        if let projectId = projectId {
-            payload["project"] = projectId
-        }
-
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-        var lastError: Error?
-
-        for attempt in 1...3 {
+    /// 已导入账号使用凭据中明确的项目；本机 IDE 账号才通过 loadCodeAssist 发现项目。
+    /// 汇总接口不可用时报告失败，不能以模型目录的 100% 替代真实会话／周限额。
+    func fetchQuota(accessToken: String, projectId: String? = nil) async throws -> ProviderQuotaData {
+        let resolvedProject: String?
+        if let project = QuotaResponseValue.string(projectId) { resolvedProject = project }
+        else { resolvedProject = await fetchProjectId(accessToken: accessToken) }
+        guard let resolvedProject else { throw QuotaFetchError.invalidResponse }
+        var lastError: Error = QuotaFetchError.invalidResponse
+        for host in AntigravityQuotaEndpoints.hosts {
+            try Task.checkCancellation()
             do {
-                let (data, response) = try await session.data(for: request)
-
-                guard let httpResponse = response as? HTTPURLResponse else {
-                    throw QuotaFetchError.invalidResponse
-                }
-
-                if httpResponse.statusCode == 403 {
-                    return ProviderQuotaData(isForbidden: true)
-                }
-
-                guard 200...299 ~= httpResponse.statusCode else {
-                    throw QuotaFetchError.httpError(httpResponse.statusCode)
-                }
-
-                let decoder = JSONDecoder()
-                let quotaResponse = try decoder.decode(QuotaAPIResponse.self, from: data)
-
-                var models: [ModelQuota] = []
-
-                for (name, info) in quotaResponse.models {
-                    guard name.contains("gemini") || name.contains("claude") else { continue }
-
-                    if let quotaInfo = info.quotaInfo {
-                        // Clamp to 0-100 range (API can return remainingFraction > 1.0)
-                        let percentage = min(100, max(0, (quotaInfo.remainingFraction ?? 0) * 100))
-                        let resetTime = quotaInfo.resetTime ?? ""
-                        models.append(ModelQuota(name: name, percentage: percentage, resetTime: resetTime))
-                    }
-                }
-
+                let data = try await postCloudCode(urlString: host + "/v1internal:retrieveUserQuotaSummary",
+                    accessToken: accessToken, payload: ["project": resolvedProject])
+                guard let models = AntigravityQuotaParser.summaryModels(from: data) else { throw QuotaFetchError.invalidResponse }
                 return ProviderQuotaData(models: models, lastUpdated: Date())
-
-            } catch {
-                lastError = error
-                if attempt < 3 {
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                }
-            }
+            } catch is CancellationError { throw CancellationError() }
+            catch { lastError = error }
         }
-
-        throw lastError ?? QuotaFetchError.unknown
-    }
-
-    private func fetchQuotaSummaryModels(accessToken: String, projectId: String?) async -> [ModelQuota]? {
-        let payloads: [[String: Any]]
-        if let projectId = projectId {
-            payloads = [["project": projectId], [:]]
-        } else {
-            payloads = [[:]]
-        }
-
-        for payload in payloads {
-            guard let data = try? await postCloudCode(urlString: quotaSummaryAPIURL, accessToken: accessToken, payload: payload),
-                  let models = Self.parseQuotaSummaryModels(from: data),
-                  !models.isEmpty else {
-                continue
-            }
-            return models
-        }
-
-        return nil
+        if case QuotaFetchError.httpError(403) = lastError { return ProviderQuotaData(isForbidden: true) }
+        throw lastError
     }
 
     private func postCloudCode(urlString: String, accessToken: String, payload: [String: Any]) async throws -> Data {
@@ -792,145 +722,6 @@ actor AntigravityQuotaFetcher {
         }
 
         return data
-    }
-
-    private static func parseQuotaSummaryModels(from data: Data) -> [ModelQuota]? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let groups = quotaSummaryGroups(from: root) else {
-            return nil
-        }
-
-        var models: [ModelQuota] = []
-        for group in groups {
-            guard let groupName = trimmedString(group["displayName"] ?? group["name"]),
-                  let groupID = quotaSummaryGroupID(from: groupName),
-                  let buckets = group["buckets"] as? [[String: Any]] else {
-                continue
-            }
-
-            for bucket in buckets {
-                let bucketID = trimmedString(bucket["bucketId"] ?? bucket["id"]) ?? ""
-                let bucketName = trimmedString(bucket["displayName"] ?? bucket["name"]) ?? bucketID
-                let bucketWindow = trimmedString(bucket["window"]) ?? ""
-
-                guard boolValue(bucket["disabled"]) != true,
-                      let period = quotaSummaryPeriod(from: "\(bucketID) \(bucketName) \(bucketWindow)"),
-                      let remainingFraction = quotaSummaryRemainingFraction(from: bucket) else {
-                    continue
-                }
-
-                models.append(ModelQuota(
-                    name: "antigravity-\(groupID)-\(period.id)",
-                    percentage: (remainingFraction.clamped(to: 0...1) * 100).clamped(to: 0...100),
-                    resetTime: trimmedString(bucket["resetTime"] ?? bucket["reset_time"] ?? bucket["resetAt"] ?? bucket["reset_at"]) ?? ""
-                ))
-            }
-        }
-
-        var seen = Set<String>()
-        return models
-            .filter { seen.insert($0.name).inserted }
-            .sorted { lhs, rhs in
-                let order = [
-                    "antigravity-gemini-session",
-                    "antigravity-gemini-weekly",
-                    "antigravity-claude-gpt-session",
-                    "antigravity-claude-gpt-weekly"
-                ]
-                return (order.firstIndex(of: lhs.name) ?? order.count) < (order.firstIndex(of: rhs.name) ?? order.count)
-            }
-    }
-
-    private static func quotaSummaryGroups(from root: [String: Any]) -> [[String: Any]]? {
-        if let groups = root["groups"] as? [[String: Any]] {
-            return groups
-        }
-        if let response = root["response"] as? [String: Any],
-           let groups = response["groups"] as? [[String: Any]] {
-            return groups
-        }
-        if let summary = root["summary"] as? [String: Any],
-           let groups = summary["groups"] as? [[String: Any]] {
-            return groups
-        }
-        return nil
-    }
-
-    private static func quotaSummaryGroupID(from name: String) -> String? {
-        let lower = name.lowercased()
-        if lower.contains("gemini") {
-            return "gemini"
-        }
-        if lower.contains("claude") || lower.contains("gpt") {
-            return "claude-gpt"
-        }
-        return nil
-    }
-
-    private static func quotaSummaryPeriod(from label: String) -> (id: String, displayName: String)? {
-        let lower = label.lowercased()
-        if lower.contains("week") || lower.contains("7d") || lower.contains("seven") {
-            return ("weekly", "Weekly")
-        }
-        if lower.contains("session") || lower.contains("5") || lower.contains("hour") {
-            return ("session", "Session")
-        }
-        return nil
-    }
-
-    private static func quotaSummaryRemainingFraction(from bucket: [String: Any]) -> Double? {
-        if let value = doubleValue(bucket["remainingFraction"] ?? bucket["remaining_fraction"]) {
-            return value
-        }
-        guard let remaining = bucket["remaining"] as? [String: Any] else { return nil }
-        if let value = doubleValue(remaining["remainingFraction"] ?? remaining["remaining_fraction"]) {
-            return value
-        }
-        if trimmedString(remaining["case"]) == "remainingFraction" {
-            return doubleValue(remaining["value"])
-        }
-        return nil
-    }
-
-    private static func trimmedString(_ value: Any?) -> String? {
-        let raw: String?
-        switch value {
-        case let string as String:
-            raw = string
-        case let number as NSNumber:
-            raw = number.stringValue
-        default:
-            raw = nil
-        }
-        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
-            return nil
-        }
-        return trimmed
-    }
-
-    private static func doubleValue(_ value: Any?) -> Double? {
-        switch value {
-        case let double as Double:
-            return double
-        case let int as Int:
-            return Double(int)
-        case let number as NSNumber:
-            return number.doubleValue
-        case let string as String:
-            return Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
-            return nil
-        }
-    }
-
-    private static func boolValue(_ value: Any?) -> Bool? {
-        if let value = value as? Bool { return value }
-        if let value = value as? NSNumber { return value.boolValue }
-        if let string = trimmedString(value)?.lowercased() {
-            if ["true", "1"].contains(string) { return true }
-            if ["false", "0"].contains(string) { return false }
-        }
-        return nil
     }
 
     private func fetchProjectId(accessToken: String) async -> String? {
@@ -1039,7 +830,7 @@ actor AntigravityQuotaFetcher {
             }
         }
 
-        return try await fetchQuota(accessToken: accessToken)
+        return try await fetchQuota(accessToken: accessToken, projectId: authFile.projectId)
     }
 
     /// Fetch both quota and subscription for an auth file in one operation
@@ -1066,13 +857,15 @@ actor AntigravityQuotaFetcher {
         // Fetch quota - this internally calls fetchProjectId which fetches and caches subscription
         var quota: ProviderQuotaData? = nil
         do {
-            quota = try await fetchQuota(accessToken: accessToken)
+            quota = try await fetchQuota(accessToken: accessToken, projectId: authFile.projectId)
         } catch {
             // Quota fetch failed, but we might still have subscription in cache
         }
 
         // Get subscription from cache (was fetched during fetchProjectId in fetchQuota)
-        let subscription = subscriptionCache[accessToken]
+        let subscription: SubscriptionInfo?
+        if let cached = subscriptionCache[accessToken] { subscription = cached }
+        else { subscription = await fetchSubscriptionInfo(accessToken: accessToken) }
 
         return (quota, subscription)
     }

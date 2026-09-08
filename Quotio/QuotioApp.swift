@@ -27,6 +27,7 @@ final class AppBootstrap {
 
     private(set) var hasInitialized = false
     private(set) var needsOnboarding = false
+    var openWindowHandler: (@MainActor () -> Void)?
 
     private let modeManager = OperatingModeManager.shared
     private let appearanceManager = AppearanceManager.shared
@@ -103,70 +104,59 @@ final class AppBootstrap {
     }
 
     private var quotaItems: [MenuBarQuotaDisplayItem] {
-        guard menuBarSettings.showQuotaInMenuBar else { return [] }
+        // 所有状态栏消费者复用 ViewModel 的账号解析和配额投影，避免第二套计算漂移。
+        viewModel.menuBarQuotaItems
+    }
+}
 
-        var items: [MenuBarQuotaDisplayItem] = []
+// MARK: - Window Chrome Configurator
 
-        for selectedItem in menuBarSettings.selectedItems {
-            guard let provider = selectedItem.aiProvider else { continue }
-
-            var displayPercent: Double = -1
-            var isForbidden = false
-            var quotaPair: MenuBarQuotaPair?
-
-            if let accountQuotas = viewModel.providerQuotas[provider],
-               let quotaData = resolveQuotaData(
-                   for: selectedItem,
-                   provider: provider,
-                   accountQuotas: accountQuotas
-               ) {
-                isForbidden = quotaData.isForbidden
-                if !quotaData.models.isEmpty {
-                    let models = quotaData.models.map { (name: $0.name, percentage: $0.percentage) }
-                    displayPercent = menuBarSettings.totalUsagePercent(models: models)
-                    if menuBarSettings.stackPairedQuotaMetrics {
-                        quotaPair = MenuBarQuotaPair.resolve(for: provider, from: quotaData.models)
-                    }
-                }
-            }
-
-            items.append(MenuBarQuotaDisplayItem(
-                id: selectedItem.id,
-                providerSymbol: provider.menuBarSymbol,
-                accountShort: selectedItem.accountKey,
-                percentage: displayPercent,
-                provider: provider,
-                isForbidden: isForbidden,
-                quotaPair: quotaPair
-            ))
+struct WindowChromeConfigurator: NSViewRepresentable {
+    class ConfiguratorView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            applyChrome(to: window)
         }
 
-        return items
+        func applyChrome(to window: NSWindow?) {
+            guard let window else { return }
+            window.titlebarSeparatorStyle = .none
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .visible
+            window.styleMask.insert(.fullSizeContentView)
+        }
     }
 
-    private func resolveQuotaData(
-        for selectedItem: MenuBarQuotaItem,
-        provider: AIProvider,
-        accountQuotas: [String: ProviderQuotaData]
-    ) -> ProviderQuotaData? {
-        if let quotaData = accountQuotas[selectedItem.accountKey] {
-            return quotaData
+    func makeNSView(context: Context) -> ConfiguratorView {
+        let view = ConfiguratorView()
+        DispatchQueue.main.async {
+            view.applyChrome(to: view.window)
         }
+        return view
+    }
 
-        let cleanKey = selectedItem.accountKey.hasSuffix(".json")
-            ? String(selectedItem.accountKey.dropLast(".json".count))
-            : selectedItem.accountKey
-        if let quotaData = accountQuotas[cleanKey] {
-            return quotaData
+    func updateNSView(_ nsView: ConfiguratorView, context: Context) {
+        DispatchQueue.main.async {
+            nsView.applyChrome(to: nsView.window)
         }
+    }
+}
 
-        if provider == .codex {
-            return accountQuotas[selectedItem.accountKey.codexFilenameKey]
-        }
-        if provider == .copilot, let filenameKey = selectedItem.accountKey.copilotFilenameKey {
-            return accountQuotas[filenameKey]
-        }
-        return nil
+// MARK: - Sidebar Visual Effect View (Native macOS Translucency)
+
+struct SidebarVisualEffectView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let effectView = NSVisualEffectView()
+        effectView.material = .sidebar
+        effectView.blendingMode = .behindWindow
+        effectView.state = .followsWindowActiveState
+        return effectView
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = .sidebar
+        nsView.blendingMode = .behindWindow
+        nsView.state = .followsWindowActiveState
     }
 }
 
@@ -180,6 +170,11 @@ struct QuotioApp: App {
     // Use shared bootstrap instance for viewModel
     private var bootstrap: AppBootstrap { AppBootstrap.shared }
     @State private var logsViewModel = LogsViewModel()
+    // 应用持有统计模型，语言切换造成的 ContentView.id 重建和窗口重开均复用数据层。
+    // 引擎惰性打开数据库，不在应用启动时主动扫描客户端历史。
+    @State private var clientUsage = ClientUsageViewModel()
+    @State private var callAnalytics = CallAnalyticsViewModel()
+    @State private var storageMaintenance = AnalyticsMaintenanceCoordinator()
     @State private var menuBarSettingsStorage: MenuBarSettingsManager? = isRunningUnitTests ? nil : .shared
     @State private var statusBarManager = StatusBarManager.shared
     @State private var modeManagerStorage: OperatingModeManager? = isRunningUnitTests ? nil : .shared
@@ -196,15 +191,20 @@ struct QuotioApp: App {
 
 
     var body: some Scene {
-        Window("Quotio", id: "main") {
+        let _ = setupBootstrapOpenWindow()
+        Window(AppIdentity.displayName, id: "main") {
             if isRunningUnitTests {
                 EmptyView()
             } else {
-                ContentView()
+                ContentView(clientUsage: clientUsage, callAnalytics: callAnalytics)
                     .id(languageManager.currentLanguage) // Force re-render on language change
                     .environment(viewModel)
                     .environment(logsViewModel)
+                    .environment(clientUsage)
+                    .environment(callAnalytics)
+                    .environment(storageMaintenance)
                     .environment(\.locale, languageManager.locale)
+                    .background(WindowChromeConfigurator())
                     .task {
                         // Initialize via bootstrap (idempotent - safe to call multiple times)
                         // This handles the case where window opens before AppDelegate finishes
@@ -279,6 +279,7 @@ struct QuotioApp: App {
             }
         }
         .defaultSize(width: 1000, height: 700)
+        .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) { }
 
@@ -291,6 +292,13 @@ struct QuotioApp: App {
             }
             #endif
         }
+    }
+
+    private func setupBootstrapOpenWindow() -> Bool {
+        bootstrap.openWindowHandler = { [openWindow] in
+            openWindow(id: "main")
+        }
+        return true
     }
 }
 
@@ -324,6 +332,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Apply initial dock visibility based on saved preference
         let showInDock = UserDefaults.standard.bool(forKey: "showInDock")
         NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
+
+        if showInDock {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                MainActor.assumeIsolated {
+                    _ = self?.bringMainWindowToFront(in: NSApp)
+                }
+            }
+        }
 
         // CRITICAL: Initialize app services immediately on launch.
         // This ensures proxy auto-start works even when launched at login
@@ -451,8 +467,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func bringMainWindowToFront(in app: NSApplication) -> Bool {
-        guard let window = mainWindow(in: app) else { return false }
         guard ensureRegularPolicyForMainWindowForeground(in: app) else { return false }
+
+        guard let window = mainWindow(in: app) else {
+            AppBootstrap.shared.openWindowHandler?()
+            app.activate(ignoringOtherApps: true)
+            return true
+        }
 
         trackedDashboardWindow = window
         pendingForegroundReassert = true
@@ -461,6 +482,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.deminiaturize(nil)
         }
 
+        configureWindowChrome(window)
         window.makeKeyAndOrderFront(nil)
 
         DispatchQueue.main.async {
@@ -542,11 +564,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingForegroundReassert = false
     }
 
+    private func configureWindowChrome(_ window: NSWindow?) {
+        guard let window else { return }
+        window.titlebarSeparatorStyle = .none
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .visible
+        window.styleMask.insert(.fullSizeContentView)
+    }
+
     private func handleWindowDidBecomeMain(_ window: NSWindow?) {
         guard let window else { return }
         guard isDashboardWindowCandidate(window) else { return }
 
         trackedDashboardWindow = window
+        configureWindowChrome(window)
     }
 
     private func handleApplicationDidResignActive() {
@@ -571,6 +602,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         promoteToRegularPolicyWithRetry(reason: "didBecomeKey")
         guard ensureRegularPolicyForMainWindowForeground(in: NSApp) else { return }
+
+        configureWindowChrome(keyWindow)
 
         if !NSApp.isActive {
             pendingForegroundReassert = true
@@ -609,58 +642,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct ContentView: View {
     @Environment(QuotaViewModel.self) private var viewModel
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("loggingToFile") private var loggingToFile = true
     @State private var modeManager = OperatingModeManager.shared
+    // 这里只注入应用持有的统计状态，侧栏或语言切换不能重新构造引擎。
+    let clientUsage: ClientUsageViewModel
+    let callAnalytics: CallAnalyticsViewModel
     
     var body: some View {
         @Bindable var vm = viewModel
         
         NavigationSplitView {
             VStack(spacing: 0) {
+                // App Header (macOS System Settings style: icon, name, version)
+                SidebarHeaderView()
+                    .padding(.leading, 12)
+                    .padding(.trailing, 14)
+                    .padding(.top, 8)
+                    .padding(.bottom, 6)
+
                 List(selection: $vm.currentPage) {
                     Section {
                         // Always visible
-                        Label("nav.dashboard".localized(), systemImage: "gauge.with.dots.needle.33percent")
+                        SidebarLabel(title: "nav.dashboard".localized(), page: .dashboard)
                             .tag(NavigationPage.dashboard)
-                        
-                        Label("nav.quota".localized(), systemImage: "chart.bar.fill")
+
+                        // 客户端账本不依赖CPA运行，监控模式也能查看本地Token用量。
+                        SidebarLabel(title: "nav.usageStatistics".localized(), page: .usageStatistics)
+                            .tag(NavigationPage.usageStatistics)
+                        SidebarLabel(title: "nav.callAnalytics".localized(), page: .callAnalytics)
+                            .tag(NavigationPage.callAnalytics)
+
+                        SidebarLabel(title: "nav.quota".localized(), page: .quota)
                             .tag(NavigationPage.quota)
-                        
-                        Label(modeManager.isMonitorMode ? "nav.accounts".localized() : "nav.providers".localized(), 
-                              systemImage: "person.2.badge.key")
-                            .tag(NavigationPage.providers)
-                        
+
+                        SidebarLabel(
+                            title: modeManager.isMonitorMode ? "nav.accounts".localized() : "nav.providers".localized(),
+                            page: .providers
+                        )
+                        .tag(NavigationPage.providers)
+
                         if modeManager.isLocalProxyMode {
-                            Label("nav.agents".localized(), systemImage: "terminal")
+                            SidebarLabel(title: "nav.agents".localized(), page: .agents)
                                 .tag(NavigationPage.agents)
-                            
-                            Label("nav.apiKeys".localized(), systemImage: "key.horizontal")
+
+                            SidebarLabel(title: "nav.apiKeys".localized(), page: .apiKeys)
                                 .tag(NavigationPage.apiKeys)
-                            
-                            if loggingToFile {
-                                Label("nav.logs".localized(), systemImage: "doc.text")
-                                    .tag(NavigationPage.logs)
-                            }
+
+                            // 低频诊断入口集中到设置，避免与日常服务管理混排。
                         }
-                        
-                        Label("nav.settings".localized(), systemImage: "gearshape")
+
+                        SidebarLabel(title: "nav.settings".localized(), page: .settings)
                             .tag(NavigationPage.settings)
-                        
-                        Label("nav.about".localized(), systemImage: "info.circle")
+
+                        SidebarLabel(title: "nav.about".localized(), page: .about)
                             .tag(NavigationPage.about)
                     }
                 }
-                
+                .scrollContentBackground(.hidden)
+
                 // Control section at bottom - current mode badge + status
-                VStack(spacing: 0) {
-                    Divider()
-                    
-                    // Current Mode Badge (replaces ModeSwitcherRow)
+                VStack(spacing: 6) {
                     CurrentModeBadge()
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-                        .padding(.bottom, 6)
-                    
+
                     // Status row - different per mode
                     Group {
                         if modeManager.isLocalProxyMode {
@@ -669,12 +713,17 @@ struct ContentView: View {
                             QuotaRefreshStatusRow(viewModel: viewModel)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 10)
+                    .padding(.horizontal, 4)
                 }
-                .background(.regularMaterial)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
             }
-            .navigationTitle("Quotio")
+            .background(
+                SidebarVisualEffectView()
+                    .overlay(QuotioTheme.Colors.sidebarBackground(for: colorScheme))
+                    .ignoresSafeArea()
+            )
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
             .toolbar {
                 ToolbarItem {
                     if modeManager.isLocalProxyMode {
@@ -701,24 +750,33 @@ struct ContentView: View {
                 }
             }
         } detail: {
-            switch viewModel.currentPage {
-            case .dashboard:
-                DashboardScreen()
-            case .quota:
-                QuotaScreen()
-            case .providers:
-                ProvidersScreen()
-            case .agents:
-                AgentSetupScreen()
-            case .apiKeys:
-                APIKeysScreen()
-            case .logs:
-                LogsScreen()
-            case .settings:
-                SettingsScreen()
-            case .about:
-                AboutScreen()
+            Group {
+                switch viewModel.currentPage {
+                case .dashboard:
+                    // 仪表盘及其明细共用系统导航栈，返回、标题和过渡由 macOS 管理。
+                    NavigationStack { DashboardScreen() }
+                case .usageStatistics:
+                    UsageStatisticsScreen(clientUsage: clientUsage)
+                case .callAnalytics:
+                    CallAnalyticsScreen(viewModel: callAnalytics)
+                case .quota:
+                    QuotaScreen()
+                case .providers:
+                    ProvidersScreen()
+                case .agents:
+                    AgentSetupScreen()
+                case .apiKeys:
+                    APIKeysScreen()
+                case .logs:
+                    // 兼容既有程序化入口，并保留完整的系统返回路径。
+                    SettingsScreen(opensLogs: true)
+                case .settings:
+                    SettingsScreen()
+                case .about:
+                    AboutScreen()
+                }
             }
+            .quotioPage()
         }
     }
 }

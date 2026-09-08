@@ -10,8 +10,10 @@ import SwiftUI
 
 // MARK: - Provider Disclosure Group
 
-/// A collapsible disclosure group that displays all accounts for a specific provider
+/// A collapsible squircle card that displays all accounts for a specific provider
+/// adhering to the macOS 26 fluid design standard (外方内圆, zero dividers, inset well).
 struct ProviderDisclosureGroup: View {
+    @Environment(\.colorScheme) private var colorScheme
     let provider: AIProvider
     let accounts: [AccountRowData]
     var onDeleteAccount: ((AccountRowData) -> Void)?
@@ -22,6 +24,7 @@ struct ProviderDisclosureGroup: View {
     var isAccountActive: ((AccountRowData) -> Bool)?
 
     @State private var isExpanded: Bool = true
+    @State private var isHeaderHovered: Bool = false
 
     /// Check if all accounts in this group are auto-detected
     private var isAllAutoDetected: Bool {
@@ -36,7 +39,104 @@ struct ProviderDisclosureGroup: View {
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
+        VStack(spacing: 0) {
+            // Card Header Button
+            Button {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.80)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                providerHeader
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    isHeaderHovered = hovering
+                }
+            }
+
+            // Expanded Accounts Well (Inset Container with zero dividers)
+            if isExpanded {
+                accountsWell
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(
+            QuotioTheme.Colors.cardBackground(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: - Provider Header
+
+    private var providerHeader: some View {
+        HStack(spacing: 10) {
+            // Provider icon
+            ProviderIcon(provider: provider, size: 22)
+
+            // Provider name
+            Text(provider.displayName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            // Account count badge with brand tint
+            Text("\(accounts.count)")
+                .font(.caption2.bold().monospacedDigit())
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2.5)
+                .background(provider.color.opacity(colorScheme == .dark ? 0.22 : 0.12), in: Capsule())
+                .foregroundStyle(provider.color)
+                .overlay(
+                    Capsule()
+                        .strokeBorder(provider.color.opacity(0.3), lineWidth: 0.5)
+                )
+
+            Spacer()
+
+            // Auto-detected indicator (when all accounts are auto-detected)
+            if isAllAutoDetected {
+                HStack(spacing: 4) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 10))
+                    Text("providers.autoDetected".localized())
+                        .font(.caption2.weight(.medium))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                )
+            }
+
+            // Smooth rotating chevron indicator
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .padding(.leading, 4)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            isHeaderHovered
+                ? QuotioTheme.Colors.cardElevated(for: colorScheme).opacity(0.5)
+                : Color.clear,
+            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
+        )
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Accounts Well (Inset Container)
+
+    private var accountsWell: some View {
+        VStack(spacing: 6) {
             ForEach(displayedAccounts) { account in
                 AccountRow(
                     account: account,
@@ -49,47 +149,19 @@ struct ProviderDisclosureGroup: View {
                         : nil,
                     isActiveInIDE: isAccountActive?(account) ?? false
                 )
-                .padding(.leading, 4)
-            }
-        } label: {
-            providerHeader
-        }
-    }
-    
-    // MARK: - Provider Header
-    
-    private var providerHeader: some View {
-        HStack(spacing: 10) {
-            // Provider icon
-            ProviderIcon(provider: provider, size: 20)
-            
-            // Provider name
-            Text(provider.displayName)
-                .fontWeight(.medium)
-            
-            // Account count badge
-            Text("\(accounts.count)")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(provider.color.opacity(0.15))
-                .foregroundStyle(provider.color)
-                .clipShape(Capsule())
-            
-            Spacer()
-            
-            // Auto-detected indicator (when all accounts are auto-detected)
-            if isAllAutoDetected {
-                Text("providers.autoDetected".localized())
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.1))
-                    .clipShape(Capsule())
             }
         }
+        .padding(8)
+        .background(
+            QuotioTheme.Colors.cardInset(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(0.6), lineWidth: 0.5)
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 12)
     }
 }
 

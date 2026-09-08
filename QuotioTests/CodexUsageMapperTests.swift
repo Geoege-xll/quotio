@@ -142,9 +142,8 @@ final class CodexUsageMapperTests: XCTestCase {
         XCTAssertEqual(quota.models.map(\.name), ["codex-session", "codex-weekly"])
     }
 
-    /// Two windows resolving to the same kind are deduplicated instead of
-    /// rendering a duplicate bucket.
-    func testDuplicateWindowKindsAreDeduplicated() throws {
+    /// 相同周期不代表同一额度池：保留两个窗口的独立数值、重置时间和唯一标识。
+    func testSameWindowKindsKeepIndependentBuckets() throws {
         let quota = try map("""
         {
           "plan_type": "free",
@@ -165,7 +164,10 @@ final class CodexUsageMapperTests: XCTestCase {
         }
         """)
 
-        XCTAssertEqual(quota.models.map(\.name), ["codex-weekly"])
-        XCTAssertEqual(quota.models[0].usedPercentage, 85)
+        XCTAssertEqual(quota.models.count, 2)
+        XCTAssertEqual(quota.models[0].name, "codex-weekly")
+        XCTAssertNotEqual(quota.models[0].name, quota.models[1].name)
+        XCTAssertEqual(quota.models.map(\.usedPercentage), [85, 20])
+        XCTAssertNotEqual(quota.models[0].resetTime, quota.models[1].resetTime)
     }
 }

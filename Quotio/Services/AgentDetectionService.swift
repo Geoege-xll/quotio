@@ -69,6 +69,17 @@ actor AgentDetectionService {
     }
     
     func detectAgent(_ agent: CLIAgent) async -> AgentStatus {
+        // Pi 可通过官方脚本、多个 JS 包管理器或 Homebrew 安装；统一发现路径和启动环境。
+        // 会话目录只代表使用历史，不能作为当前已安装的依据。
+        if agent == .pi {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let installation = PiAgentInstallation(homeDirectory: home.path, environment: ProcessInfo.processInfo.environment)
+            let path = installation.findBinary()
+            let version = if let path { await installation.version(binaryPath: path) } else { nil as String? }
+            let configured = path != nil && PiAgentSupport.isConfigured(homeDirectory: home)
+            return AgentStatus(agent: agent, installed: path != nil, configured: configured, binaryPath: path,
+                               version: version, lastConfigured: configured ? getLastConfiguredDate(agent: agent) : nil)
+        }
         let (installed, binaryPath) = await findBinary(names: agent.binaryNames)
         let version = installed ? await getVersion(binaryPath: binaryPath!) : nil
         let configured = installed ? await checkConfiguration(agent: agent) : false
@@ -219,6 +230,10 @@ actor AgentDetectionService {
     }
     
     private func checkConfigFiles(agent: CLIAgent) -> Bool {
+        // Pi 的接入状态同时依赖插件注册、连接参数和默认模型，不能只搜索 localhost。
+        if agent == .pi {
+            return PiAgentSupport.isConfigured(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        }
         let fileManager = FileManager.default
         let home = fileManager.homeDirectoryForCurrentUser.path
         

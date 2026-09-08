@@ -12,7 +12,7 @@ on:
         type: string
 
 env:
-  PROJECT_NAME: Quotio
+  PROJECT_NAME: QuotioPlus
 
 jobs:
   build-and-release:
@@ -43,11 +43,25 @@ jobs:
       # ===========================================
       - name: Get version
         id: version
+        env:
+          RELEASE_INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+          set -euo pipefail
+          if [ "${RELEASE_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${RELEASE_INPUT_VERSION}"
           else
             VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          # 版本通过环境变量传入并验证，不能将输入直接展开为 shell 代码。
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || exit 1
+          # 标签必须对应已提交的版本与发行说明；CI 不追加版本提交，保证首发历史只有一个二开提交。
+          PROJECT_VERSION=$(awk '/MARKETING_VERSION = / {gsub(";", "", $3); print $3; exit}' Quotio.xcodeproj/project.pbxproj)
+          [[ "${PROJECT_VERSION}" == "${VERSION}" ]] || { echo "请先提交对应版本配置"; exit 1; }
+          [[ -f "docs/releases/${VERSION}.md" ]] || { echo "缺少已提交的发行说明"; exit 1; }
+          # 既有版本只能重跑同一提交，不能把别的源码产物覆盖到相同发行标签下。
+          if git show-ref --verify --quiet "refs/tags/v${VERSION}"; then
+            [[ "$(git rev-parse "v${VERSION}^{commit}")" == "$(git rev-parse HEAD)" ]] || { echo "标签指向其他提交"; exit 1; }
           fi
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           
@@ -169,18 +183,57 @@ jobs:
           } >> "${GITHUB_ENV}"
           echo "enabled=true" >> "${GITHUB_OUTPUT}"
 
-      - name: Build DMG, ZIP, and appcast
+      - name: Build release artifacts
+        id: artifacts
         env:
+          RELEASE_VERSION: ${{ steps.version.outputs.VERSION }}
           POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
           POSTHOG_HOST: ${{ vars.POSTHOG_HOST || 'https://us.i.posthog.com' }}
           SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          # 公钥不是秘密，使用自有仓库变量；打包脚本会验证它与私钥及包内配置匹配。
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
         run: |
-          args=(--version "${{ steps.version.outputs.VERSION }}" --generate-appcast)
+          set -euo pipefail
+          args=(--version "${RELEASE_VERSION}")
+          # 公钥解析与打包脚本一致：仓库变量优先，其次采用版本内 Updates.xcconfig 的公钥。
+          export SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-$(awk '/^SPARKLE_PUBLIC_ED_KEY = / { print $3; exit }' Config/Updates.xcconfig)}"
+          # 首发允许手动更新构建；自动更新只有公私钥成对配置时才发布，半配置仍明确失败。
+          if [[ -n "${SPARKLE_PRIVATE_KEY}" && -n "${SPARKLE_PUBLIC_ED_KEY}" ]]; then
+            args+=(--generate-appcast)
+            echo "has_appcast=true" >> "${GITHUB_OUTPUT}"
+          elif [[ -n "${SPARKLE_PRIVATE_KEY}" || -n "${SPARKLE_PUBLIC_ED_KEY}" ]]; then
+            echo "Sparkle 公钥与私钥必须同时配置" >&2
+            exit 1
+          else
+            echo "has_appcast=false" >> "${GITHUB_OUTPUT}"
+          fi
           if [[ "${SIGNING_ENABLED}" == "true" ]]; then
             args+=(--distribution)
           fi
           ./scripts/build_dmg.sh "${args[@]}"
+          git diff --exit-code -- CHANGELOG.md Quotio.xcodeproj/project.pbxproj
+
+      - name: Prepare release notes
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.VERSION }}
+          SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
+          HAS_APPCAST: ${{ steps.artifacts.outputs.has_appcast }}
+        run: |
+          set -euo pipefail
+          # 使用版本内的人工整理说明，避免首个标签自动列出全部上游开发历史。
+          cp "docs/releases/${RELEASE_VERSION}.md" build/release/release-notes.md
+          printf '\n## 构建与更新\n\n' >> build/release/release-notes.md
+          if [[ "${SIGNING_ENABLED}" == "true" ]]; then
+            printf '%s\n\n' '本安装包已经过 Developer ID 签名和 Apple 公证。' 'This build is Developer ID signed and notarized by Apple.' >> build/release/release-notes.md
+          else
+            printf '%s\n\n' '本安装包使用临时签名，未经 Developer ID 签名和 Apple 公证；macOS 可能要求额外确认。' 'This build uses ad-hoc signing and is not Developer ID signed or notarized. macOS may require additional confirmation.' >> build/release/release-notes.md
+          fi
+          if [[ "${HAS_APPCAST}" == "true" ]]; then
+            printf '%s\n\n' '已提供使用本项目密钥签名的 Sparkle 自动更新文件。' 'A Sparkle update feed signed with this project’s own key is included.' >> build/release/release-notes.md
+          else
+            printf '%s\n\n' '本构建使用发布页手动更新，未启用 Sparkle 自动安装。' 'Update manually through this release page; automatic Sparkle installation is not enabled.' >> build/release/release-notes.md
+          fi
 
       - name: Remove signing credentials
         if: always()
@@ -209,10 +262,16 @@ jobs:
       # ===========================================
       - name: Create tag
         if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          TAG_NAME="v${{ steps.version.outputs.VERSION }}"
-          if ! git tag -l | grep -q "^${TAG_NAME}$"; then
-            git tag -a "${TAG_NAME}" -m "Release ${{ steps.version.outputs.VERSION }}"
+          set -euo pipefail
+          TAG_NAME="v${RELEASE_VERSION}"
+          if ! git show-ref --verify --quiet "refs/tags/${TAG_NAME}"; then
+            # GitHub 新 runner 没有默认作者身份，创建附注标签前显式使用工作流机器人。
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG_NAME}" -m "QuotioPlus ${RELEASE_VERSION}"
             git push origin "${TAG_NAME}"
           fi
 
@@ -228,22 +287,15 @@ jobs:
             build/release/*.dmg
             build/release/*.zip
             build/release/appcast.xml
-          generate_release_notes: true
-          append_body: true
-          body: |
-            
-            ## Installation
-
-            Download `Quotio-${{ steps.version.outputs.VERSION }}.dmg` or `Quotio-${{ steps.version.outputs.VERSION }}.zip` below.
-
-            ${{ steps.signing.outputs.enabled == 'true' && 'The app is signed with Developer ID and notarized by Apple.' || 'This artifact was built without Developer ID signing because Apple signing secrets were not configured.' }}
+          generate_release_notes: false
+          body_path: build/release/release-notes.md
           prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
 
       # ===========================================
       # 7. Update latest stable release with merged appcast
       # ===========================================
       - name: Update latest stable appcast
-        if: steps.version.outputs.IS_PRERELEASE == 'true'
+        if: steps.version.outputs.IS_PRERELEASE == 'true' && steps.artifacts.outputs.has_appcast == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -265,65 +317,6 @@ jobs:
           fi
 
       # ===========================================
-      # 8. Commit version changes
-      # ===========================================
-      - name: Commit changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Check if there are changes to commit
-          if git diff --quiet CHANGELOG.md Quotio.xcodeproj/project.pbxproj; then
-            echo "No changes to commit"
-          else
-            git add CHANGELOG.md Quotio.xcodeproj/project.pbxproj
-            git commit -m "chore: bump version to ${{ steps.version.outputs.VERSION }} [skip ci]"
-            
-            # Determine target branch. For tag-triggered releases, never guess
-            # master/main when the tag commit is present on multiple branches.
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              # For manual dispatch, push to the branch that triggered the workflow
-              TARGET_BRANCH="${{ github.ref_name }}"
-            else
-              # For tag push, prefer the source branch from the webhook payload.
-              BASE_REF="${{ github.event.base_ref }}"
-
-              if [[ "$BASE_REF" == refs/heads/* ]]; then
-                TARGET_BRANCH="${BASE_REF#refs/heads/}"
-              else
-                # If GitHub did not provide a source branch, only push when the
-                # tag commit belongs to exactly one remote branch. Otherwise the
-                # workflow cannot know whether this release came from dev,
-                # master, or another branch, so fail instead of updating the
-                # wrong branch.
-                BRANCHES=$(git branch -r --contains HEAD \
-                  | sed 's/^ *//' \
-                  | grep -v ' -> ' \
-                  | sed 's|^origin/||')
-                BRANCH_COUNT=$(printf '%s\n' "$BRANCHES" | grep -c . || true)
-
-                if [ "$BRANCH_COUNT" -eq 1 ]; then
-                  TARGET_BRANCH="$BRANCHES"
-                else
-                  echo "Error: Cannot determine the source branch for tag ${{ github.ref_name }}."
-                  echo "Branches containing this commit: ${BRANCHES:-none}"
-                  echo "Push the version/changelog commit manually to the intended branch, or run this workflow with workflow_dispatch from that branch."
-                  exit 1
-                fi
-              fi
-            fi
-            
-            # Validate branch exists before pushing
-            if ! git rev-parse --verify "origin/${TARGET_BRANCH}" >/dev/null 2>&1; then
-              echo "Error: Branch ${TARGET_BRANCH} does not exist on remote"
-              exit 1
-            fi
-            
-            echo "Pushing to branch: ${TARGET_BRANCH}"
-            git push origin HEAD:"${TARGET_BRANCH}"
-          fi
-
-      # ===========================================
       # 9. Summary
       # ===========================================
       - name: Summary
@@ -341,10 +334,15 @@ jobs:
       # 10. Trigger homebrew-tap update
       # ===========================================
       - name: Trigger homebrew-tap update
-        if: steps.version.outputs.IS_PRERELEASE == 'false'
+        # 二开仓库只有显式配置自己的 tap 后才通知，不能继续向上游仓库发送发布事件。
+        if: steps.version.outputs.IS_PRERELEASE == 'false' && vars.HOMEBREW_TAP_REPOSITORY != ''
+        env:
+          TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
+          [[ "${TAP_REPOSITORY}" == "${GITHUB_REPOSITORY_OWNER}/"* ]] || { echo "Tap must belong to this repository owner"; exit 1; }
           curl -X POST \
-            -H "Authorization: token ${{ secrets.TAP_TOKEN }}" \
+            -H "Authorization: token ${TAP_TOKEN}" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/nguyenphutrong/homebrew-tap/dispatches \
+            "https://api.github.com/repos/${TAP_REPOSITORY}/dispatches" \
             -d '{"event_type":"quotio-release","client_payload":{"version":"${{ steps.version.outputs.VERSION }}"}}'

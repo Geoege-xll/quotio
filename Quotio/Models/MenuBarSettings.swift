@@ -290,6 +290,19 @@ enum ModelAggregationMode: String, CaseIterable, Identifiable, Codable {
 // MARK: - Usage Calculation Helpers
 
 extension MenuBarSettingsManager {
+    /// 配额页与菜单栏共用的账号摘要。金额、积分等独立指标不能混入百分比聚合，
+    /// 非法值保持未知；Antigravity 的独立额度池始终使用最低剩余量，不做平均。
+    func quotaSummaryPercentage(for provider: AIProvider, models: [ModelQuota]) -> Double {
+        let meters = models.filter { !$0.isStandaloneMetric }
+        if provider == .antigravity {
+            return QuotaPercentagePresentation.lowestRemaining(in: meters) ?? -1
+        }
+        return totalUsagePercent(models: meters.map {
+            (name: $0.name, percentage: QuotaPercentagePresentation.isKnown($0.percentage)
+                ? min(100, $0.percentage) : -1)
+        })
+    }
+
     /// Compute total usage percentage using session/extra logic
     /// Treats extra-usage, codex-extra, on-demand as extra models; all others as session
     func totalUsagePercent(models: [(name: String, percentage: Double)]) -> Double {
@@ -424,11 +437,13 @@ nonisolated struct MenuBarQuotaPair: Equatable, Sendable {
                 from: models,
                 topNames: ["five-hour-session"],
                 topLabelKey: "quota.metric.fiveHour",
-                bottomNames: ["seven-day-weekly", "seven-day-sonnet", "seven-day-opus"],
+                // 主周额度与 Sonnet/Opus 独立额度不能混成一个周余额。
+                bottomNames: ["seven-day-weekly"],
                 bottomLabelKey: "quota.metric.weekly"
             )
         case .codex:
-            let sessionNames: Set<String> = ["codex-session", "codex-spark"]
+            // Spark 是附加能力的独立限额，不得覆盖普通 Codex 的主会话/周额度。
+            let sessionNames: Set<String> = ["codex-session"]
             guard let sessionPercentage = minimumPercentage(in: models, named: sessionNames),
                   sessionPercentage >= 0 else {
                 return nil
@@ -437,7 +452,7 @@ nonisolated struct MenuBarQuotaPair: Equatable, Sendable {
                 from: models,
                 topNames: sessionNames,
                 topLabelKey: "quota.metric.session",
-                bottomNames: ["codex-weekly", "codex-spark-weekly"],
+                bottomNames: ["codex-weekly"],
                 bottomLabelKey: "quota.metric.weekly"
             )
         case .amp:
@@ -450,11 +465,13 @@ nonisolated struct MenuBarQuotaPair: Equatable, Sendable {
                 requiresBoth: true
             )
         case .antigravity:
+            // 仅按上游明确周期分配上下两行；不把模型级剩余量猜成 Session/Weekly。
+            // 同一周期内保留最紧张的额度，兼容旧缓存中的四种汇总名称。
             return makePair(
                 from: models,
-                topNames: ["antigravity-gemini-session", "antigravity-claude-gpt-session"],
+                topNames: Set(models.filter { AntigravityDisplayGroup.window(for: $0) == .session }.map(\.name)),
                 topLabelKey: "quota.metric.session",
-                bottomNames: ["antigravity-gemini-weekly", "antigravity-claude-gpt-weekly"],
+                bottomNames: Set(models.filter { AntigravityDisplayGroup.window(for: $0) == .weekly }.map(\.name)),
                 bottomLabelKey: "quota.metric.weekly"
             )
         case .devin:
@@ -518,9 +535,9 @@ nonisolated struct MenuBarQuotaPair: Equatable, Sendable {
     }
 
     private static func minimumPercentage(in models: [ModelQuota], named names: Set<String>) -> Double? {
-        let matching = models.filter { names.contains($0.name) }
+        let matching = models.filter { names.contains($0.name) && !$0.isStandaloneMetric }
         guard !matching.isEmpty else { return nil }
-        return matching.lazy.map(\.percentage).filter { $0 >= 0 }.min() ?? -1
+        return QuotaPercentagePresentation.lowestRemaining(in: matching) ?? -1
     }
 }
 
