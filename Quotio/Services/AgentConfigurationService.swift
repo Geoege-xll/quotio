@@ -36,7 +36,7 @@ actor AgentConfigurationService {
         /// Claude 启动模型与三档别名映射分别回填，避免重新配置时强制切回 Opus。
         var defaultModel: String? = nil
         var claudeDefaultModel1M = false
-        /// 仅保存配置中明确声明的名称；没有声明时由表单和生成器统一回退到请求 ID。
+        /// 仅保存自定义名称；旧自动 ID 名称归一为空，由表单和生成器统一回退到角色名。
         var modelDisplayNames: [ModelSlot: String] = [:]
         /// Claude Code 高级设置只在 Claude 配置读取路径回填；其他代理保留安全默认值。
         var claudeMaxContextTokens = AgentConfiguration.defaultClaudeMaxContextTokens
@@ -228,7 +228,10 @@ actor AgentConfigurationService {
             defaultModel: defaultModel,
             claudeDefaultModel1M: defaultModel1M,
             modelDisplayNames: Dictionary(uniqueKeysWithValues: ModelSlot.allCases.compactMap { slot in
-                guard let name = env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL_NAME"] else { return nil }
+                // 回填时清除旧版自动生成的 ID 名称，让输入框与真实选择面板使用同一套角色默认值。
+                let modelID = modelSlots[slot] ?? AvailableModel.defaultModels[slot]?.name ?? ""
+                guard let name = AgentConfiguration.normalizedClaudeDisplayName(
+                    env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL_NAME"], for: slot, modelID: modelID) else { return nil }
                 return (slot, name)
             }),
             claudeMaxContextTokens: claudeMaxContextTokens,
@@ -941,10 +944,14 @@ actor AgentConfigurationService {
                     existingSettings["env"] = env.isEmpty ? nil : env
                 }
                 
-                // 仅清理与受管默认值或槽映射相同的顶层模型，保留用户另行设置的模型。
-                if let modelName = existingSettings["model"] as? String,
-                   managedModels.contains(modelName) {
-                    existingSettings.removeValue(forKey: "model")
+                // 顶层可能保留 haiku 等角色，而 DEFAULT_MODEL 已展开为实际 ID；
+                // 只有该角色仍有受管映射时才一起清理，保留用户未受代理映射影响的原生选择。
+                if let modelName = existingSettings["model"] as? String {
+                    let role = ModelSlot(rawValue: normalizedClaudeModelID(modelName).base)
+                    let usesManagedRole = role.map { oldEnv["ANTHROPIC_DEFAULT_\($0.envSuffix)_MODEL"] != nil } ?? false
+                    if managedModels.contains(modelName) || usesManagedRole {
+                        existingSettings.removeValue(forKey: "model")
+                    }
                 }
                 
                 // Write updated settings
@@ -1239,7 +1246,7 @@ actor AgentConfigurationService {
             "ANTHROPIC_AUTH_TOKEN": config.apiKey,
             // 启动默认值不能用 ANTHROPIC_MODEL 持续钉住：/model 会更新顶层 model，
             // 高优先级的旧环境变量会让重启后的选择回退。默认变量允许 CLI 保存的新选择优先。
-            "ANTHROPIC_DEFAULT_MODEL": effectiveDefaultModel,
+            "ANTHROPIC_DEFAULT_MODEL": config.claudeDefaultFallbackModel,
             "CLAUDE_CODE_MAX_CONTEXT_TOKENS": String(config.effectiveClaudeMaxContextTokens),
             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": String(config.claudeAutoCompactPercentage),
             // 显式写入 0，既清理旧版硬编码的 1，也防止继承的发现设置重新展开网关目录。
@@ -1256,8 +1263,8 @@ actor AgentConfigurationService {
             quotioEnvConfig[key] = requestModel
 
             // 官方 _NAME 控制模型选择器标题，_DESCRIPTION 同时用于 /model 的补全说明。
-            // 仅设置映射时，Claude Code 会显示「Custom Opus/Sonnet/Haiku model」。
-            // 名称可由用户单独编辑；说明同时保留实际 ID，让补全菜单也能区分展示名与请求目标。
+            // 自动名称保留 Opus/Sonnet/Haiku，两个角色指向同一模型时也不会出现重复的 ID 标题。
+            // 用户自定义名称继续保留；说明始终包含实际 ID，补全与会话内面板都能核对请求目标。
             let displayName = config.claudeDisplayName(for: slot)
             quotioEnvConfig[key + "_NAME"] = displayName
             quotioEnvConfig[key + "_DESCRIPTION"] = config.claudeModelDescription(for: slot)

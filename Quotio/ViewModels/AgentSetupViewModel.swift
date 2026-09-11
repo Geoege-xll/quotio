@@ -201,9 +201,10 @@ final class AgentSetupViewModel {
 
 
     func updateModelSlot(_ slot: ModelSlot, model: String) {
-        // 旧版自动生成的名称与 ID 相同，应继续跟随模型；用户自定义的名称则保持不变。
+        // 先按旧目标识别自动名称，再切换模型；包含旧 ID 的 1M 后缀，避免它被误留为自定义标题。
         if let previousModel = currentConfiguration?.modelSlots[slot],
-           currentConfiguration?.claudeModelDisplayNames?[slot] == previousModel {
+           AgentConfiguration.normalizedClaudeDisplayName(currentConfiguration?.claudeModelDisplayNames?[slot],
+                for: slot, modelID: previousModel) == nil {
             currentConfiguration?.claudeModelDisplayNames?.removeValue(forKey: slot)
         }
         currentConfiguration?.modelSlots[slot] = model

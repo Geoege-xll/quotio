@@ -50,9 +50,9 @@ final class ClaudeCodeConfigTests: XCTestCase {
         let env = try XCTUnwrap(settings["env"] as? [String: String])
         for slot in ModelSlot.allCases {
             let key = "ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"
-            // /model 补全读取说明，选择器读取名称；两者必须与实际请求用的 ID 一致。
+            // 补全使用角色，选择面板使用名称；自动名称保留角色，说明与实际请求 ID 一致。
             XCTAssertEqual(env[key], config.modelSlots[slot])
-            XCTAssertEqual(env[key + "_NAME"], config.modelSlots[slot])
+            XCTAssertEqual(env[key + "_NAME"], slot.rawValue.capitalized)
             XCTAssertEqual(env[key + "_DESCRIPTION"], config.modelSlots[slot])
         }
         XCTAssertEqual(settings["model"] as? String, "opus")
@@ -78,7 +78,7 @@ final class ClaudeCodeConfigTests: XCTestCase {
         let settings = try readSettings()
         let env = try XCTUnwrap(settings["env"] as? [String: String])
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION"], "provider/new-model")
-        XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"], "provider/new-model")
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"], "Opus")
         XCTAssertEqual(env["USER_SETTING"], "keep")
         XCTAssertEqual(settings["permissions"] as? [String: [String]], ["allow": ["Read"]])
         let firstBackup = try XCTUnwrap(first.backupPath)
@@ -242,7 +242,7 @@ final class ClaudeCodeConfigTests: XCTestCase {
     }
 
     func testResetRemovesManagedDefaultForAliasesAndArbitraryModelIDs() async throws {
-        for model in ["haiku", "custom/start-model"] {
+        for model in ["haiku", "haiku[1m]", "opus[1m]", "custom/start-model"] {
             var config = configuration()
             config.claudeModel = model
             _ = try await generate(config)
@@ -252,6 +252,21 @@ final class ClaudeCodeConfigTests: XCTestCase {
             XCTAssertNil(settings["model"])
             XCTAssertNil(settings["env"])
         }
+    }
+
+    /// 恢复默认只清除仍受角色映射管理的选择，不能仅凭字符串属于 Claude 角色就扩大清理范围。
+    func testResetPreservesNativeRoleWithoutManagedMapping() async throws {
+        _ = try await generate(configuration())
+        var settings = try readSettings()
+        settings["model"] = "haiku"
+        var env = try XCTUnwrap(settings["env"] as? [String: String])
+        env.removeValue(forKey: "ANTHROPIC_DEFAULT_HAIKU_MODEL")
+        settings["env"] = env
+        try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
+        var config = configuration()
+        config.setupMode = .defaultSetup
+        _ = try await generate(config)
+        XCTAssertEqual(try readSettings()["model"] as? String, "haiku")
     }
 
     func testOldEncodedConfigurationDefaultsToOpusSlot() throws {
@@ -344,15 +359,15 @@ final class ClaudeCodeConfigTests: XCTestCase {
         }
     }
 
-    func testEmptyDisplayNameFallsBackToActualModelAndOldDataDecodes() throws {
+    func testEmptyDisplayNameFallsBackToRoleAndOldDataDecodes() throws {
         var config = configuration()
         config.claudeModelDisplayNames = [.opus: "  "]
-        XCTAssertEqual(config.claudeDisplayName(for: .opus), "provider/reasoning-model")
+        XCTAssertEqual(config.claudeDisplayName(for: .opus), "Opus")
         let data = try JSONEncoder().encode(config)
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         object.removeValue(forKey: "claudeModelDisplayNames")
         let restored = try JSONDecoder().decode(AgentConfiguration.self, from: JSONSerialization.data(withJSONObject: object))
-        XCTAssertEqual(restored.claudeDisplayName(for: .sonnet), "provider/coding-model")
+        XCTAssertEqual(restored.claudeDisplayName(for: .sonnet), "Sonnet")
     }
 
     @MainActor
@@ -364,7 +379,100 @@ final class ClaudeCodeConfigTests: XCTestCase {
         XCTAssertEqual(viewModel.currentConfiguration?.claudeDisplayName(for: .opus), "主力模型")
         viewModel.updateModelDisplayName(.sonnet, name: "provider/coding-model")
         viewModel.updateModelSlot(.sonnet, model: "new/coding-model")
-        XCTAssertEqual(viewModel.currentConfiguration?.claudeDisplayName(for: .sonnet), "new/coding-model")
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeDisplayName(for: .sonnet), "Sonnet")
+        viewModel.updateModelDisplayName(.haiku, name: "provider/fast-model[1M]")
+        viewModel.updateModelSlot(.haiku, model: "new/fast-model")
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeDisplayName(for: .haiku), "Haiku")
+    }
+
+    /// 回归用户截图：Opus、Haiku 使用同一请求模型，进入会话后的选择器仍需保留各自角色标题。
+    func testSharedRequestModelKeepsDistinctPickerRolesAcrossSaveAndReload() async throws {
+        var config = configuration()
+        config.modelSlots[.opus] = "shared/model"
+        config.modelSlots[.haiku] = "shared/model"
+        for _ in 0..<2 {
+            _ = try await generate(config)
+            let env = try XCTUnwrap(readSettings()["env"] as? [String: String])
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"], "Opus")
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"], "Haiku")
+            for slot in [ModelSlot.opus, .haiku] {
+                XCTAssertEqual(env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"], "shared/model")
+                XCTAssertEqual(env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL_DESCRIPTION"], "shared/model")
+            }
+            let loaded = await service.readConfiguration(agent: .claudeCode)
+            let saved = try XCTUnwrap(loaded)
+            XCTAssertTrue(saved.modelDisplayNames.isEmpty, "自动角色名称回填为空，继续使用统一默认值")
+            config.claudeModelDisplayNames = saved.modelDisplayNames
+        }
+    }
+
+    /// 已保存的自动 ID 名称必须在回填及重新生成时迁移；有意义的自定义名称保持不变。
+    func testLegacyModelIDNamesMigrateWithoutChangingCustomNamesOrRequestModels() async throws {
+        var config = configuration()
+        config.claudeModel1M = [.opus: true]
+        _ = try await generate(config)
+        var settings = try readSettings()
+        var env = try XCTUnwrap(settings["env"] as? [String: String])
+        env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"] = "provider/reasoning-model[1M]"
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"] = "  日常编码  "
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"] = "provider/fast-model"
+        settings["env"] = env
+        try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
+        let loaded = await service.readConfiguration(agent: .claudeCode)
+        let saved = try XCTUnwrap(loaded)
+        XCTAssertEqual(saved.modelDisplayNames, [.sonnet: "日常编码"])
+        config.claudeModelDisplayNames = saved.modelDisplayNames
+        _ = try await generate(config)
+        let updated = try XCTUnwrap(readSettings()["env"] as? [String: String])
+        for slot in ModelSlot.allCases {
+            let key = "ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"
+            XCTAssertEqual(updated[key], env[key], "迁移显示名称不能更改请求目标或 1M")
+        }
+        XCTAssertEqual(updated["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"], "Opus")
+        XCTAssertEqual(updated["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"], "Haiku")
+        XCTAssertEqual(updated["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"], "日常编码")
+    }
+
+    /// 旧 Codable 草稿可以直接进入生成器，不能只修复从 settings.json 回填的入口。
+    func testLegacyEncodedDraftNormalizesAutomaticNamesButPreservesCustomSpelling() async throws {
+        var config = configuration()
+        config.claudeModelDisplayNames = [.opus: "provider/reasoning-model", .sonnet: "sonnet", .haiku: "provider/fast-model[1m]"]
+        let restored = try JSONDecoder().decode(AgentConfiguration.self, from: JSONEncoder().encode(config))
+        _ = try await generate(restored)
+        let env = try XCTUnwrap(readSettings()["env"] as? [String: String])
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"], "Opus")
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"], "Haiku")
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"], "sonnet", "用户自定义大小写不能被自动角色标题改写")
+    }
+
+    /// Claude 拒绝 DEFAULT_MODEL=haiku：启动选择保留角色，Default 项必须使用解析后的实际 ID。
+    func testHaikuDefaultFallbackResolvesRequestModelAndIndependentContext() async throws {
+        for (selector, slot1M, expected) in [
+            ("haiku", false, "provider/fast-model"),
+            ("haiku", true, "provider/fast-model[1m]"),
+            ("haiku[1m]", false, "provider/fast-model[1m]")
+        ] {
+            var config = configuration()
+            config.claudeModel = selector
+            config.claudeModel1M = [.haiku: slot1M]
+            let result = try await generate(config, storageOption: .both)
+            var settings = try readSettings()
+            let env = try XCTUnwrap(settings["env"] as? [String: String])
+            XCTAssertEqual(settings["model"] as? String, selector)
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_MODEL"], expected)
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "provider/fast-model" + (slot1M ? "[1m]" : ""))
+            XCTAssertTrue(result.shellConfig?.contains("export ANTHROPIC_DEFAULT_MODEL='\(expected)'") == true)
+            let manual = try await generate(config, mode: .manual, storageOption: .shellOnly)
+            XCTAssertTrue(manual.shellConfig?.contains("export ANTHROPIC_MODEL='\(selector)'") == true)
+            XCTAssertTrue(manual.shellConfig?.contains("export ANTHROPIC_DEFAULT_MODEL='\(expected)'") == true)
+            // 模拟原生 /model Default 清除显式选择后回填，目标仍可识别，避免退到未知的系统默认。
+            settings.removeValue(forKey: "model")
+            try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
+            let loaded = await service.readConfiguration(agent: .claudeCode)
+            let saved = try XCTUnwrap(loaded)
+            XCTAssertEqual(saved.defaultModel, "provider/fast-model")
+            XCTAssertEqual(saved.claudeDefaultModel1M, expected.hasSuffix("[1m]"))
+        }
     }
 
     func testAdvancedSettingsWriteToJSONAndShell() async throws {

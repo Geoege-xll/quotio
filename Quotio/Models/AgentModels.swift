@@ -414,7 +414,7 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
     /// 与模型 ID 相同的其他角色无关，避免同一模型在不同用途下意外共享上下文设置。
     var claudeDefaultModel1M: Bool
 
-    /// 显示名称与请求 ID 分开存储；可选字典兼容旧配置，缺省或留空时展示实际模型 ID。
+    /// 显示名称与请求 ID 分开存储；缺省或留空时保留角色名，避免同一模型用于多个角色时无法区分。
     var claudeModelDisplayNames: [ModelSlot: String]?
 
     /// Claude Code 的普通上下文窗口。1M 由各模型自己的后缀声明，不能提升这个全局值，
@@ -467,11 +467,18 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
         claudeGatewayModelDiscovery = try container.decodeIfPresent(Bool.self, forKey: .claudeGatewayModelDiscovery) ?? false
     }
 
+    /// 旧版会把模型 ID 自动写入 _NAME；新旧配置共用归一规则，回填和直接生成时都能修复重复标题。
+    /// 与请求 ID 相同的名称沿用既有“自动名称”判定；其它用户自定义名称原样保留（仅去除首尾空白）。
+    static func normalizedClaudeDisplayName(_ value: String?, for slot: ModelSlot, modelID: String) -> String? {
+        let name = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !name.isEmpty, name != slot.rawValue.capitalized,
+              normalizedClaudeModelID(name).base != normalizedClaudeModelID(modelID).base else { return nil }
+        return name
+    }
+
     func claudeDisplayName(for slot: ModelSlot) -> String {
-        let name = claudeModelDisplayNames?[slot]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !name.isEmpty { return name }
-        let model = modelSlots[slot]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return model.isEmpty ? (AvailableModel.defaultModels[slot]?.name ?? "") : model
+        Self.normalizedClaudeDisplayName(claudeModelDisplayNames?[slot], for: slot,
+            modelID: claudeRequestModel(for: slot)) ?? slot.rawValue.capitalized
     }
 
     func usesClaude1MContext(for slot: ModelSlot) -> Bool {
@@ -496,11 +503,11 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
     }
 
     /// Claude Code 的补全使用说明，选择面板使用显示名称；自定义名称不能代替请求 ID。
-    /// 两者相同时不重复显示，否则同时呈现名称和目标，方便核对角色映射。
+    /// 自动角色名已经显示在左侧，说明只展示目标；自定义名称同时用于补全说明，方便核对映射。
     func claudeModelDescription(for slot: ModelSlot) -> String {
         let request = claudeRequestModel(for: slot)
         let name = claudeDisplayName(for: slot)
-        return name == request ? request : "\(name) · \(request)"
+        return name == slot.rawValue.capitalized ? request : "\(name) · \(request)"
     }
 
     var effectiveClaudeMaxContextTokens: Int {
@@ -521,6 +528,13 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
         if let slot = claudeDefaultModelSlot { return slot.rawValue }
         let base = Self.normalizedClaudeModelID(claudeModel).base
         return claudeDefaultModel1M ? base + "[1m]" : base
+    }
+
+    /// Claude Code 2.1.236 不接受 ANTHROPIC_DEFAULT_MODEL=haiku（含上下文后缀）。
+    /// 顶层 model 仍保留角色以支持回填与继承，仅 Default 回退变量展开为最终请求目标。
+    var claudeDefaultFallbackModel: String {
+        Self.normalizedClaudeModelID(claudeDefaultModelSelector).base == ModelSlot.haiku.rawValue
+            ? claudeDefaultRequestModel : claudeDefaultModelSelector
     }
 
     /// 默认行的只读名称和请求预览均从最终选择推导，不伪造原生 Default 的名称配置字段。

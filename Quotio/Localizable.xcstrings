@@ -2608,25 +2608,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Display names do not change request routing. Leave blank to use the model ID."
+            "value" : "Display names do not change request routing. Leave blank to keep Opus, Sonnet or Haiku; the description shows the actual model."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le nom affiché ne change pas le routage. Laissez vide pour utiliser l’identifiant du modèle."
+            "value" : "Le nom affiché ne change pas le routage. Laissez vide pour conserver Opus, Sonnet ou Haiku ; la description indique le modèle réel."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tên hiển thị không thay đổi mô hình gửi yêu cầu. Để trống để dùng ID mô hình."
+            "value" : "Tên hiển thị không đổi mô hình gửi yêu cầu. Để trống để giữ Opus, Sonnet hoặc Haiku; mô tả hiển thị mô hình thực tế."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "显示名称不改变请求目标；留空时使用实际模型 ID。"
+            "value" : "显示名称不改变请求目标；留空时保留 Opus、Sonnet、Haiku 角色名，说明中显示实际模型。"
           }
         }
       }
@@ -2792,25 +2792,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The picker uses your display names. Command completion keeps the role names and shows their model details."
+            "value" : "Command completion keeps role names. The in-session picker also keeps them unless you enter a custom display name; both show the actual request model."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le sélecteur utilise vos noms d’affichage. La complétion conserve les noms des rôles et affiche les détails des modèles."
+            "value" : "La complétion conserve les rôles. Le sélecteur en session aussi, sauf si vous définissez un nom personnalisé ; tous deux indiquent le modèle réel."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bộ chọn dùng tên hiển thị của bạn. Gợi ý lệnh giữ tên vai trò và hiển thị thông tin mô hình."
+            "value" : "Gợi ý lệnh giữ tên vai trò. Bộ chọn trong phiên cũng giữ tên này trừ khi bạn đặt tên tùy chỉnh; cả hai hiển thị mô hình thực tế."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "模型选择面板使用你填写的显示名称；命令补全保留角色名，并显示对应的模型说明。"
+            "value" : "命令补全保留角色名；进入会话后的选择面板默认也保留角色名，自定义名称仅替换面板标题，两处均显示实际请求模型。"
           }
         }
       }

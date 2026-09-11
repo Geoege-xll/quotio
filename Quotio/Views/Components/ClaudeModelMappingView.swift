@@ -238,7 +238,7 @@ struct ClaudeModelMappingView: View {
                             get: { viewModel.currentConfiguration?.claudeModelDisplayNames?[slot] ?? "" },
                             set: { viewModel.updateModelDisplayName(slot, name: $0) }
                         ),
-                        prompt: Text(verbatim: requestModel(for: slot))
+                        prompt: Text(verbatim: slot.rawValue.capitalized)
                     )
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
