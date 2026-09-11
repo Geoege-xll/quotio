@@ -847,7 +847,7 @@ struct UpdateSettingsSection: View {
                 }
             }
             
-            Button(updaterService.checkButtonTitleKey.localized()) {
+            Button("settings.checkNow".localized()) {
                 updaterService.checkForUpdates()
             }
             .disabled(!updaterService.canCheckForUpdates)

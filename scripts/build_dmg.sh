@@ -227,6 +227,9 @@ generate_appcast() {
     local existing_items=""
     local new_item
 
+    if [ -z "${SPARKLE_PRIVATE_KEY:-}" ] && [ -f "${PROJECT_DIR}/.sparkle_private_key" ]; then
+        SPARKLE_PRIVATE_KEY="$(cat "${PROJECT_DIR}/.sparkle_private_key")"
+    fi
     [ -n "${SPARKLE_PRIVATE_KEY:-}" ] || fail "SPARKLE_PRIVATE_KEY is required for appcast generation"
     require_command curl
     require_command tar
@@ -346,6 +349,9 @@ if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${GITHUB_REPOSITORY}" != "${GITHUB_REPO
     fail "workflow repository does not match Config/Updates.xcconfig"
 fi
 if [ "${GENERATE_APPCAST}" = true ]; then
+    if [ -z "${SPARKLE_PRIVATE_KEY:-}" ] && [ -f "${PROJECT_DIR}/.sparkle_private_key" ]; then
+        SPARKLE_PRIVATE_KEY="$(cat "${PROJECT_DIR}/.sparkle_private_key")"
+    fi
     [ -n "${SPARKLE_PRIVATE_KEY:-}" ] || fail "SPARKLE_PRIVATE_KEY is required for appcast generation"
     [ -n "${SPARKLE_PUBLIC_ED_KEY}" ] || fail "configure the project's SPARKLE_PUBLIC_ED_KEY before publishing"
     [ "${SPARKLE_PUBLIC_ED_KEY}" != "HBpWFjUcNUuuZfdxhVlw2Mc87IT8tj1C68rufluZ0M4=" ] || fail "the upstream Sparkle public key cannot be used for this fork"
