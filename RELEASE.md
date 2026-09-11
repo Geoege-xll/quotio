@@ -57,8 +57,8 @@ Build the current project version without changing source files:
 
 Artifacts are written to `build/release/`:
 
-- `Quotio-<version>.dmg`
-- `Quotio-<version>.zip`
+- `QuotioPlus-<version>.dmg`
+- `QuotioPlus-<version>.zip`
 
 Install `create-dmg` for the custom DMG layout; otherwise the script falls back to `hdiutil`:
 

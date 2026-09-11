@@ -9,6 +9,7 @@
 #include "Updates.xcconfig"
 PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus
 PRODUCT_NAME = Quotio
+INFOPLIST_KEY_CFBundleDisplayName = QuotioPlus
 ENABLE_HARDENED_RUNTIME = YES
 POSTHOG_PROJECT_TOKEN =
 POSTHOG_HOST = https:/$()/us.i.posthog.com

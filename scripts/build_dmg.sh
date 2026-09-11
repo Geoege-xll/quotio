@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_NAME="Quotio"
+APP_NAME="QuotioPlus"
 # 与应用 Bundle 共用仓库配置；不能用上游脚本默认值生成二开版的下载链接。
 UPDATE_CONFIG="${PROJECT_DIR}/Config/Updates.xcconfig"
 GITHUB_REPO="$(awk '/^QUOTIO_RELEASE_REPOSITORY = / { print $3; exit }' "${UPDATE_CONFIG}")"
@@ -11,7 +12,7 @@ PROJECT_FILE="${PROJECT_DIR}/${PROJECT_NAME}.xcodeproj"
 PBXPROJ="${PROJECT_FILE}/project.pbxproj"
 CHANGELOG="${PROJECT_DIR}/CHANGELOG.md"
 BUILD_DIR="${PROJECT_DIR}/build"
-APP_PATH="${BUILD_DIR}/${PROJECT_NAME}.app"
+APP_PATH="${BUILD_DIR}/${APP_NAME}.app"
 RELEASE_DIR="${BUILD_DIR}/release"
 APPCAST_PATH="${RELEASE_DIR}/appcast.xml"
 RELEASE_VERSION=""
@@ -168,7 +169,7 @@ sign_app_for_distribution() {
 }
 
 notarize_app() {
-    local submission_zip="${TEMP_ROOT}/${PROJECT_NAME}-notarization.zip"
+    local submission_zip="${TEMP_ROOT}/${APP_NAME}-notarization.zip"
 
     log "Submitting app for notarization"
     ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${submission_zip}"
@@ -288,7 +289,7 @@ ${channel}"
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
     <channel>
-        <title>${PROJECT_NAME}</title>
+        <title>${APP_NAME}</title>
         <link>https://github.com/${GITHUB_REPO}</link>
         <description>Most recent changes with links to updates.</description>
         <language>en</language>
@@ -367,7 +368,7 @@ BUILD_NUMBER="$(read_build_setting CURRENT_PROJECT_VERSION)"
 [ -n "${VERSION}" ] || fail "MARKETING_VERSION not found"
 [ -n "${BUILD_NUMBER}" ] || fail "CURRENT_PROJECT_VERSION not found"
 
-log "Building ${PROJECT_NAME} ${VERSION} (build ${BUILD_NUMBER})"
+log "Building ${APP_NAME} ${VERSION} (build ${BUILD_NUMBER})"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quotio-release.XXXXXX")"
 ARCHIVE_PATH="${TEMP_ROOT}/${PROJECT_NAME}.xcarchive"
 DERIVED_DATA="${TEMP_ROOT}/DerivedData"
@@ -405,6 +406,8 @@ xcodebuild "${ARCHIVE_ARGS[@]}" 2>&1 | tee "${BUILD_DIR}/release-build.log"
 ARCHIVED_APP="${ARCHIVE_PATH}/Products/Applications/${PROJECT_NAME}.app"
 [ -d "${ARCHIVED_APP}" ] || fail "archive did not contain ${PROJECT_NAME}.app"
 cp -R "${ARCHIVED_APP}" "${APP_PATH}"
+# 确保 Info.plist 显示名称与应用包一致
+/usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName QuotioPlus' "${APP_PATH}/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string QuotioPlus' "${APP_PATH}/Contents/Info.plist"
 # 在签名和封装之前验证真实产物，防止配置漂移生成 Intel 包或错误的最低系统要求。
 APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${APP_PATH}/Contents/Info.plist")"
 [ "$(/usr/bin/lipo -archs "${APP_PATH}/Contents/MacOS/${APP_EXECUTABLE}")" = arm64 ] || fail "Release must contain arm64 only"
@@ -418,8 +421,8 @@ else
     codesign --force --deep --sign - "${APP_PATH}"
 fi
 
-ZIP_FILE="${RELEASE_DIR}/${PROJECT_NAME}-${VERSION}.zip"
-DMG_FILE="${RELEASE_DIR}/${PROJECT_NAME}-${VERSION}.dmg"
+ZIP_FILE="${RELEASE_DIR}/${APP_NAME}-${VERSION}.zip"
+DMG_FILE="${RELEASE_DIR}/${APP_NAME}-${VERSION}.dmg"
 log "Creating ${ZIP_FILE}"
 ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${ZIP_FILE}"
 
@@ -429,12 +432,12 @@ cp -R "${APP_PATH}" "${DMG_STAGING}/"
 log "Creating ${DMG_FILE}"
 if command -v create-dmg >/dev/null 2>&1; then
     if ! create-dmg \
-        --volname "${PROJECT_NAME}" \
+        --volname "${APP_NAME}" \
         --window-pos 200 120 \
         --window-size 600 400 \
         --icon-size 100 \
-        --icon "${PROJECT_NAME}.app" 150 190 \
-        --hide-extension "${PROJECT_NAME}.app" \
+        --icon "${APP_NAME}.app" 150 190 \
+        --hide-extension "${APP_NAME}.app" \
         --app-drop-link 450 185 \
         --no-internet-enable \
         "${DMG_FILE}" \
@@ -443,7 +446,7 @@ if command -v create-dmg >/dev/null 2>&1; then
     fi
 else
     hdiutil create \
-        -volname "${PROJECT_NAME}" \
+        -volname "${APP_NAME}" \
         -srcfolder "${DMG_STAGING}" \
         -ov \
         -format UDZO \
