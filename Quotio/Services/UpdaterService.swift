@@ -71,17 +71,16 @@ final class UpdaterService: NSObject {
     // 只在检查完成时发布一次；不依赖每秒变化的相对时间迫使视图重新读取 Sparkle 属性。
     private(set) var lastUpdateCheckDate: Date?
 
-    var supportsAutomaticUpdates: Bool { true }
-    var checkButtonTitleKey: String { "settings.checkNow" }
+    var supportsAutomaticUpdates: Bool { AppReleaseConfiguration.supportsAutomaticUpdates }
+    var checkButtonTitleKey: String { supportsAutomaticUpdates ? "settings.checkNow" : "updates.own.viewReleases" }
     
     /// Whether an update check is currently in progress
     private(set) var isCheckingForUpdates = false
     
     /// Whether the updater can check for updates
     var canCheckForUpdates: Bool {
-        if !isInitialized {
-            initializeIfNeeded()
-        }
+        if !supportsAutomaticUpdates { return true }
+        guard isInitialized else { return false }
         return updater?.canCheckForUpdates ?? false
     }
     
@@ -113,7 +112,8 @@ final class UpdaterService: NSObject {
     
     /// Initialize Sparkle updater on-demand (memory optimization)
     func initializeIfNeeded() {
-        guard !isInitialized else { return }
+        // 尚未配置自有公钥的开发构建只提供发布页，不使用上游公钥初始化 Sparkle。
+        guard !isInitialized, supportsAutomaticUpdates else { return }
         
         updaterController = SPUStandardUpdaterController(
             startingUpdater: false,
@@ -131,6 +131,10 @@ final class UpdaterService: NSObject {
     
     /// Manually check for updates
     func checkForUpdates() {
+        guard supportsAutomaticUpdates else {
+            NSWorkspace.shared.open(AppReleaseConfiguration.releasesURL)
+            return
+        }
         initializeIfNeeded()
         guard canCheckForUpdates else { return }
         isCheckingForUpdates = true

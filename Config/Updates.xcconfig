@@ -3,4 +3,5 @@ QUOTIO_RELEASE_REPOSITORY = Geoege-xll/quotio
 QUOTIO_UPSTREAM_REPOSITORY = nguyenphutrong/quotio
 
 // 填入本项目自己的 Sparkle Ed25519 公钥，或在构建时覆盖此设置。
-SPARKLE_PUBLIC_ED_KEY = ql7RDobTkmOQXgfP9Gocxqml2Ap1E2FLnHjiZdOF/2A=
+// 空值构建仍可打开本项目发布页，但不会初始化自动安装器；严禁沿用上游公钥。
+SPARKLE_PUBLIC_ED_KEY =

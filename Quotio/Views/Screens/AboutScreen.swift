@@ -378,7 +378,7 @@ struct AboutUpdateCard: View {
                 Spacer()
 
                 #if canImport(Sparkle)
-                Button("settings.checkNow".localized()) {
+                Button(updaterService.checkButtonTitleKey.localized()) {
                     updaterService.checkForUpdates()
                 }
                 .buttonStyle(.bordered)
@@ -417,6 +417,14 @@ struct AboutUpdateCard: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                 }
+            }
+
+            .disabled(!updaterService.supportsAutomaticUpdates)
+
+            if !updaterService.supportsAutomaticUpdates {
+                Text("updates.own.manualOnly".localized())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             // Footer: Last checked info
