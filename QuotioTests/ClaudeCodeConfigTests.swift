@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import AppKit
 @testable import Quotio
 
 final class ClaudeCodeConfigTests: XCTestCase {
@@ -54,7 +56,7 @@ final class ClaudeCodeConfigTests: XCTestCase {
             XCTAssertEqual(env[key + "_DESCRIPTION"], config.modelSlots[slot])
         }
         XCTAssertEqual(settings["model"] as? String, "opus")
-        XCTAssertEqual(env["ANTHROPIC_MODEL"], "opus")
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_MODEL"], "opus")
         XCTAssertEqual(env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317")
         let saved = await service.readConfiguration(agent: .claudeCode)
         XCTAssertEqual(saved?.modelSlots, config.modelSlots)
@@ -110,13 +112,14 @@ final class ClaudeCodeConfigTests: XCTestCase {
             process.executableURL = URL(fileURLWithPath: shell)
             let pipe = Pipe()
             process.standardOutput = pipe
-            process.environment = [:]
+            process.environment = ["ANTHROPIC_MODEL": "old/forced-model"]
             process.arguments = ["-c", script + "\n/usr/bin/env"]
             try process.run()
             let output = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0)
             let lines = Set(String(decoding: output, as: UTF8.self).split(separator: "\n").map(String.init))
+            XCTAssertTrue(lines.contains("ANTHROPIC_MODEL=\(config.claudeModel)"), "仅 Shell 模式必须保留显式启动模型")
             for (key, value) in expected {
                 XCTAssertTrue(lines.contains("\(key)=\(value)"), "Shell 未原样保留字段：\(key)")
             }
@@ -158,7 +161,7 @@ final class ClaudeCodeConfigTests: XCTestCase {
         let settings = try readSettings()
         let env = try XCTUnwrap(settings["env"] as? [String: String])
         XCTAssertEqual(settings["model"] as? String, "sonnet")
-        XCTAssertEqual(env["ANTHROPIC_MODEL"], "sonnet")
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_MODEL"], "sonnet")
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], config.modelSlots[.opus])
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_SONNET_MODEL"], config.modelSlots[.sonnet])
         let saved = await service.readConfiguration(agent: .claudeCode)
@@ -172,8 +175,56 @@ final class ClaudeCodeConfigTests: XCTestCase {
         let settings = try readSettings()
         let env = try XCTUnwrap(settings["env"] as? [String: String])
         XCTAssertEqual(settings["model"] as? String, "custom/start-model")
-        XCTAssertEqual(env["ANTHROPIC_MODEL"], "custom/start-model")
-        XCTAssertTrue(result.shellConfig?.contains("export ANTHROPIC_MODEL='custom/start-model'") == true)
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_MODEL"], "custom/start-model")
+        XCTAssertTrue(result.shellConfig?.contains("export ANTHROPIC_DEFAULT_MODEL='custom/start-model'") == true)
+    }
+
+    /// 仅 Shell 模式不改 JSON，必须保留能覆盖已有顶层 model 的启动变量，尤其是 Haiku 角色。
+    func testShellOnlyKeepsExplicitLaunchModelForHaikuAndCustomIDs() async throws {
+        for model in ["haiku", "custom/start-model"] {
+            var config = configuration()
+            config.claudeModel = model
+            let result = try await generate(config, storageOption: .shellOnly)
+            XCTAssertTrue(result.shellConfig?.contains("export ANTHROPIC_MODEL='\(model)'") == true)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: settingsURL.path))
+        }
+    }
+
+    /// 手动模式和 JSON-only 的 Shell 预览可被单独复制，不能假设用户同时保存了 JSON。
+    func testStandaloneShellAlternativesKeepExplicitModel() async throws {
+        var config = configuration()
+        config.claudeModel = "haiku"
+        for storage in [ConfigStorageOption.jsonOnly, .shellOnly, .both] {
+            let result = try await service.generateConfiguration(
+                agent: .claudeCode, config: config, mode: .manual,
+                storageOption: storage, detectionService: AgentDetectionService()
+            )
+            let shell = try XCTUnwrap(result.rawConfigs.first { $0.format == .shellExport }?.content)
+            XCTAssertTrue(shell.contains("export ANTHROPIC_MODEL='haiku'"))
+            XCTAssertFalse(shell.contains("unset ANTHROPIC_MODEL"))
+        }
+        let automatic = try await generate(config)
+        let shell = try XCTUnwrap(automatic.rawConfigs.first { $0.format == .shellExport }?.content)
+        XCTAssertTrue(shell.contains("export ANTHROPIC_MODEL='haiku'"))
+    }
+
+    /// 同时保存两种配置时，Shell 不再钉住模型；/model 后续保存的 JSON 选择应继续生效。
+    func testCombinedStorageUnsetsInheritedForcedShellModel() async throws {
+        let result = try await generate(configuration(), storageOption: .both)
+        let script = try XCTUnwrap(result.shellConfig)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.environment = ["ANTHROPIC_MODEL": "old/forced-model"]
+        process.arguments = ["-c", script + "\n/usr/bin/env"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        let lines = String(decoding: output, as: UTF8.self).split(separator: "\n")
+        XCTAssertFalse(lines.contains { $0.hasPrefix("ANTHROPIC_MODEL=") })
+        XCTAssertTrue(lines.contains("ANTHROPIC_DEFAULT_MODEL=opus"))
     }
 
     func testReadDefaultHonorsEnvironmentBeforeLegacyTopLevelModel() async throws {
@@ -226,6 +277,73 @@ final class ClaudeCodeConfigTests: XCTestCase {
         XCTAssertEqual(saved?.modelSlots, config.modelSlots)
     }
 
+    /// 模拟用户在 /model 中选中 Sonnet 后，Claude Code 只更新顶层 model 的真实行为。
+    /// 旧版遗留的 ANTHROPIC_MODEL 必须在重新配置时移除，否则重启后仍会回到旧模型。
+    func testModelSelectionAfterSavingIsNotOverriddenByLegacyEnvironment() async throws {
+        _ = try await generate(configuration())
+        var settings = try readSettings()
+        var env = try XCTUnwrap(settings["env"] as? [String: String])
+        env["ANTHROPIC_MODEL"] = "legacy/forced-model"
+        env["USER_SETTING"] = "keep"
+        settings["env"] = env
+        settings["availableModels"] = ["opus", "sonnet", "haiku"]
+        try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
+
+        _ = try await generate(configuration())
+        settings = try readSettings()
+        env = try XCTUnwrap(settings["env"] as? [String: String])
+        XCTAssertNil(env["ANTHROPIC_MODEL"])
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_MODEL"], "opus")
+        XCTAssertEqual(env["USER_SETTING"], "keep")
+        XCTAssertEqual(settings["availableModels"] as? [String], ["opus", "sonnet", "haiku"])
+
+        settings["model"] = "sonnet"
+        try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
+        let saved = await service.readConfiguration(agent: .claudeCode)
+        XCTAssertEqual(saved?.defaultModel, "sonnet")
+
+        // Shell 默认值没有顶层 model 时仍可回填，不把用户清除顶层选择视为配置丢失。
+        settings.removeValue(forKey: "model")
+        try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
+        let fallback = await service.readConfiguration(agent: .claudeCode)
+        XCTAssertEqual(fallback?.defaultModel, "opus")
+    }
+
+    /// 已有发现设置按原值回填；关闭再保存时必须覆盖旧版的 1，且不改变槽映射和名称。
+    func testGatewayDiscoveryRoundTripsAndCanBeDisabledWithoutChangingMappings() async throws {
+        var config = configuration()
+        config.claudeModelDisplayNames = [.opus: "主力模型"]
+        config.claudeGatewayModelDiscovery = true
+        _ = try await generate(config)
+        let enabled = await service.readConfiguration(agent: .claudeCode)
+        XCTAssertEqual(enabled?.claudeGatewayModelDiscovery, true)
+
+        config.claudeGatewayModelDiscovery = false
+        let result = try await generate(config, storageOption: .both)
+        let env = try XCTUnwrap(readSettings()["env"] as? [String: String])
+        XCTAssertEqual(env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"], "0")
+        XCTAssertTrue(result.shellConfig?.contains("export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY='0'") == true)
+        let disabled = await service.readConfiguration(agent: .claudeCode)
+        XCTAssertEqual(disabled?.claudeGatewayModelDiscovery, false)
+        XCTAssertEqual(disabled?.modelSlots, config.modelSlots)
+        XCTAssertEqual(disabled?.modelDisplayNames[.opus], "主力模型")
+    }
+
+    /// 预览必须与实际写入的说明完全一致，包括不同槽各自的 1M 后缀和自定义名称。
+    func testDisplayPreviewMatchesGeneratedDescriptionsForCustomNamesAndOneMillion() async throws {
+        var config = configuration()
+        config.claudeModelDisplayNames = [.opus: "主力推理", .sonnet: "  "]
+        config.claudeModel1M = [.opus: true, .haiku: true]
+        _ = try await generate(config)
+        let env = try XCTUnwrap(readSettings()["env"] as? [String: String])
+        XCTAssertEqual(config.claudeModelDescription(for: .opus), "主力推理 · provider/reasoning-model[1m]")
+        XCTAssertEqual(config.claudeModelDescription(for: .sonnet), "provider/coding-model")
+        for slot in ModelSlot.allCases {
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"], config.claudeRequestModel(for: slot))
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL_DESCRIPTION"], config.claudeModelDescription(for: slot))
+        }
+    }
+
     func testEmptyDisplayNameFallsBackToActualModelAndOldDataDecodes() throws {
         var config = configuration()
         config.claudeModelDisplayNames = [.opus: "  "]
@@ -260,7 +378,7 @@ final class ClaudeCodeConfigTests: XCTestCase {
         XCTAssertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "275000")
         XCTAssertEqual(env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "72")
         XCTAssertEqual(env["DISABLE_AUTO_COMPACT"], "1")
-        XCTAssertEqual(env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"], "1")
+        XCTAssertEqual(env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"], "0")
         XCTAssertEqual(env["CLAUDE_CODE_SUBAGENT_MODEL"], config.modelSlots[.haiku])
 
         let shell = try XCTUnwrap(result.shellConfig)
@@ -280,21 +398,22 @@ final class ClaudeCodeConfigTests: XCTestCase {
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "provider/reasoning-model[1m]")
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_SONNET_MODEL"], "provider/coding-model")
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "provider/fast-model[1m]")
-        XCTAssertEqual(env["ANTHROPIC_MODEL"], "provider/reasoning-model[1m]")
+        // 同名的直接默认选择独立于角色，不能因为 Opus 勾选 1M 就被隐式改变。
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_MODEL"], "provider/reasoning-model")
         XCTAssertEqual(env["CLAUDE_CODE_SUBAGENT_MODEL"], "provider/fast-model[1m]")
-        XCTAssertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
+        XCTAssertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "275000")
 
         let saved = await service.readConfiguration(agent: .claudeCode)
         XCTAssertEqual(saved?.modelSlots, config.modelSlots)
         XCTAssertEqual(saved?.claudeModel1M, [.opus: true, .haiku: true])
-        XCTAssertEqual(saved?.claudeMaxContextTokens, 1_000_000)
+        XCTAssertEqual(saved?.claudeMaxContextTokens, 275_000)
 
         config.claudeModel1M = [:]
         _ = try await generate(config)
         env = try XCTUnwrap(readSettings()["env"] as? [String: String])
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "provider/reasoning-model")
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "provider/fast-model")
-        XCTAssertEqual(env["ANTHROPIC_MODEL"], "provider/reasoning-model")
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_MODEL"], "provider/reasoning-model")
         XCTAssertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "275000")
     }
 
@@ -353,6 +472,8 @@ final class ClaudeCodeConfigTests: XCTestCase {
         object.removeValue(forKey: "claudeAutoCompactPercentage")
         object.removeValue(forKey: "claudeDisableAutoCompact")
         object.removeValue(forKey: "claudeModel1M")
+        object.removeValue(forKey: "claudeGatewayModelDiscovery")
+        object.removeValue(forKey: "claudeDefaultModel1M")
 
         let decoded = try JSONDecoder().decode(
             AgentConfiguration.self,
@@ -362,6 +483,187 @@ final class ClaudeCodeConfigTests: XCTestCase {
         XCTAssertEqual(decoded.claudeAutoCompactPercentage, AgentConfiguration.defaultClaudeAutoCompactPercentage)
         XCTAssertFalse(decoded.claudeDisableAutoCompact)
         XCTAssertTrue(decoded.claudeModel1M.isEmpty)
+        XCTAssertFalse(decoded.claudeGatewayModelDiscovery)
+        XCTAssertFalse(decoded.claudeDefaultModel1M)
     }
 
+    /// 同一个模型用于默认行和多个角色时，每行的上下文声明都必须互相独立。
+    func testDefaultOneMillionIsIndependentEvenWhenAllRowsUseSameID() async throws {
+        var config = configuration()
+        config.claudeModel = "shared/model"
+        config.modelSlots = Dictionary(uniqueKeysWithValues: ModelSlot.allCases.map { ($0, "shared/model") })
+        config.claudeMaxContextTokens = 275_000
+        for enabled in [false, true] {
+            config.claudeDefaultModel1M = enabled
+            config.claudeModel1M = [.opus: !enabled, .sonnet: enabled]
+            let result = try await generate(config, storageOption: .both)
+            let settings = try readSettings()
+            let env = try XCTUnwrap(settings["env"] as? [String: String])
+            let expected = enabled ? "shared/model[1m]" : "shared/model"
+            XCTAssertEqual(settings["model"] as? String, expected)
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_MODEL"], expected)
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], enabled ? "shared/model" : "shared/model[1m]")
+            XCTAssertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "shared/model")
+            XCTAssertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "275000")
+            XCTAssertTrue(result.shellConfig?.contains("export ANTHROPIC_DEFAULT_MODEL='\(expected)'") == true)
+            let saved = await service.readConfiguration(agent: .claudeCode)
+            XCTAssertEqual(saved?.defaultModel, "shared/model")
+            XCTAssertEqual(saved?.claudeDefaultModel1M, enabled)
+        }
+    }
+
+    /// 保存继承时必须保留角色 token；槽目标或开关变化后，默认行自动跟随且可无损回填。
+    @MainActor
+    func testDefaultRoleKeepsReferenceAndInheritsOnlyThatRolesContext() async throws {
+        var config = configuration()
+        config.claudeDefaultModel1M = true // 暂存的独立选择不应影响跟随模式。
+        for slot in ModelSlot.allCases {
+            config.claudeModel = slot.rawValue
+            for enabled in [false, true] {
+                config.claudeModel1M = [.opus: true, .sonnet: true, .haiku: true]
+                config.claudeModel1M[slot] = enabled
+                config.modelSlots[slot] = "changed/\(slot.rawValue)"
+                _ = try await generate(config)
+                XCTAssertEqual(try readSettings()["model"] as? String, slot.rawValue)
+                XCTAssertEqual(config.claudeDefaultUses1MContext, enabled)
+                XCTAssertEqual(config.claudeDefaultRequestModel, "changed/\(slot.rawValue)" + (enabled ? "[1m]" : ""))
+                let saved = await service.readConfiguration(agent: .claudeCode)
+                XCTAssertEqual(saved?.defaultModel, slot.rawValue)
+                XCTAssertEqual(saved?.claudeModel1M[slot] ?? false, enabled)
+            }
+        }
+    }
+
+    /// 旧 JSON 和 cc-switch 来源可能含大写后缀；回填需分离默认行状态，输出只保留一份小写后缀。
+    @MainActor
+    func testExistingDefaultSuffixRoundTripsIndependentlyFromMatchingRole() async throws {
+        _ = try await generate(configuration())
+        var settings = try readSettings()
+        settings["model"] = "provider/reasoning-model[1M]"
+        try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
+        let loaded = await service.readConfiguration(agent: .claudeCode)
+        let saved = try XCTUnwrap(loaded)
+        XCTAssertEqual(saved.defaultModel, "provider/reasoning-model")
+        XCTAssertTrue(saved.claudeDefaultModel1M)
+        XCTAssertTrue(saved.claudeModel1M.isEmpty)
+        var config = configuration()
+        config.claudeDefaultModel = saved.defaultModel
+        config.claudeDefaultModel1M = saved.claudeDefaultModel1M
+        _ = try await generate(config)
+        XCTAssertEqual(try readSettings()["model"] as? String, "provider/reasoning-model[1m]")
+        config.claudeDefaultModel1M = false
+        _ = try await generate(config)
+        XCTAssertEqual(try readSettings()["model"] as? String, "provider/reasoning-model")
+    }
+
+    /// Claude 的迁移或 /model 命令可能保存角色[1m]；它不能悄悄打开角色自身的 1M 开关。
+    @MainActor
+    func testExplicitRoleSuffixPreservedUntilUserReturnsToInheritance() async throws {
+        var config = configuration()
+        config.claudeModel = "opus[1M]"
+        XCTAssertNil(config.claudeDefaultModelSlot)
+        XCTAssertEqual(config.claudeDefaultRequestModel, "provider/reasoning-model[1m]")
+        _ = try await generate(config)
+        let saved = await service.readConfiguration(agent: .claudeCode)
+        XCTAssertEqual(saved?.defaultModel, "opus[1m]")
+        XCTAssertEqual(saved?.claudeDefaultModel1M, true)
+        XCTAssertTrue(saved?.claudeModel1M.isEmpty == true)
+        let viewModel = AgentSetupViewModel()
+        viewModel.currentConfiguration = config
+        viewModel.updateClaudeDefault1MContext(false)
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeModel, "opus")
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeDefaultModelSlot, .opus)
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeDefaultUses1MContext, false)
+        viewModel.updateClaude1MContext(true, for: .opus)
+        viewModel.updateClaudeDefault1MContext(false) // 继承时只读，不能改动角色或覆盖继承。
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeDefaultUses1MContext, true)
+    }
+
+    func testLegacyCodableDefaultSuffixRestoresIndependentOneMillion() throws {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(configuration())) as? [String: Any])
+        object["claudeDefaultModel"] = "custom/model[1M]"
+        object.removeValue(forKey: "claudeDefaultModel1M")
+        let decoded = try JSONDecoder().decode(AgentConfiguration.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(decoded.claudeModel, "custom/model")
+        XCTAssertTrue(decoded.claudeDefaultModel1M)
+        XCTAssertEqual(decoded.claudeDefaultModelSelector, "custom/model[1m]")
+        let restored = try JSONDecoder().decode(AgentConfiguration.self, from: JSONEncoder().encode(decoded))
+        XCTAssertEqual(restored.claudeDefaultModelSelector, decoded.claudeDefaultModelSelector)
+    }
+
+    /// 单独渲染模型表格，避免完整弹窗的滚动区域遮住待验收的默认行；输出位于仓库构建目录。
+    @MainActor
+    func testRenderDefaultRowInheritanceAndIndependentContext() throws {
+        let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("build/ClaudeDefaultRowReview", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for follows in [true, false] {
+            var config = configuration()
+            config.claudeModel = follows ? "opus" : "provider/reasoning-model"
+            config.claudeDefaultModel1M = !follows
+            config.claudeModel1M = [.opus: follows]
+            config.claudeModelDisplayNames = [.opus: "主力推理", .sonnet: "日常编码", .haiku: "快速任务"]
+            let viewModel = AgentSetupViewModel()
+            viewModel.selectedAgent = .claudeCode
+            viewModel.currentConfiguration = config
+            for (name, scheme) in [("light", ColorScheme.light), ("dark", ColorScheme.dark)] {
+                let view = ClaudeModelMappingView(viewModel: viewModel, onOneMillionChange: {})
+                    .frame(width: 540).padding(20)
+                    .background(QuotioTheme.Colors.cardBackground(for: scheme))
+                    .environment(\.colorScheme, scheme)
+                let hosting = NSHostingView(rootView: view)
+                hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+                let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                window.contentView = hosting
+                hosting.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: output.appendingPathComponent("default-\(follows ? "inherited" : "independent")-\(name).png"))
+            }
+        }
+    }
+
+    @MainActor
+    func testRenderAndExportClaudeModelSlotsAndAdvancedSettings() async throws {
+        let output = URL(fileURLWithPath: "/Users/liqunmacmini/Desktop/quotio/build/ClaudeModelDisplayReview", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+
+        var config = AgentConfiguration(agent: .claudeCode, proxyURL: "http://127.0.0.1:8317/v1", apiKey: "quotio-local-test")
+        config.claudeModel = ModelSlot.opus.rawValue
+        config.modelSlots = [
+            .opus: "gemini-3.8-flash-high",
+            .sonnet: "glm-5.3",
+            .haiku: "gemini-3.8-flash-high"
+        ]
+        config.claudeModelDisplayNames = [
+            .opus: "主力推理",
+            .sonnet: "日常编码",
+            .haiku: "快速任务"
+        ]
+        config.claudeModel1M = [.opus: true]
+
+        let viewModel = AgentSetupViewModel()
+        viewModel.selectedAgent = .claudeCode
+        viewModel.currentConfiguration = config
+
+        for (name, scheme) in [("light", ColorScheme.light), ("dark", ColorScheme.dark)] {
+            let view = AgentConfigSheet(viewModel: viewModel, agent: .claudeCode)
+                .frame(width: 580, height: 750)
+                .environment(\.colorScheme, scheme)
+
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            window.contentView = hosting
+            hosting.layoutSubtreeIfNeeded()
+
+            let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: output.appendingPathComponent("claude-sheet-\(name).png"))
+        }
+    }
 }

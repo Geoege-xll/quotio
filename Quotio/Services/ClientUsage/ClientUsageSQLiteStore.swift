@@ -87,13 +87,19 @@ nonisolated final class ClientUsageSQLiteStore {
     }
 
     func ledgerMetadata() throws -> ClientUsageSnapshot {
-        let statuses = try database.query("SELECT source,available,has_errors,files_scanned FROM client_usage_status ORDER BY source") { statement in
+        let statuses = try database.query("""
+            SELECT s.source,s.available,s.has_errors,s.files_scanned,d.read_errors,d.incomplete_sessions
+            FROM client_usage_status s LEFT JOIN client_usage_status_details d ON d.source=s.source
+            ORDER BY s.source
+            """) { statement in
             guard let source = ClientUsageSource(rawValue: Self.text(statement, 0)) else {
                 throw ClientUsageEngine.ArchiveError.invalidArchive
             }
             return ClientUsageStatus(source: source, available: sqlite3_column_int(statement, 1) != 0,
                                      hasErrors: sqlite3_column_int(statement, 2) != 0,
-                                     filesScanned: Int(sqlite3_column_int64(statement, 3)))
+                                     filesScanned: Int(sqlite3_column_int64(statement, 3)),
+                                     readErrors: sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil : sqlite3_column_int(statement, 4) != 0,
+                                     incompleteSessionCount: sqlite3_column_type(statement, 5) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(statement, 5)))
         }
         let date = try database.query("SELECT value FROM client_usage_metadata WHERE id='collected_at'") {
             Date(timeIntervalSince1970: sqlite3_column_double($0, 0))
@@ -109,13 +115,22 @@ nonisolated final class ClientUsageSQLiteStore {
             try writeCheckpoints(snapshot.codexCheckpoints ?? [], previous: previous?.codexCheckpoints ?? [], scope: "ledger")
             let oldStatuses = Dictionary((previous?.statuses ?? []).map { ($0.source, $0) }, uniquingKeysWith: { _, last in last })
             for status in snapshot.statuses where oldStatuses[status.source] != status {
-                try database.execute("INSERT OR REPLACE INTO client_usage_status VALUES(?,?,?,?)", [
-                    .text(status.source.rawValue), Self.bool(status.available), Self.bool(status.hasErrors), .integer(Int64(status.filesScanned))])
+                try saveStatus(status)
             }
             if let date = snapshot.collectedAt {
                 try database.execute("INSERT OR REPLACE INTO client_usage_metadata VALUES('collected_at',?)", [.real(date.timeIntervalSince1970)])
             }
         }
+    }
+
+    /// 原聚合状态保留供旧归档使用，具体诊断单独保存，不改写事件、检查点或历史总量。
+    /// 与调用方的扫描提交共用事务，保证重启后仍能区分读取失败和历史缺口。
+    func saveStatus(_ status: ClientUsageStatus) throws {
+        try database.execute("INSERT OR REPLACE INTO client_usage_status VALUES(?,?,?,?)", [
+            .text(status.source.rawValue), Self.bool(status.available), Self.bool(status.hasErrors), Self.integer(status.filesScanned)])
+        try database.execute("INSERT OR REPLACE INTO client_usage_status_details VALUES(?,?,?)", [
+            .text(status.source.rawValue), status.readErrors.map(Self.bool) ?? .null,
+            status.incompleteSessionCount.map(Self.integer) ?? .null])
     }
 
     static func valid(_ snapshot: ClientUsageSnapshot) -> Bool {

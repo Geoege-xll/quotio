@@ -77,6 +77,10 @@ struct ProxyRuntimeCard: View {
             }
             .buttonStyle(.borderless)
 
+            // 实时性能与吞吐遥测 (形态 B：直接内置于运行服务卡底部，反映网关实时健康与吞吐)
+            Divider().opacity(0.5)
+            ProxyPerformanceTelemetryView(store: viewModel.usageMonitor, isRunning: manager.proxyStatus.running)
+
             if manager.isDownloading {
                 ProgressView(value: manager.downloadProgress)
                     .accessibilityLabel("runtime.installing".localized())
@@ -238,5 +242,99 @@ struct ProxyRuntimeCard: View {
         NSPasteboard.general.clearContents()
         let succeeded = NSPasteboard.general.setString(value, forType: .string)
         copyFeedback = (succeeded ? "availableModels.copied" : "runtime.copyFailed").localized()
+    }
+}
+
+// MARK: - Proxy Performance Telemetry (形态 B：实时网关吞吐与性能遥测)
+
+private struct ProxyPerformanceTelemetryView: View {
+    let store: UsageStatisticsStore
+    var isRunning: Bool = true
+    @State private var metrics: CPAUsageEventMetrics?
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isRunning ? Color.accentColor : Color.secondary)
+                Text("usage.dashboard.performance".localized())
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                if !isRunning {
+                    Text("runtime.stopped".localized())
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+                }
+
+                Spacer()
+            }
+
+            CPAUsageAdaptiveGrid(maximumColumns: 5, minimumColumnWidth: 84, spacing: 8) {
+                telemetryItem(title: "RPM", value: rpmText, help: "每分钟请求数", icon: "arrow.up.arrow.down", tint: .blue)
+                telemetryItem(title: "TPM", value: tpmText, help: "每分钟 Token 吞吐", icon: "number", tint: .purple)
+                telemetryItem(title: "TPS", value: tpsText, help: "Token 生成速度 (t/s)", icon: "bolt.fill", tint: .orange)
+                telemetryItem(title: "TTFT", value: ttftText, help: "首字响应延迟 (ms)", icon: "timer", tint: .indigo)
+                telemetryItem(title: "时延", value: latencyText, help: "平均响应时延 (ms)", icon: "clock", tint: .teal)
+            }
+            .opacity(isRunning ? 1.0 : 0.6)
+        }
+        .task(id: store.statisticsRevision) {
+            metrics = await store.queryRuntimeMetrics()
+        }
+    }
+
+    private var rpmText: String {
+        guard let rpm = metrics?.rpm, metrics?.requests ?? 0 > 0 else { return "—" }
+        return String(format: "%.1f", rpm)
+    }
+
+    private var tpmText: String {
+        guard let tpm = metrics?.tpm, metrics?.requests ?? 0 > 0 else { return "—" }
+        return Int(tpm).formattedCompact
+    }
+
+    private var tpsText: String {
+        guard let tps = metrics?.tps else { return "—" }
+        return String(format: "%.1f", tps)
+    }
+
+    private var ttftText: String {
+        guard let ttft = metrics?.ttft else { return "—" }
+        return String(format: "%.0f ms", ttft)
+    }
+
+    private var latencyText: String {
+        guard let latency = metrics?.latency else { return "—" }
+        return String(format: "%.0f ms", latency)
+    }
+
+    private func telemetryItem(title: String, value: String, help: String, icon: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 9))
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(value == "—" ? .secondary : .primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .help(help)
     }
 }

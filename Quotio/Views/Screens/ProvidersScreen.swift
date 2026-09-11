@@ -818,29 +818,32 @@ struct MenuBarBadge: View {
                     .fill(
                         isSelected
                             ? Color.blue.opacity(colorScheme == .dark ? 0.22 : 0.12)
-                            : (isHovered ? QuotioTheme.Colors.cardElevated(for: colorScheme).opacity(0.8) : Color.clear)
+                            : (isHovered ? QuotioTheme.Colors.cardElevated(for: colorScheme) : QuotioTheme.Colors.cardInset(for: colorScheme))
                     )
-                    .frame(width: 28, height: 28)
 
                 if isSelected {
                     Circle()
-                        .strokeBorder(Color.blue.opacity(colorScheme == .dark ? 0.4 : 0.25), lineWidth: 0.5)
-                        .frame(width: 28, height: 28)
+                        .strokeBorder(Color.blue.opacity(0.35), lineWidth: 0.5)
+                } else {
+                    Circle()
+                        .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(isHovered ? 0.8 : 0.4), lineWidth: 0.5)
                 }
 
                 Image(systemName: isSelected ? "chart.bar.fill" : "chart.bar")
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? .blue : .secondary)
+                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? Color.blue : Color.secondary)
             }
+            .frame(width: 26, height: 26)
             .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactileCircularButtonStyle())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) {
                 isHovered = hovering
             }
         }
         .nativeTooltip(isSelected ? "menubar.hideFromMenuBar".localized() : "menubar.showOnMenuBar".localized())
+        .help(isSelected ? "menubar.hideFromMenuBar".localized() : "menubar.showOnMenuBar".localized())
     }
 }
 

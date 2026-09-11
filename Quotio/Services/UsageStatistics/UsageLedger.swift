@@ -82,6 +82,11 @@ actor UsageLedger {
         return history.merging(into: report, query: query, dimension: dimension, metric: metric, limit: limit)
     }
 
+    func queryRuntimeMetrics(windowSeconds: Double = 3600, now: Date = Date()) throws -> CPAUsageEventMetrics {
+        _ = try load()
+        return try eventStore.runtimeMetrics(windowSeconds: windowSeconds, now: now)
+    }
+
     func queryPricing(_ query: CPAUsageQuery) throws -> CPAUsagePricingReport {
         _ = try load()
         let history = CPAUsageHistoricalReport(history: historicalBuckets, collectedAt: historicalCollectedAt,

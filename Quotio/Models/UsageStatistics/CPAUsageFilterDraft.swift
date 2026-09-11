@@ -10,9 +10,10 @@ nonisolated struct CPAUsageFilterDraft: Hashable, Sendable {
     /// 常驻区展示预设时间、分组和提供商；自定义时间仅在完整面板中编辑，因此也计入隐藏条件。
     /// 指标默认 Tokens，切换成请求数也算一个附加条件，避免收起后隐藏实际统计口径。
     var hiddenConditionCount: Int {
-        [selection.model, selection.source, selection.apiKey].filter { !$0.isEmpty }.count
+        [selection.provider, selection.model, selection.source, selection.apiKey].filter { !$0.isEmpty }.count
             + (selection.outcome == .all ? 0 : 1) + (metric == .tokens ? 0 : 1)
             + (selection.range == .custom ? 1 : 0)
+            + (dimension == .model ? 0 : 1)
     }
 
     mutating func reset(now: Date = Date(), calendar: Calendar = .current) {

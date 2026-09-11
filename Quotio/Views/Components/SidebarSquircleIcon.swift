@@ -64,6 +64,8 @@ extension NavigationPage {
             return "person.2.fill"
         case .agents:
             return "terminal.fill"
+        case .agentManagement:
+            return "slider.horizontal.2.square.on.square"
         case .apiKeys:
             return "key.horizontal.fill"
         case .logs:
@@ -94,6 +96,12 @@ extension NavigationPage {
             // #6366f1 -> #8b5cf6
             return LinearGradient(
                 colors: [Color(red: 0.388, green: 0.400, blue: 0.945), Color(red: 0.545, green: 0.361, blue: 0.965)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+        case .agentManagement:
+            // #7c3aed -> #a855f7
+            return LinearGradient(
+                colors: [Color(red: 0.486, green: 0.227, blue: 0.929), Color(red: 0.659, green: 0.333, blue: 0.969)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
         case .quota:

@@ -153,11 +153,13 @@ final class AgentSetupViewModel {
 
         if agent == .claudeCode {
             currentConfiguration?.claudeDefaultModel = saved.defaultModel
+            currentConfiguration?.claudeDefaultModel1M = saved.claudeDefaultModel1M
             currentConfiguration?.claudeModelDisplayNames = saved.modelDisplayNames
             currentConfiguration?.claudeMaxContextTokens = saved.claudeMaxContextTokens
             currentConfiguration?.claudeAutoCompactPercentage = saved.claudeAutoCompactPercentage
             currentConfiguration?.claudeDisableAutoCompact = saved.claudeDisableAutoCompact
             currentConfiguration?.claudeModel1M = saved.claudeModel1M
+            currentConfiguration?.claudeGatewayModelDiscovery = saved.claudeGatewayModelDiscovery
         }
 
         // Restore saved Codex reasoning effort
@@ -218,6 +220,17 @@ final class AgentSetupViewModel {
         currentConfiguration?.claudeModel1M[slot] = enabled
     }
 
+    /// 默认行只有直接选择时可编辑 1M，继承角色时禁止写入另一份互相冲突的状态。
+    func updateClaudeDefault1MContext(_ enabled: Bool) {
+        guard let config = currentConfiguration, config.claudeDefaultModelSlot == nil else { return }
+        currentConfiguration?.claudeDefaultModel1M = enabled
+        let parsed = AgentConfiguration.normalizedClaudeModelID(config.claudeModel)
+        if !enabled, parsed.uses1M, ModelSlot(rawValue: parsed.base) != nil {
+            // Claude 自身可能保存 opus[1m]；关闭的是显式覆盖，恢复普通角色继承，不改角色槽。
+            currentConfiguration?.claudeModel = parsed.base
+        }
+    }
+
     func updateClaudeMaxContextTokens(_ tokens: Int) {
         currentConfiguration?.claudeMaxContextTokens = tokens
     }
@@ -228,6 +241,11 @@ final class AgentSetupViewModel {
 
     func updateClaudeDisableAutoCompact(_ disabled: Bool) {
         currentConfiguration?.claudeDisableAutoCompact = disabled
+    }
+
+    /// 仅控制网关目录的展示，不刷新或重置用户尚未保存的模型槽、名称及默认模型。
+    func updateClaudeGatewayModelDiscovery(_ enabled: Bool) {
+        currentConfiguration?.claudeGatewayModelDiscovery = enabled
     }
 
     /// 批量移到废纸篓；中途失败也重新读取列表，准确反映已完成的删除。

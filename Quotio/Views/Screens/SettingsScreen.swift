@@ -70,12 +70,27 @@ struct OperatingModeSection: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.vertical, 4)
-            DisclosureGroup("settings.navigation.mode.features".localized()) {
-                ForEach(modeManager.currentMode.features, id: \.self) { feature in
-                    Text(feature).font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("settings.navigation.mode.features".localized())
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(modeManager.currentMode.features, id: \.self) { feature in
+                        HStack(alignment: .top, spacing: 7) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(QuotioTheme.Colors.codexGreen)
+                                .padding(.top, 1)
+                            Text(feature)
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
             }
+            .padding(.top, 4)
         } header: {
             Label("settings.appMode".localized(), systemImage: "switch.2")
         } footer: {

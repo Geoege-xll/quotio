@@ -229,6 +229,58 @@ struct TactileCircularButtonStyle: ButtonStyle {
     }
 }
 
+/// 26pt circular inline menu target with hover wash and hidden indicator
+/// per the design spec's row-action rule.
+struct QuotioCircularMenu<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovered = false
+
+    let systemImage: String
+    var tint: Color = .secondary
+    var backgroundTint: Color? = nil
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        Menu {
+            content()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(fillColor)
+
+                if let backgroundTint {
+                    Circle()
+                        .strokeBorder(backgroundTint.opacity(0.35), lineWidth: 0.5)
+                } else {
+                    Circle()
+                        .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(isHovered ? 0.8 : 0.4), lineWidth: 0.5)
+                }
+
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: 26, height: 26)
+            .contentShape(Circle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
+    }
+
+    private var fillColor: Color {
+        if let backgroundTint {
+            return isHovered ? backgroundTint.opacity(0.18) : backgroundTint.opacity(0.10)
+        }
+        return isHovered ? QuotioTheme.Colors.cardElevated(for: colorScheme) : QuotioTheme.Colors.cardInset(for: colorScheme)
+    }
+}
+
+
 // MARK: - Capsule Action Buttons
 
 /// Primary capsule button: solid accent gradient pill, 0.5pt inner top highlight,
@@ -330,6 +382,32 @@ extension ButtonStyle where Self == QuotioMicroCapsuleButtonStyle {
     static var quotioMicroCapsule: QuotioMicroCapsuleButtonStyle { QuotioMicroCapsuleButtonStyle() }
     static func quotioMicroCapsule(height: CGFloat) -> QuotioMicroCapsuleButtonStyle {
         QuotioMicroCapsuleButtonStyle(height: height)
+    }
+}
+
+/// Primary micro capsule button (24pt height) for compact primary actions
+struct QuotioPrimaryMicroCapsuleButtonStyle: ButtonStyle {
+    var height: CGFloat = 24
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .frame(height: height)
+            .background(
+                Capsule().fill(Color.accentColor)
+            )
+            .opacity(configuration.isPressed ? 0.75 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == QuotioPrimaryMicroCapsuleButtonStyle {
+    static var quotioPrimaryMicroCapsule: QuotioPrimaryMicroCapsuleButtonStyle { QuotioPrimaryMicroCapsuleButtonStyle() }
+    static func quotioPrimaryMicroCapsule(height: CGFloat) -> QuotioPrimaryMicroCapsuleButtonStyle {
+        QuotioPrimaryMicroCapsuleButtonStyle(height: height)
     }
 }
 

@@ -226,7 +226,9 @@ struct UsageStatisticsScreen: View {
                         .frame(width: 6, height: 6)
                 }
                 Text(source.title)
-                Text(sourceStatusKey(activity: activity, status: status).localized()).foregroundStyle(.secondary)
+                // 沿用原状态行与样式，只补充历史缺口数量，不把正常扫描显示为读取失败。
+                Text(String(format: sourceStatusKey(activity: activity, status: status).localized(),
+                            Int64(status?.incompleteSessionCount ?? 0))).foregroundStyle(.secondary)
                 Spacer()
                 if let progress = activity?.progress, progress.filesTotal > 0 {
                     Text(String(format: "usage.client.fileProgress".localized(), progress.filesCompleted, progress.filesTotal))
@@ -256,7 +258,7 @@ struct UsageStatisticsScreen: View {
         case .failed: return "usage.client.readFailed"
         default:
             guard let status else { return "usage.client.queued" }
-            return status.hasErrors ? "usage.client.readFailed" : (status.available ? "usage.client.readable" : "usage.client.missing")
+            return status.readingStatusKey
         }
     }
 

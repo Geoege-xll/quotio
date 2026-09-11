@@ -35,6 +35,7 @@ actor AgentConfigurationService {
         var reasoningEffort: CodexReasoningEffort? = nil
         /// Claude 启动模型与三档别名映射分别回填，避免重新配置时强制切回 Opus。
         var defaultModel: String? = nil
+        var claudeDefaultModel1M = false
         /// 仅保存配置中明确声明的名称；没有声明时由表单和生成器统一回退到请求 ID。
         var modelDisplayNames: [ModelSlot: String] = [:]
         /// Claude Code 高级设置只在 Claude 配置读取路径回填；其他代理保留安全默认值。
@@ -42,6 +43,7 @@ actor AgentConfigurationService {
         var claudeAutoCompactPercentage = AgentConfiguration.defaultClaudeAutoCompactPercentage
         var claudeDisableAutoCompact = false
         var claudeModel1M: [ModelSlot: Bool] = [:]
+        var claudeGatewayModelDiscovery = false
     }
     
     /// Represents a backup file that can be restored
@@ -158,14 +160,7 @@ actor AgentConfigurationService {
     /// model ID. Strip exactly one terminal suffix so malformed IDs are not rewritten
     /// into a different request on read.
     private func normalizedClaudeModelID(_ value: String) -> (base: String, uses1M: Bool) {
-        let model = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard model.hasSuffix("[1m]") else { return (model, false) }
-        return (String(model.dropLast(4)), true)
-    }
-
-    private func claudeRequestModel(baseModel: String, uses1M: Bool) -> String {
-        let normalized = normalizedClaudeModelID(baseModel).base
-        return uses1M ? normalized + "[1m]" : normalized
+        AgentConfiguration.normalizedClaudeModelID(value)
     }
 
     private func readClaudeCodeConfig() -> SavedAgentConfig? {
@@ -197,15 +192,19 @@ actor AgentConfigurationService {
 
         let configuredDefaultModel = env["ANTHROPIC_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
             ?? (json["model"] as? String)
+            ?? env["ANTHROPIC_DEFAULT_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
         let defaultModel: String?
+        let defaultModel1M: Bool
         if let configuredDefaultModel {
             let normalized = normalizedClaudeModelID(configuredDefaultModel)
-            let followsSlot = ModelSlot.allCases.contains { slot in
-                normalized.base == slot.rawValue || normalized.base == modelSlots[slot]
-            }
-            defaultModel = followsSlot ? normalized.base : configuredDefaultModel
+            // 实际 ID 与角色映射相同也不能判为继承；默认行的后缀独立回填。
+            // 外部 CLI 保存的角色[1m] 是显式选择器，保留原生语义而不修改角色本身。
+            defaultModel = normalized.uses1M && ModelSlot(rawValue: normalized.base) != nil
+                ? normalized.base + "[1m]" : normalized.base
+            defaultModel1M = normalized.uses1M
         } else {
             defaultModel = nil
+            defaultModel1M = false
         }
 
         let parsedContextTokens = env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].flatMap(Int.init)
@@ -227,6 +226,7 @@ actor AgentConfigurationService {
             isProxyConfigured: isProxy,
             backupFiles: listBackups(agent: .claudeCode),
             defaultModel: defaultModel,
+            claudeDefaultModel1M: defaultModel1M,
             modelDisplayNames: Dictionary(uniqueKeysWithValues: ModelSlot.allCases.compactMap { slot in
                 guard let name = env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL_NAME"] else { return nil }
                 return (slot, name)
@@ -234,7 +234,10 @@ actor AgentConfigurationService {
             claudeMaxContextTokens: claudeMaxContextTokens,
             claudeAutoCompactPercentage: claudeAutoCompactPercentage,
             claudeDisableAutoCompact: env["DISABLE_AUTO_COMPACT"] == "1",
-            claudeModel1M: claudeModel1M
+            claudeModel1M: claudeModel1M,
+            claudeGatewayModelDiscovery: ["1", "true"].contains(
+                env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"]?.lowercased() ?? ""
+            )
         )
     }
     
@@ -906,6 +909,7 @@ actor AgentConfigurationService {
             "ANTHROPIC_BASE_URL",
             "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_MODEL",
             "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
             "DISABLE_AUTO_COMPACT",
@@ -927,7 +931,8 @@ actor AgentConfigurationService {
                 
                 // 删除前记录受管模型，支持任意代理 ID 和别名；不再用 gpt/gemini 子串猜测归属。
                 let oldEnv = existingSettings["env"] as? [String: String] ?? [:]
-                let modelKeys = ["ANTHROPIC_MODEL"] + ModelSlot.allCases.map { "ANTHROPIC_DEFAULT_\($0.envSuffix)_MODEL" }
+                let modelKeys = ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL"]
+                    + ModelSlot.allCases.map { "ANTHROPIC_DEFAULT_\($0.envSuffix)_MODEL" }
                 let managedModels = Set(modelKeys.compactMap { oldEnv[$0] })
                 if var env = existingSettings["env"] as? [String: String] {
                     for key in keysToRemove {
@@ -1219,43 +1224,26 @@ actor AgentConfigurationService {
 
         // Store base IDs in the form model and apply `[1m]` only to the request
         // values emitted for Claude Code. This keeps disabling 1M reversible.
-        var baseModels: [ModelSlot: String] = [:]
         var requestModels: [ModelSlot: String] = [:]
         for slot in ModelSlot.allCases {
-            let selectedModel = config.modelSlots[slot]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let baseModel = selectedModel.flatMap { $0.isEmpty ? nil : $0 }
-                ?? AvailableModel.defaultModels[slot]!.name
-            baseModels[slot] = normalizedClaudeModelID(baseModel).base
-            requestModels[slot] = claudeRequestModel(
-                baseModel: baseModel,
-                uses1M: config.usesClaude1MContext(for: slot)
-            )
+            requestModels[slot] = config.claudeRequestModel(for: slot)
         }
 
-        // Keep the existing launch-model selection unchanged unless it follows a
-        // role that is explicitly opted into 1M. This preserves aliases and custom
-        // launch IDs while ensuring the active 1M role is actually requested.
-        let configuredDefaultModel = config.claudeModel
-        let normalizedDefaultModel = normalizedClaudeModelID(configuredDefaultModel)
-        let defaultModelSlot = ModelSlot.allCases.first { slot in
-            normalizedDefaultModel.base == slot.rawValue || normalizedDefaultModel.base == baseModels[slot]
-        }
-        let effectiveDefaultModel: String
-        if let defaultModelSlot, config.usesClaude1MContext(for: defaultModelSlot) {
-            effectiveDefaultModel = requestModels[defaultModelSlot] ?? configuredDefaultModel
-        } else {
-            effectiveDefaultModel = configuredDefaultModel
-        }
+        // 默认角色保留 alias，由 Claude 继承该槽的模型和上下文；具体 ID 使用独立的 1M 状态。
+        let effectiveDefaultModel = config.claudeDefaultModelSelector
 
         // 三个槽是 Claude Code 的官方别名映射，值必须保留代理实际接受的模型 ID。
         // 不单独硬编码备用版本，以免界面默认值升级后，配置生成器仍写入旧版本。
         var quotioEnvConfig: [String: String] = [
             "ANTHROPIC_BASE_URL": baseURL,
             "ANTHROPIC_AUTH_TOKEN": config.apiKey,
-            "ANTHROPIC_MODEL": effectiveDefaultModel,
+            // 启动默认值不能用 ANTHROPIC_MODEL 持续钉住：/model 会更新顶层 model，
+            // 高优先级的旧环境变量会让重启后的选择回退。默认变量允许 CLI 保存的新选择优先。
+            "ANTHROPIC_DEFAULT_MODEL": effectiveDefaultModel,
             "CLAUDE_CODE_MAX_CONTEXT_TOKENS": String(config.effectiveClaudeMaxContextTokens),
             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": String(config.claudeAutoCompactPercentage),
-            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+            // 显式写入 0，既清理旧版硬编码的 1，也防止继承的发现设置重新展开网关目录。
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": config.claudeGatewayModelDiscovery ? "1" : "0",
             "CLAUDE_CODE_SUBAGENT_MODEL": requestModels[.haiku] ?? ""
         ]
         if config.claudeDisableAutoCompact {
@@ -1272,15 +1260,23 @@ actor AgentConfigurationService {
             // 名称可由用户单独编辑；说明同时保留实际 ID，让补全菜单也能区分展示名与请求目标。
             let displayName = config.claudeDisplayName(for: slot)
             quotioEnvConfig[key + "_NAME"] = displayName
-            quotioEnvConfig[key + "_DESCRIPTION"] = displayName == requestModel
-                ? requestModel
-                : "\(displayName) · \(requestModel)"
+            quotioEnvConfig[key + "_DESCRIPTION"] = config.claudeModelDescription(for: slot)
         }
 
-        // JSON 与 Shell 导出共用同一份字段，保证两种配置方式的映射和显示完全一致。
-        // 单引号保护模型 ID 和凭据中的 $、反引号等字符；内嵌单引号拆分后再拼接。
-        let shellExports = "# CLIProxyAPI Configuration for Claude Code\n" + quotioEnvConfig.keys.sorted().map { key in
-            let value = quotioEnvConfig[key]!.replacingOccurrences(of: "'", with: "'\"'\"'")
+        // 两种输出共用角色映射和显示信息；仅 Shell 配置仍需要显式启动覆盖，
+        // 否则已有 settings.json 的 model 会压过新选择，且部分角色不能作为 DEFAULT_MODEL。
+        // 同时保存 JSON 和 Shell 时，由 JSON 持有可被 /model 更新的选择，并清除旧的 Shell 强制值。
+        var shellEnvConfig = quotioEnvConfig
+        // 手动配置中的 Shell 是可单独复制的备选方案，即使传入 both 也不能依赖 JSON 已应用。
+        let clearShellOverride = mode == .automatic && storageOption == .both
+        if !clearShellOverride {
+            shellEnvConfig["ANTHROPIC_MODEL"] = effectiveDefaultModel
+        }
+        // 单引号保护模型 ID、名称和凭据；内嵌单引号拆分后拼接，避免执行 Shell 展开。
+        let shellExports = "# CLIProxyAPI Configuration for Claude Code\n"
+            + (clearShellOverride ? "unset ANTHROPIC_MODEL\n" : "")
+            + shellEnvConfig.keys.sorted().map { key in
+            let value = shellEnvConfig[key]!.replacingOccurrences(of: "'", with: "'\"'\"'")
             return "export \(key)='\(value)'"
         }.joined(separator: "\n")
 
@@ -1298,6 +1294,8 @@ actor AgentConfigurationService {
             // `DISABLE_AUTO_COMPACT` has no false value: remove a stale Quotio entry
             // before merging when the user re-enables automatic compaction.
             var mergedEnv = existingConfig["env"] as? [String: String] ?? [:]
+            // 迁移旧版写入的高优先级模型值，避免它覆盖 Claude Code 后续通过 /model 保存的选择。
+            mergedEnv.removeValue(forKey: "ANTHROPIC_MODEL")
             if !config.claudeDisableAutoCompact {
                 mergedEnv.removeValue(forKey: "DISABLE_AUTO_COMPACT")
             }

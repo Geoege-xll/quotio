@@ -803,6 +803,7 @@ nonisolated enum NavigationPage: String, CaseIterable, Identifiable {
     case quota = "Quota"
     case providers = "Providers"
     case agents = "Agents"
+    case agentManagement = "Agent Management"
     case apiKeys = "API Keys"
     case logs = "Logs"
     case settings = "Settings"
@@ -818,12 +819,15 @@ nonisolated enum NavigationPage: String, CaseIterable, Identifiable {
         case .quota: return "chart.bar.fill"
         case .providers: return "person.2.badge.key"
         case .agents: return "terminal"
+        case .agentManagement: return "slider.horizontal.2.square.on.square"
         case .apiKeys: return "key.horizontal"
         case .logs: return "doc.text"
         case .settings: return "gearshape"
         case .about: return "info.circle"
         }
     }
+
+    static let workspace = NavigationPage.agentManagement
 }
 
 // MARK: - Color Extension
@@ -848,11 +852,19 @@ nonisolated extension Color {
 
 extension Int {
     /// 纯数字格式化不依赖 UI 状态，允许统计展示值在非主 actor 上复用相同的紧凑口径。
+    /// 自动在 K -> M -> G 之间进位换算，达到 1G (10^9) 时转换为 G 单位并精简冗余尾零。
     nonisolated var formattedCompact: String {
-        if self >= 1_000_000 {
-            return String(format: "%.1fM", Double(self) / 1_000_000)
-        } else if self >= 1_000 {
-            return String(format: "%.1fK", Double(self) / 1_000)
+        let absValue = abs(self)
+        let sign = self < 0 ? "-" : ""
+        if absValue >= 1_000_000_000 {
+            let value = Double(absValue) / 1_000_000_000
+            return sign + String(format: "%.1fG", value).replacingOccurrences(of: ".0G", with: "G")
+        } else if absValue >= 1_000_000 {
+            let value = Double(absValue) / 1_000_000
+            return sign + String(format: "%.1fM", value).replacingOccurrences(of: ".0M", with: "M")
+        } else if absValue >= 1_000 {
+            let value = Double(absValue) / 1_000
+            return sign + String(format: "%.1fK", value).replacingOccurrences(of: ".0K", with: "K")
         }
         return "\(self)"
     }

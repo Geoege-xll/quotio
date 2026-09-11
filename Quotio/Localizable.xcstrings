@@ -1,1373 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "storage.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Storage & Data"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "存储与数据"
-          }
-        }
-      }
-    },
-    "storage.module.dashboard": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dashboard"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "仪表盘"
-          }
-        }
-      }
-    },
-    "storage.module.clientUsage": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Usage Statistics"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "用量统计"
-          }
-        }
-      }
-    },
-    "storage.module.callAnalytics": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Call Analytics"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "调用分析"
-          }
-        }
-      }
-    },
-    "storage.database.total": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Total analytics storage"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "统计存储总计"
-          }
-        }
-      }
-    },
-    "storage.database.file": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Database file"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "数据库文件"
-          }
-        }
-      }
-    },
-    "storage.database.wal": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transaction log"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "事务日志"
-          }
-        }
-      }
-    },
-    "storage.inspect.refresh": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Refresh storage overview"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "刷新存储概况"
-          }
-        }
-      }
-    },
-    "storage.overview.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Storage Overview"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "存储概况"
-          }
-        }
-      }
-    },
-    "storage.overview.help": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Size includes the database and its transaction log. Row counts represent saved requests or aggregate rows, not the number of calls."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "大小包含数据库与事务日志。行数表示已保存的请求记录或统计汇总行，不等于调用次数。"
-          }
-        }
-      }
-    },
-    "storage.cache.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Caches & Space"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "缓存与空间"
-          }
-        }
-      }
-    },
-    "storage.cache.clear": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clear Caches"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "清理缓存"
-          }
-        }
-      }
-    },
-    "storage.compact.action": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reclaim Database Free Space"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "回收数据库空闲空间"
-          }
-        }
-      }
-    },
-    "storage.cache.help": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clears rebuildable memory and network caches while keeping analytics history and scan progress. Deleted rows leave database pages available for reuse. Reclaiming free space can shrink the file and may take time for large databases."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "清理可重建的内存与网络缓存，保留统计历史和扫描进度。删除统计后，数据库空闲页会留给后续写入；回收空闲空间可尝试缩小文件，数据较多时需要等待。"
-          }
-        }
-      }
-    },
-    "storage.data.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clear Analytics Data"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "清除统计数据"
-          }
-        }
-      }
-    },
-    "storage.data.clear": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clear Selected Analytics Data…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "清除所选统计数据…"
-          }
-        }
-      }
-    },
-    "storage.data.help": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clears only the selected modules’ local analytics, indexes, and scan progress. Accounts, settings, model prices, and client source logs are kept. Existing source logs can be imported again during the next collection; history whose source logs are gone cannot be recovered."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "仅清除所选模块的本地统计、索引与扫描进度，保留账户、配置、模型价格和客户端源日志。仍存在的源日志可在下次采集重新导入；源日志已消失的历史无法恢复。"
-          }
-        }
-      }
-    },
-    "storage.data.confirm.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clear selected analytics data?"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "清除所选统计数据？"
-          }
-        }
-      }
-    },
-    "storage.data.confirm.action": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clear Analytics Data"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "清除统计数据"
-          }
-        }
-      }
-    },
-    "storage.data.confirm.message": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This will clear: %@. This cannot be undone. Client source logs are kept, and future collection may import existing history again."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "将清除：%@。此操作无法撤销。客户端源日志不会删除，后续采集可能再次导入现存历史。"
-          }
-        }
-      }
-    },
-    "storage.operation.running": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Processing, please wait…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在处理，请稍候…"
-          }
-        }
-      }
-    },
-    "storage.inspect.failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not read the storage overview. Please try again."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法读取存储概况，请稍后重试。"
-          }
-        }
-      }
-    },
-    "storage.cache.cleared": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Caches cleared. Analytics history has been kept."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "缓存已清理，统计历史已保留。"
-          }
-        }
-      }
-    },
-    "storage.cache.failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cache cleanup did not finish. Please try again."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "缓存清理未完成，请稍后重试。"
-          }
-        }
-      }
-    },
-    "storage.data.cleared": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selected analytics data cleared. Existing source logs can be imported again during future collection."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "所选统计数据已清除，现存源日志可在后续采集重新导入。"
-          }
-        }
-      }
-    },
-    "storage.data.failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not clear analytics data. The database transaction preserved the existing data."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "统计数据清除失败，数据库事务已保留原有数据。"
-          }
-        }
-      }
-    },
-    "storage.data.clearedRefreshFailed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Analytics data was cleared, but refreshing failed. Please reopen the analytics page."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "统计数据已清除，但页面刷新失败；请重新打开统计页面。"
-          }
-        }
-      }
-    },
-    "storage.compact.completed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Database space reclamation completed."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "数据库空间整理已完成。"
-          }
-        }
-      }
-    },
-    "storage.compact.failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Database space reclamation did not finish. Please try again."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "数据库空间整理未完成，请稍后重试。"
-          }
-        }
-      }
-    },
-  "usage.dashboard.collapseFilters": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Collapse filters"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "收起筛选"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "收合篩選"
-        }
-      }
-    }
-  },
-  "usage.dashboard.expandFilters": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Expand filters"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "展开筛选"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "展開篩選"
-        }
-      }
-    }
-  },
-  "usage.dashboard.cacheRateShort": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Read ratio"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "读取比例"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "讀取比例"
-        }
-      }
-    }
-  },
-  "usage.dashboard.cacheWriteShort": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Write"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "创建"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "建立"
-        }
-      }
-    }
-  },
-  "usage.dashboard.cacheReadShort": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Read"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "读取"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "讀取"
-        }
-      }
-    }
-  },
-  "usage.dashboard.reasoningShort": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Reasoning"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "推理"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "推理"
-        }
-      }
-    }
-  },
-  "usage.dashboard.outputShort": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Output"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "输出"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "輸出"
-        }
-      }
-    }
-  },
-  "usage.dashboard.inputShort": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Input"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "输入"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "輸入"
-        }
-      }
-    }
-  },
-  "usage.dashboard.cache": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Cache"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "缓存"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "快取"
-        }
-      }
-    }
-  },
-  "usage.dashboard.tokenUsage": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Token usage"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Token 用量"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Token 用量"
-        }
-      }
-    }
-  },
-  "usage.dashboard.filterOptionsFailed": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Couldn’t load all options. Previously loaded options remain available."
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "无法加载全部选项，当前仍显示已读取的选项。"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "無法載入全部選項，目前仍顯示已讀取的選項。"
-        }
-      }
-    }
-  },
-  "usage.dashboard.filterOptionsLoading": {
-    "extractionState": "manual",
-    "localizations": {
-      "en": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "Loading all filter options…"
-        }
-      },
-      "zh-Hans": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "正在加载全部筛选选项…"
-        }
-      },
-      "zh-Hant": {
-        "stringUnit": {
-          "state": "translated",
-          "value": "正在載入全部篩選選項…"
-        }
-      }
-    }
-  },
-    "usage.dashboard.allFilters" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "All Filters"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "全部筛选"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "全部篩選"
-          }
-        }
-      }
-    },
-    "usage.dashboard.filtersDraftHint" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose your filters, then select Apply."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "调整筛选条件后点击“应用”。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "調整篩選條件後按一下「套用」。"
-          }
-        }
-      }
-    },
-    "usage.dashboard.hiddenFilters" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%d additional filters"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%d 项附加条件"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%d 項附加條件"
-          }
-        }
-      }
-    },
-    "action.apply" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apply"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "应用"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "套用"
-          }
-        }
-      }
-    },
-    "usage.dashboard.tokenAndCache" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tokens & cache"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Token 与缓存"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Token 與快取"
-          }
-        }
-      }
-    },
-    "usage.dashboard.performance" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Performance & throughput"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "性能与吞吐"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "效能與吞吐"
-          }
-        }
-      }
-    },
-    "usage.dashboard.requestOutcomes" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Request outcomes"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请求结果"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "請求結果"
-          }
-        }
-      }
-    },
-    "usage.records.history" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Historical daily summaries"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "历史日汇总"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "歷史每日彙總"
-          }
-        }
-      }
-    },
-    "usage.records.historyNotice" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "These summaries were saved before individual request details were retained. They preserve daily usage, but cannot reconstruct individual requests."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这些历史仅保存了按日用量，未保存单次请求详情，无法还原为逐条请求。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "這些歷史僅儲存了每日用量，未儲存單次請求詳情，無法還原為逐條請求。"
-          }
-        }
-      }
-    },
-    "usage.records.historyAvailable" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ historical requests are available as daily summaries."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "另有 %@ 次历史请求保存在日汇总中。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "另有 %@ 次歷史請求儲存在每日彙總中。"
-          }
-        }
-      }
-    },
-    "usage.records.historyOmitted" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ historical requests cannot be matched precisely to the selected time or metadata filters."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "另有 %@ 次历史请求无法精确匹配当前时间或附加筛选条件。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "另有 %@ 次歷史請求無法精確符合目前時間或附加篩選條件。"
-          }
-        }
-      }
-    },
-    "usage.records.noIndividualTitle" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No individual request details saved"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未保存单次请求明细"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未儲存單次請求明細"
-          }
-        }
-      }
-    },
-    "usage.records.noIndividualDescription" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Older versions retained daily totals only. Open Historical daily summaries to inspect that usage; new collected requests will appear here."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "旧版本只保留了每日总量。可切换到“历史日汇总”查看；新采集的请求会显示在这里。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "舊版本僅保留每日總量。可切換至「歷史每日彙總」查看；新採集的請求會顯示在這裡。"
-          }
-        }
-      }
-    },
-    "usage.records.noMatches" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No data matches the current filters. Try a broader time range or reset the filters."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "没有匹配当前筛选的数据，可扩大时间范围或重置筛选。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "沒有符合目前篩選的資料，可擴大時間範圍或重設篩選。"
-          }
-        }
-      }
-    },
-    "usage.records.historyCount" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ daily summaries · %@ requests"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ 条日汇总 · %@ 次请求"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ 條每日彙總 · %@ 次請求"
-          }
-        }
-      }
-    },
-    "usage.records.day" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Date"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "日期"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "日期"
-          }
-        }
-      }
-    },
-    "usage.records.historyRequests" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Historical requests"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "历史请求"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "歷史請求"
-          }
-        }
-      }
-    },
-    "usage.records.historyDays" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Days with usage"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "有用量天数"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "有用量天數"
-          }
-        }
-      }
-    },
-    "usage.records.historyModels" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Models"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "模型数量"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "模型數量"
-          }
-        }
-      }
-    },
-    "usage.pricing.partialEstimate" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Partial estimate"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "部分估算"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "部分估算"
-          }
-        }
-      }
-    },
-    "usage.pricing.partialNotice" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Only usage with known token components and configured prices is estimated. Unpriced usage and unknown cache components are excluded; ≥ indicates a lower bound."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "仅估算 Token 分量明确且已配置单价的部分。未配置单价的用量和未知缓存分量未计入费用；“≥”表示已知费用下界。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "僅估算 Token 分量明確且已設定單價的部分。未設定單價的用量與未知快取分量未計入費用；「≥」表示已知費用下限。"
-          }
-        }
-      }
-    },
-    "usage.pricing.historyNotice" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ historical requests are included. Configure model prices to estimate the known token components; unknown cache details remain unpriced."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已纳入 %@ 次历史请求。设置模型单价后可估算已知 Token 分量；未知缓存拆分仍保留为未计价。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已納入 %@ 次歷史請求。設定模型單價後可估算已知 Token 分量；未知快取拆分仍保留為未計價。"
-          }
-        }
-      }
-    },
-    "usage.pricing.configurePrice" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Configure price"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "设置单价"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "設定單價"
-          }
-        }
-      }
-    },
-    "usage.pricing.unpricedRow" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No model prices are configured. Set prices to calculate an estimate."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未设置模型单价，设置后可计算估算费用。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未設定模型單價，設定後可計算估算費用。"
-          }
-        }
-      }
-    },
-    "usage.pricing.historyRow" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ historical requests"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "含 %@ 次历史请求"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "含 %@ 次歷史請求"
-          }
-        }
-      }
-    },
-    "callAnalytics.aggregationTimeZone" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Statistics time zone"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "统计时区"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "統計時區"
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -1392,6 +25,9 @@
     "(default: %@)" : {
       "comment" : "A small note below the base URL field, indicating that it will use the default value if left empty. The placeholder text inside the parentheses is replaced with the actual default value.",
       "isCommentAutoGenerated" : true
+    },
+    "(点击智能体胶囊建立或解除软链接挂载)" : {
+
     },
     "%" : {
 
@@ -1421,6 +57,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@ → %2$@"
+          }
+        }
+      }
+    },
+    "%@: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@: %2$@"
+          }
+        }
+      }
+    },
+    "%@/%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@/%2$@"
           }
         }
       }
@@ -1557,6 +213,12 @@
         }
       }
     },
+    "~/.quotio/skills/" : {
+
+    },
+    "~/.quotio/skills/%@/SKILL.md" : {
+
+    },
     "0.0.0.0 (All Interfaces)" : {
 
     },
@@ -1579,35 +241,35 @@
     "127.0.0.1 (Localhost)" : {
 
     },
-    "about.description": {
-      "extractionState": "stale",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ is a native macOS application for managing CLIProxyAPI - a local proxy server that powers your AI coding agents. Manage multiple AI accounts, track quotas, and configure CLI tools in one place."
+    "about.description" : {
+      "comment" : "关于页说明，%@ 为 Bundle 的应用显示名称。",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is a native macOS application for managing CLIProxyAPI - a local proxy server that powers your AI coding agents. Manage multiple AI accounts, track quotas, and configure CLI tools in one place."
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ est une application macOS native pour gérer CLIProxyAPI - un serveur proxy local qui alimente vos agents de codage IA. Gérez plusieurs comptes IA, suivez les quotas et configurez les outils CLI en un seul endroit."
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ est une application macOS native pour gérer CLIProxyAPI - un serveur proxy local qui alimente vos agents de codage IA. Gérez plusieurs comptes IA, suivez les quotas et configurez les outils CLI en un seul endroit."
           }
         },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ là ứng dụng macOS để quản lý CLIProxyAPI - máy chủ proxy cục bộ hỗ trợ các AI coding agent. Quản lý nhiều tài khoản AI, theo dõi hạn mức và cấu hình các công cụ CLI tại một nơi."
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ là ứng dụng macOS để quản lý CLIProxyAPI - máy chủ proxy cục bộ hỗ trợ các AI coding agent. Quản lý nhiều tài khoản AI, theo dõi hạn mức và cấu hình các công cụ CLI tại một nơi."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ 是一个原生 macOS 应用程序，用于管理 CLIProxyAPI - 一个为您的 AI 编码代理提供支持的本地代理服务器。在一个地方管理多个 AI 账户、跟踪配额和配置 CLI 工具。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 是一个原生 macOS 应用程序，用于管理 CLIProxyAPI - 一个为您的 AI 编码代理提供支持的本地代理服务器。在一个地方管理多个 AI 账户、跟踪配额和配置 CLI 工具。"
           }
         }
-      },
-      "comment": "关于页说明，%@ 为 Bundle 的应用显示名称。"
+      }
     },
     "about.madeWith" : {
       "extractionState" : "stale",
@@ -1722,6 +384,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "账户"
+          }
+        }
+      }
+    },
+    "action.apply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "套用"
           }
         }
       }
@@ -3151,13 +1836,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1M active"
+            "value" : "Some models use 1M"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1M 已启用"
+            "value" : "部分模型已启用 1M"
           }
         }
       }
@@ -3168,13 +1853,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A role using [1m] writes 1,000,000 without replacing this value."
+            "value" : "Used for custom models without a 1M declaration. Each model’s 1M setting leaves this value unchanged."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "任一角色使用 [1m] 时会写入 1,000,000，但不会替换此值。"
+            "value" : "用于未声明 1M 的自定义模型；各模型的 1M 设置不会改变此值。"
           }
         }
       }
@@ -3630,25 +2315,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choose the default model for Codex CLI. Saved custom models are kept even when absent from the refreshed list."
+            "value" : "Save the model ID or proxy alias Codex CLI uses at startup. Codex's /model menu uses its own catalog; saving here does not add proxy models to that menu. Saved selections are kept when absent from the refreshed list."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choisissez le modèle par défaut de Codex CLI. Les modèles personnalisés enregistrés sont conservés même s’ils sont absents de la liste actualisée."
+            "value" : "Enregistrez l’ID du modèle ou l’alias du proxy utilisé au démarrage de Codex CLI. Son menu /model utilise son propre catalogue ; cet enregistrement n’y ajoute pas les modèles du proxy. Les choix enregistrés sont conservés même s’ils sont absents de la liste actualisée."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Chọn mô hình mặc định cho Codex CLI. Mô hình tùy chỉnh đã lưu vẫn được giữ khi không có trong danh sách làm mới."
+            "value" : "Lưu ID mô hình hoặc bí danh proxy dùng khi Codex CLI khởi động. Menu /model của Codex dùng danh mục riêng; lưu tại đây không thêm mô hình proxy vào menu đó. Lựa chọn đã lưu vẫn được giữ khi không có trong danh sách làm mới."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择 Codex CLI 的默认模型。已保存的自定义模型会保留，即使刷新后的列表中暂时没有它。"
+            "value" : "保存 Codex CLI 启动时使用的模型 ID 或代理别名。Codex 的 /model 菜单使用独立目录，此处保存不会把代理模型加入该菜单。已保存的选择会保留，即使刷新后的列表中暂时没有它。"
           }
         }
       }
@@ -3798,6 +2483,96 @@
         }
       }
     },
+    "agents.modelMapping.defaultNameInfo" : {
+      "comment" : "默认模型合并到模型用途表格：区分独立设置与角色继承。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The startup name follows the selected model or role. Claude Code manages the Default menu title."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le nom suit le modèle ou le rôle choisi. Claude Code gère le titre du menu Par défaut."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tên khởi động theo mô hình hoặc vai trò đã chọn. Claude Code quản lý tiêu đề mục mặc định."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称随所选模型或角色显示；Claude Code 的 Default 菜单标题由客户端管理。"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.defaultOneMillionInfo" : {
+      "comment" : "默认模型合并到模型用途表格：区分独立设置与角色继承。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A specific model has its own 1M setting. A linked role inherits that role’s setting. Disabling an explicit role[1m] selection returns to the role’s setting."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un modèle précis a son propre réglage 1M. Un rôle lié hérite du sien. Désactiver un choix explicite rôle[1m] rétablit le réglage du rôle."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mô hình cụ thể có tùy chọn 1M riêng. Khi theo vai trò, tùy chọn được kế thừa. Tắt lựa chọn vai trò[1m] sẽ trở về tùy chọn của vai trò."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指定模型时独立设置 1M；跟随角色时继承该角色的设置。关闭显式角色[1m]选择后，恢复跟随该角色。"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.defaultRole" : {
+      "comment" : "默认模型合并到模型用途表格：区分独立设置与角色继承。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Par défaut"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mặc định"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认"
+          }
+        }
+      }
+    },
     "agents.modelMapping.displayName" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3856,6 +2631,96 @@
         }
       }
     },
+    "agents.modelMapping.gatewayModels" : {
+      "comment" : "Claude Code 模型槽展示设置；说明网关发现与角色显示名称的区别。",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show other gateway models in /model"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher les autres modèles de la passerelle dans /model"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hiển thị các mô hình gateway khác trong /model"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 /model 中显示其他网关模型"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.gatewayModelsInfo" : {
+      "comment" : "Claude Code 模型槽展示设置；说明网关发现与角色显示名称的区别。",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adds models from the proxy, which may use compatibility names. Restart Claude Code after saving."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajoute les modèles du proxy, qui peuvent utiliser des noms de compatibilité. Redémarrez Claude Code après enregistrement."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thêm mô hình từ proxy, có thể dùng tên tương thích. Khởi động lại Claude Code sau khi lưu."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启后还会列出代理提供的模型，部分代理使用兼容名称。保存后重启 Claude Code 生效。"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.inherited" : {
+      "comment" : "默认模型合并到模型用途表格：区分独立设置与角色继承。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Linked"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hérité"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kế thừa"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继承"
+          }
+        }
+      }
+    },
     "agents.modelMapping.oneMillion" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3886,6 +2751,96 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "为该角色的请求模型追加 [1m]。"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.preview" : {
+      "comment" : "Claude Code 模型槽展示设置；说明网关发现与角色显示名称的区别。",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/model slot completion preview"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aperçu des complétions des rôles /model"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Xem trước gợi ý vai trò /model"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/model 模型槽补全预览"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.previewInfo" : {
+      "comment" : "Claude Code 模型槽展示设置；说明网关发现与角色显示名称的区别。",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The picker uses your display names. Command completion keeps the role names and shows their model details."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le sélecteur utilise vos noms d’affichage. La complétion conserve les noms des rôles et affiche les détails des modèles."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bộ chọn dùng tên hiển thị của bạn. Gợi ý lệnh giữ tên vai trò và hiển thị thông tin mô hình."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型选择面板使用你填写的显示名称；命令补全保留角色名，并显示对应的模型说明。"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.purpose" : {
+      "comment" : "默认模型合并到模型用途表格：区分独立设置与角色继承。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usage"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usage"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mục đích"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型用途"
           }
         }
       }
@@ -3944,6 +2899,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "模型角色"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.startup" : {
+      "comment" : "默认模型合并到模型用途表格：区分独立设置与角色继承。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startup"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Démarrage"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Khởi động"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动模型"
           }
         }
       }
@@ -4417,6 +3402,42 @@
         }
       }
     },
+    "agents.pi.statusHelp" : {
+      "comment" : "区分 Pi 可执行文件安装状态与 Quotio/CPA 代理配置状态。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installed means the Pi executable was found. Configured means Pi is connected to CPA through Quotio. Signing in to another provider does not change this status."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installé signifie que l’exécutable Pi a été détecté. Configuré signifie que Pi est connecté à CPA via Quotio. La connexion à un autre fournisseur ne change pas cet état."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã cài đặt nghĩa là đã tìm thấy tệp thực thi Pi. Đã cấu hình nghĩa là Pi đã kết nối với CPA qua Quotio. Đăng nhập vào nhà cung cấp khác không thay đổi trạng thái này."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已安装表示已找到 Pi 可执行文件；已配置表示已通过 Quotio 接入 CPA。Pi 登录其他提供商不会改变此接入状态。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已安裝表示已找到 Pi 執行檔；已設定表示已透過 Quotio 接入 CPA。Pi 登入其他供應商不會改變此接入狀態。"
+          }
+        }
+      }
+    },
     "agents.proxyRemovalWarning" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4819,42 +3840,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "超高"
-          }
-        }
-      }
-    },
-    "agents.pi.statusHelp": {
-      "comment": "区分 Pi 可执行文件安装状态与 Quotio/CPA 代理配置状态。",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Installed means the Pi executable was found. Configured means Pi is connected to CPA through Quotio. Signing in to another provider does not change this status."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已安装表示已找到 Pi 可执行文件；已配置表示已通过 Quotio 接入 CPA。Pi 登录其他提供商不会改变此接入状态。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已安裝表示已找到 Pi 執行檔；已設定表示已透過 Quotio 接入 CPA。Pi 登入其他供應商不會改變此接入狀態。"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Installé signifie que l’exécutable Pi a été détecté. Configuré signifie que Pi est connecté à CPA via Quotio. La connexion à un autre fournisseur ne change pas cet état."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đã cài đặt nghĩa là đã tìm thấy tệp thực thi Pi. Đã cấu hình nghĩa là Pi đã kết nối với CPA qua Quotio. Đăng nhập vào nhà cung cấp khác không thay đổi trạng thái này."
           }
         }
       }
@@ -5531,6 +4516,9 @@
           }
         }
       }
+    },
+    "AI 编码智能体总磁盘占用" : {
+
     },
     "amp.apiKey.hint" : {
       "extractionState" : "stale",
@@ -7789,15 +6777,35 @@
         }
       }
     },
-    "Beta Channel" : {
-
-    },
     "brew install cloudflared" : {
       "comment" : "A code snippet that installs the Cloudflare Tunnel CLI.",
       "isCommentAutoGenerated" : true
     },
     "Build %@" : {
 
+    },
+    "callAnalytics.aggregationTimeZone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Statistics time zone"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计时区"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "統計時區"
+          }
+        }
+      }
     },
     "callAnalytics.allCategories" : {
       "extractionState" : "manual",
@@ -8408,37 +7416,37 @@
         }
       }
     },
-    "callAnalytics.pi.coverage": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pi counts tool calls in saved sessions and child sessions. Extension transcripts are not merged; calls recorded only in those transcripts are excluded. Reading SKILL.md indicates possible skill use. MCP classification requires an explicit server/tool name; tool durations are not inferred."
+    "callAnalytics.pi.coverage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi counts tool calls in saved sessions and child sessions. Extension transcripts are not merged; calls recorded only in those transcripts are excluded. Reading SKILL.md indicates possible skill use. MCP classification requires an explicit server/tool name; tool durations are not inferred."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pi 统计已保存的正式会话及子会话中的工具调用，不合并扩展转录；仅保存在转录中的调用未纳入统计。读取 SKILL.md 作为技能使用信号；MCP 按明确的服务器／工具命名归类，不推测工具耗时。"
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi compte les appels d’outils des sessions et sous-sessions enregistrées. Les transcriptions d’extensions ne sont pas fusionnées ; les appels qui y figurent seuls sont exclus. La lecture de SKILL.md signale un usage possible d’une compétence. MCP exige un nom explicite de serveur et d’outil ; aucune durée n’est déduite."
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pi 統計已儲存的正式工作階段及子工作階段中的工具呼叫，不合併擴充套件轉錄；僅儲存於轉錄的呼叫未納入統計。讀取 SKILL.md 作為技能使用訊號；MCP 按明確的伺服器／工具命名歸類，不推測工具耗時。"
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi thống kê lệnh gọi công cụ trong các phiên và phiên con đã lưu. Bản ghi của tiện ích mở rộng không được hợp nhất; lệnh gọi chỉ có trong các bản ghi đó chưa được thống kê. Việc đọc SKILL.md là dấu hiệu sử dụng kỹ năng. MCP được phân loại theo tên máy chủ/công cụ rõ ràng; không suy đoán thời gian thực thi."
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pi compte les appels d’outils des sessions et sous-sessions enregistrées. Les transcriptions d’extensions ne sont pas fusionnées ; les appels qui y figurent seuls sont exclus. La lecture de SKILL.md signale un usage possible d’une compétence. MCP exige un nom explicite de serveur et d’outil ; aucune durée n’est déduite."
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 统计已保存的正式会话及子会话中的工具调用，不合并扩展转录；仅保存在转录中的调用未纳入统计。读取 SKILL.md 作为技能使用信号；MCP 按明确的服务器／工具命名归类，不推测工具耗时。"
           }
         },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pi thống kê lệnh gọi công cụ trong các phiên và phiên con đã lưu. Bản ghi của tiện ích mở rộng không được hợp nhất; lệnh gọi chỉ có trong các bản ghi đó chưa được thống kê. Việc đọc SKILL.md là dấu hiệu sử dụng kỹ năng. MCP được phân loại theo tên máy chủ/công cụ rõ ràng; không suy đoán thời gian thực thi."
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 統計已儲存的正式工作階段及子工作階段中的工具呼叫，不合併擴充套件轉錄；僅儲存於轉錄的呼叫未納入統計。讀取 SKILL.md 作為技能使用訊號；MCP 按明確的伺服器／工具命名歸類，不推測工具耗時。"
           }
         }
       }
@@ -18291,6 +17299,29 @@
         }
       }
     },
+    "nav.agentManagement" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent Management"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体管理"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能體管理"
+          }
+        }
+      }
+    },
     "nav.agents" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -18566,6 +17597,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用量统计"
+          }
+        }
+      }
+    },
+    "nav.workspace" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作台"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作台"
           }
         }
       }
@@ -24222,6 +23276,9 @@
           }
         }
       }
+    },
+    "Series" : {
+
     },
     "settings.allowNetworkAccess" : {
       "extractionState" : "stale",
@@ -30658,9 +29715,6 @@
         }
       }
     },
-    "Stable Channel" : {
-
-    },
     "status.connected" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -30952,6 +30006,499 @@
     },
     "Step %lld" : {
 
+    },
+    "storage.cache.clear" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Caches"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理缓存"
+          }
+        }
+      }
+    },
+    "storage.cache.cleared" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Caches cleared. Analytics history has been kept."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存已清理，统计历史已保留。"
+          }
+        }
+      }
+    },
+    "storage.cache.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cache cleanup did not finish. Please try again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存清理未完成，请稍后重试。"
+          }
+        }
+      }
+    },
+    "storage.cache.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clears rebuildable memory and network caches while keeping analytics history and scan progress. Deleted rows leave database pages available for reuse. Reclaiming free space can shrink the file and may take time for large databases."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理可重建的内存与网络缓存，保留统计历史和扫描进度。删除统计后，数据库空闲页会留给后续写入；回收空闲空间可尝试缩小文件，数据较多时需要等待。"
+          }
+        }
+      }
+    },
+    "storage.cache.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Caches & Space"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存与空间"
+          }
+        }
+      }
+    },
+    "storage.compact.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reclaim Database Free Space"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回收数据库空闲空间"
+          }
+        }
+      }
+    },
+    "storage.compact.completed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Database space reclamation completed."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数据库空间整理已完成。"
+          }
+        }
+      }
+    },
+    "storage.compact.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Database space reclamation did not finish. Please try again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数据库空间整理未完成，请稍后重试。"
+          }
+        }
+      }
+    },
+    "storage.data.clear" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Selected Analytics Data…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所选统计数据…"
+          }
+        }
+      }
+    },
+    "storage.data.cleared" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selected analytics data cleared. Existing source logs can be imported again during future collection."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选统计数据已清除，现存源日志可在后续采集重新导入。"
+          }
+        }
+      }
+    },
+    "storage.data.clearedRefreshFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Analytics data was cleared, but refreshing failed. Please reopen the analytics page."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计数据已清除，但页面刷新失败；请重新打开统计页面。"
+          }
+        }
+      }
+    },
+    "storage.data.confirm.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Analytics Data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除统计数据"
+          }
+        }
+      }
+    },
+    "storage.data.confirm.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This will clear: %@. This cannot be undone. Client source logs are kept, and future collection may import existing history again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将清除：%@。此操作无法撤销。客户端源日志不会删除，后续采集可能再次导入现存历史。"
+          }
+        }
+      }
+    },
+    "storage.data.confirm.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear selected analytics data?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除所选统计数据？"
+          }
+        }
+      }
+    },
+    "storage.data.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not clear analytics data. The database transaction preserved the existing data."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计数据清除失败，数据库事务已保留原有数据。"
+          }
+        }
+      }
+    },
+    "storage.data.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clears only the selected modules’ local analytics, indexes, and scan progress. Accounts, settings, model prices, and client source logs are kept. Existing source logs can be imported again during the next collection; history whose source logs are gone cannot be recovered."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅清除所选模块的本地统计、索引与扫描进度，保留账户、配置、模型价格和客户端源日志。仍存在的源日志可在下次采集重新导入；源日志已消失的历史无法恢复。"
+          }
+        }
+      }
+    },
+    "storage.data.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Analytics Data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除统计数据"
+          }
+        }
+      }
+    },
+    "storage.database.file" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Database file"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数据库文件"
+          }
+        }
+      }
+    },
+    "storage.database.total" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Total analytics storage"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计存储总计"
+          }
+        }
+      }
+    },
+    "storage.database.wal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transaction log"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "事务日志"
+          }
+        }
+      }
+    },
+    "storage.inspect.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not read the storage overview. Please try again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取存储概况，请稍后重试。"
+          }
+        }
+      }
+    },
+    "storage.inspect.refresh" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refresh storage overview"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新存储概况"
+          }
+        }
+      }
+    },
+    "storage.module.callAnalytics" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call Analytics"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调用分析"
+          }
+        }
+      }
+    },
+    "storage.module.clientUsage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usage Statistics"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用量统计"
+          }
+        }
+      }
+    },
+    "storage.module.dashboard" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dashboard"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仪表盘"
+          }
+        }
+      }
+    },
+    "storage.operation.running" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Processing, please wait…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在处理，请稍候…"
+          }
+        }
+      }
+    },
+    "storage.overview.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Size includes the database and its transaction log. Row counts represent saved requests or aggregate rows, not the number of calls."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大小包含数据库与事务日志。行数表示已保存的请求记录或统计汇总行，不等于调用次数。"
+          }
+        }
+      }
+    },
+    "storage.overview.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Storage Overview"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存储概况"
+          }
+        }
+      }
+    },
+    "storage.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Storage & Data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存储与数据"
+          }
+        }
+      }
     },
     "Time" : {
 
@@ -32016,6 +31563,441 @@
         }
       }
     },
+    "updates.own.manualOnly" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This build supports manual updates from this project’s releases page."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette version permet une mise à jour manuelle depuis les publications de ce projet."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bản dựng này hỗ trợ cập nhật thủ công từ trang phát hành của dự án."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前构建支持从本项目发布页手动下载安装更新。"
+          }
+        }
+      }
+    },
+    "updates.own.viewReleases" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View releases"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voir les versions"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Xem bản phát hành"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看发布版本"
+          }
+        }
+      }
+    },
+    "updates.upstream.compare" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open code comparison"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrir la comparaison du code"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mở so sánh mã nguồn"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开代码比较"
+          }
+        }
+      }
+    },
+    "updates.upstream.currentApp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current application"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Application actuelle"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ứng dụng hiện tại"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前应用"
+          }
+        }
+      }
+    },
+    "updates.upstream.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check failed. Try again later, or open the upstream repository."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de la vérification. Réessayez plus tard ou ouvrez le dépôt en amont."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kiểm tra thất bại. Hãy thử lại sau hoặc mở kho mã thượng nguồn."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查失败，请稍后重试；也可以直接查看上游源码。"
+          }
+        }
+      }
+    },
+    "updates.upstream.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Review upstream releases to assess source changes to sync. This page does not install or replace the application; app version numbers do not indicate source synchronization."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Consultez les versions en amont pour évaluer les changements à intégrer. Cette page ne remplace pas l’application ; son numéro de version n’indique pas la synchronisation du code."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Xem bản phát hành thượng nguồn để đánh giá thay đổi mã cần đồng bộ. Trang này không cài đặt hoặc thay thế ứng dụng; số phiên bản không thể hiện trạng thái đồng bộ mã."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看上游发行信息，辅助判断需要同步的源码变更。此处不会更新或替换当前应用；应用版本号不代表源码已同步。"
+          }
+        }
+      }
+    },
+    "updates.upstream.latest" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Latest stable release"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dernière version stable"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bản ổn định mới nhất"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最新稳定版"
+          }
+        }
+      }
+    },
+    "updates.upstream.noRelease" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No stable upstream release is available yet."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune version stable en amont n’est encore disponible."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chưa có bản phát hành ổn định từ thượng nguồn."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上游暂未发布稳定版本。"
+          }
+        }
+      }
+    },
+    "updates.upstream.published" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Published"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date de publication"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ngày phát hành"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发布时间"
+          }
+        }
+      }
+    },
+    "updates.upstream.rateLimited" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub has temporarily limited requests. Try again later."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub limite temporairement les requêtes. Réessayez plus tard."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub đang tạm giới hạn yêu cầu. Vui lòng thử lại sau."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub 暂时限制了检查频率，请稍后重试。"
+          }
+        }
+      }
+    },
+    "updates.upstream.releaseNotes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open full release notes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrir les notes de version"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mở ghi chú phát hành đầy đủ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开完整发布说明"
+          }
+        }
+      }
+    },
+    "updates.upstream.repository" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source upstream"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dépôt en amont"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kho mã thượng nguồn"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "源码上游"
+          }
+        }
+      }
+    },
+    "updates.upstream.source" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View upstream source"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voir le code en amont"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Xem mã nguồn thượng nguồn"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看上游源码"
+          }
+        }
+      }
+    },
+    "updates.upstream.sync" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source synchronization"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchronisation du code"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tham khảo đồng bộ mã"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "源码同步参考"
+          }
+        }
+      }
+    },
+    "updates.upstream.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check upstream updates"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifier les mises à jour en amont"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kiểm tra cập nhật thượng nguồn"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查上游更新"
+          }
+        }
+      }
+    },
     "Usage" : {
       "comment" : "An accessibility label describing the content of the view.",
       "isCommentAutoGenerated" : true,
@@ -32542,6 +32524,15 @@
             "value" : "部分客户端记录读取失败，当前用量可能不完整。"
           }
         }
+      }
+    },
+    "usage.client.readableWithHistory" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read complete · %lld historical sessions have incomplete statistics" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Lecture terminée · statistiques incomplètes pour %lld sessions historiques" } },
+        "vi" : { "stringUnit" : { "state" : "translated", "value" : "Đọc xong · %lld phiên lịch sử có thống kê chưa đầy đủ" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "读取完成 · %lld 个历史会话统计不完整" } }
       }
     },
     "usage.client.queued" : {
@@ -33208,6 +33199,75 @@
         }
       }
     },
+    "usage.dashboard.activeFilters" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d active"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选 %d 项"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已選 %d 項"
+          }
+        }
+      }
+    },
+    "usage.dashboard.additionalFilters" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d more"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另 %d 项"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另 %d 項"
+          }
+        }
+      }
+    },
+    "usage.dashboard.allFilters" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部筛选"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部篩選"
+          }
+        }
+      }
+    },
     "usage.dashboard.analysis" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -33254,6 +33314,121 @@
         }
       }
     },
+    "usage.dashboard.cache" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cache"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快取"
+          }
+        }
+      }
+    },
+    "usage.dashboard.cacheRateShort" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read ratio"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取比例"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取比例"
+          }
+        }
+      }
+    },
+    "usage.dashboard.cacheReadShort" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取"
+          }
+        }
+      }
+    },
+    "usage.dashboard.cacheWriteShort" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Write"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立"
+          }
+        }
+      }
+    },
+    "usage.dashboard.chartMetric" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chart metric"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图表指标"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "圖表指標"
+          }
+        }
+      }
+    },
     "usage.dashboard.clickForRecords" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -33277,140 +33452,48 @@
         }
       }
     },
-    "usage.dashboard.filters" : {
+    "usage.dashboard.collapseFilters" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Filters"
+            "value" : "Collapse filters"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "筛选"
+            "value" : "收起筛选"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "篩選"
+            "value" : "收合篩選"
           }
         }
       }
     },
-    "usage.dashboard.additionalFilters" : {
-      "extractionState" : "manual",
+    "usage.dashboard.coverage" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%d more"
+            "value" : "Overview and analysis combine retained CPA events with non-overlapping daily history. Request details and pricing use retained events only; missing historical metrics are not zero."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "另 %d 项"
+            "value" : "总览与分析合并 CPA 事件及不重复的旧日归档；请求明细和价格统计仅查询已保存事件。历史缺失指标不代表零。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "另 %d 項"
-          }
-        }
-      }
-    },
-    "usage.dashboard.activeFilters" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%d active"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已选 %d 项"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已選 %d 項"
-          }
-        }
-      }
-    },
-    "usage.dashboard.filterHelp" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "About filters"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "筛选说明"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "篩選說明"
-          }
-        }
-      }
-    },
-    "usage.dashboard.historySummary" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Includes %@ requests from daily history"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已纳入 %@ 次历史请求"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已納入 %@ 次歷史請求"
-          }
-        }
-      }
-    },
-    "usage.dashboard.partialCoverage" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Some history cannot match the current filters"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "部分历史无法匹配当前筛选"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "部分歷史無法符合目前篩選"
+            "value" : "總覽與分析合併 CPA 事件及不重複的舊日歸檔；請求明細和價格統計僅查詢已儲存事件。歷史缺失指標不代表零。"
           }
         }
       }
@@ -33438,6 +33521,167 @@
         }
       }
     },
+    "usage.dashboard.distribution" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usage Distribution"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用量分布"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用量分佈"
+          }
+        }
+      }
+    },
+    "usage.dashboard.expandFilters" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开筛选"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開篩選"
+          }
+        }
+      }
+    },
+    "usage.dashboard.filterHelp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选说明"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "篩選說明"
+          }
+        }
+      }
+    },
+    "usage.dashboard.filterOptionsFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t load all options. Previously loaded options remain available."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载全部选项，当前仍显示已读取的选项。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入全部選項，目前仍顯示已讀取的選項。"
+          }
+        }
+      }
+    },
+    "usage.dashboard.filterOptionsLoading" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading all filter options…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载全部筛选选项…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入全部篩選選項…"
+          }
+        }
+      }
+    },
+    "usage.dashboard.filters" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "篩選"
+          }
+        }
+      }
+    },
+    "usage.dashboard.filtersDraftHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose your filters, then select Apply."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调整筛选条件后点击“应用”。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調整篩選條件後按一下「套用」。"
+          }
+        }
+      }
+    },
     "usage.dashboard.groupBy" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -33461,25 +33705,25 @@
         }
       }
     },
-    "usage.dashboard.chartMetric" : {
+    "usage.dashboard.hiddenFilters" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Chart metric"
+            "value" : "%d additional filters"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "图表指标"
+            "value" : "%d 项附加条件"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "圖表指標"
+            "value" : "%d 項附加條件"
           }
         }
       }
@@ -33530,48 +33774,25 @@
         }
       }
     },
-    "usage.dashboard.coverage" : {
-      "extractionState" : "stale",
+    "usage.dashboard.historySummary" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Overview and analysis combine retained CPA events with non-overlapping daily history. Request details and pricing use retained events only; missing historical metrics are not zero."
+            "value" : "Includes %@ requests from daily history"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "总览与分析合并 CPA 事件及不重复的旧日归档；请求明细和价格统计仅查询已保存事件。历史缺失指标不代表零。"
+            "value" : "已纳入 %@ 次历史请求"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "總覽與分析合併 CPA 事件及不重複的舊日歸檔；請求明細和價格統計僅查詢已儲存事件。歷史缺失指標不代表零。"
-          }
-        }
-      }
-    },
-    "usage.dashboard.distribution" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Usage Distribution"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "用量分布"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "用量分佈"
+            "value" : "已納入 %@ 次歷史請求"
           }
         }
       }
@@ -33599,6 +33820,29 @@
         }
       }
     },
+    "usage.dashboard.inputShort" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Input"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸入"
+          }
+        }
+      }
+    },
     "usage.dashboard.moreFilters" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -33622,6 +33866,29 @@
         }
       }
     },
+    "usage.dashboard.outputShort" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Output"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输出"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸出"
+          }
+        }
+      }
+    },
     "usage.dashboard.overview" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -33641,6 +33908,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "總覽"
+          }
+        }
+      }
+    },
+    "usage.dashboard.partialCoverage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some history cannot match the current filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分历史无法匹配当前筛选"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分歷史無法符合目前篩選"
+          }
+        }
+      }
+    },
+    "usage.dashboard.performance" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Performance & throughput"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "性能与吞吐"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "效能與吞吐"
           }
         }
       }
@@ -33691,6 +34004,29 @@
         }
       }
     },
+    "usage.dashboard.reasoningShort" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reasoning"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推理"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推理"
+          }
+        }
+      }
+    },
     "usage.dashboard.records" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -33710,6 +34046,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "請求明細"
+          }
+        }
+      }
+    },
+    "usage.dashboard.requestOutcomes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Request outcomes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求结果"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請求結果"
           }
         }
       }
@@ -33756,6 +34115,87 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "顯示更多"
+          }
+        }
+      }
+    },
+    "usage.dashboard.tokenAndCache" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tokens & cache"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Token 与缓存"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Token 與快取"
+          }
+        }
+      }
+    },
+    "usage.dashboard.tokenTrendNote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Click the legend to show or hide lines. Cached tokens may overlap input tokens and are not added again."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cliquez sur la légende pour afficher ou masquer les courbes. Les tokens en cache peuvent être inclus dans l’entrée et ne sont pas additionnés à nouveau."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nhấp chú giải để hiện hoặc ẩn đường. Token bộ nhớ đệm có thể nằm trong token đầu vào và không được cộng lại."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点击图例显示或隐藏曲线。缓存可能与输入重叠，不重复相加。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點擊圖例顯示或隱藏曲線。快取可能與輸入重疊，不重複相加。"
+          }
+        }
+      }
+    },
+    "usage.dashboard.tokenUsage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Token usage"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Token 用量"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Token 用量"
           }
         }
       }
@@ -34420,6 +34860,41 @@
         }
       }
     },
+    "usage.pi.coverage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi totals include saved sessions and saved child sessions. Extension transcripts are excluded to avoid double counting; usage recorded only in those transcripts is not included."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les totaux Pi incluent les sessions et sous-sessions enregistrées. Les transcriptions d’extensions sont exclues pour éviter les doublons ; l’utilisation conservée uniquement dans ces transcriptions n’est pas comptabilisée."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tổng Pi bao gồm các phiên và phiên con đã lưu. Bản ghi của tiện ích mở rộng không được cộng để tránh tính trùng; mức sử dụng chỉ có trong các bản ghi đó chưa được thống kê."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 统计已保存的正式会话及子会话。扩展转录可能与正式会话重复，因此不合并；仅保存在扩展转录中的用量未纳入统计。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pi 統計已儲存的正式工作階段及子工作階段。擴充套件轉錄可能與正式工作階段重複，因此不合併；僅儲存於擴充套件轉錄的用量未納入統計。"
+          }
+        }
+      }
+    },
     "usage.pi.reasoningUnavailable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -34485,6 +34960,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "快取寫入 / 百萬"
+          }
+        }
+      }
+    },
+    "usage.pricing.configurePrice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configure price"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置单价"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定單價"
           }
         }
       }
@@ -34604,6 +35102,52 @@
         }
       }
     },
+    "usage.pricing.historyNotice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ historical requests are included. Configure model prices to estimate the known token components; unknown cache details remain unpriced."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已纳入 %@ 次历史请求。设置模型单价后可估算已知 Token 分量；未知缓存拆分仍保留为未计价。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已納入 %@ 次歷史請求。設定模型單價後可估算已知 Token 分量；未知快取拆分仍保留為未計價。"
+          }
+        }
+      }
+    },
+    "usage.pricing.historyRow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ historical requests"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "含 %@ 次历史请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "含 %@ 次歷史請求"
+          }
+        }
+      }
+    },
     "usage.pricing.incomplete" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -34692,6 +35236,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "輸出 / 百萬"
+          }
+        }
+      }
+    },
+    "usage.pricing.partialEstimate" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Partial estimate"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分估算"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分估算"
+          }
+        }
+      }
+    },
+    "usage.pricing.partialNotice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only usage with known token components and configured prices is estimated. Unpriced usage and unknown cache components are excluded; ≥ indicates a lower bound."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅估算 Token 分量明确且已配置单价的部分。未配置单价的用量和未知缓存分量未计入费用；“≥”表示已知费用下界。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅估算 Token 分量明確且已設定單價的部分。未設定單價的用量與未知快取分量未計入費用；「≥」表示已知費用下限。"
           }
         }
       }
@@ -34830,6 +35420,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "美元 / 百萬 Tokens"
+          }
+        }
+      }
+    },
+    "usage.pricing.unpricedRow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No model prices are configured. Set prices to calculate an estimate."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未设置模型单价，设置后可计算估算费用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未設定模型單價，設定後可計算估算費用。"
           }
         }
       }
@@ -35030,6 +35643,29 @@
         }
       }
     },
+    "usage.records.day" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日期"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日期"
+          }
+        }
+      }
+    },
     "usage.records.detail" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -35122,6 +35758,190 @@
         }
       }
     },
+    "usage.records.history" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Historical daily summaries"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "历史日汇总"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歷史每日彙總"
+          }
+        }
+      }
+    },
+    "usage.records.historyAvailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ historical requests are available as daily summaries."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %@ 次历史请求保存在日汇总中。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %@ 次歷史請求儲存在每日彙總中。"
+          }
+        }
+      }
+    },
+    "usage.records.historyCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ daily summaries · %@ requests"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 条日汇总 · %@ 次请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 條每日彙總 · %@ 次請求"
+          }
+        }
+      }
+    },
+    "usage.records.historyDays" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Days with usage"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有用量天数"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有用量天數"
+          }
+        }
+      }
+    },
+    "usage.records.historyModels" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Models"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型数量"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型數量"
+          }
+        }
+      }
+    },
+    "usage.records.historyNotice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These summaries were saved before individual request details were retained. They preserve daily usage, but cannot reconstruct individual requests."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些历史仅保存了按日用量，未保存单次请求详情，无法还原为逐条请求。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這些歷史僅儲存了每日用量，未儲存單次請求詳情，無法還原為逐條請求。"
+          }
+        }
+      }
+    },
+    "usage.records.historyOmitted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ historical requests cannot be matched precisely to the selected time or metadata filters."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %@ 次历史请求无法精确匹配当前时间或附加筛选条件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %@ 次歷史請求無法精確符合目前時間或附加篩選條件。"
+          }
+        }
+      }
+    },
+    "usage.records.historyRequests" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Historical requests"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "历史请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歷史請求"
+          }
+        }
+      }
+    },
     "usage.records.legacy" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -35210,6 +36030,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下一頁"
+          }
+        }
+      }
+    },
+    "usage.records.noIndividualDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Older versions retained daily totals only. Open Historical daily summaries to inspect that usage; new collected requests will appear here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "旧版本只保留了每日总量。可切换到“历史日汇总”查看；新采集的请求会显示在这里。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "舊版本僅保留每日總量。可切換至「歷史每日彙總」查看；新採集的請求會顯示在這裡。"
+          }
+        }
+      }
+    },
+    "usage.records.noIndividualTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No individual request details saved"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未保存单次请求明细"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未儲存單次請求明細"
+          }
+        }
+      }
+    },
+    "usage.records.noMatches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No data matches the current filters. Try a broader time range or reset the filters."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配当前筛选的数据，可扩大时间范围或重置筛选。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有符合目前篩選的資料，可擴大時間範圍或重設篩選。"
           }
         }
       }
@@ -36480,476 +37369,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "占比"
-          }
-        }
-      }
-    },
-    "usage.pi.coverage": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pi totals include saved sessions and saved child sessions. Extension transcripts are excluded to avoid double counting; usage recorded only in those transcripts is not included."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pi 统计已保存的正式会话及子会话。扩展转录可能与正式会话重复，因此不合并；仅保存在扩展转录中的用量未纳入统计。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pi 統計已儲存的正式工作階段及子工作階段。擴充套件轉錄可能與正式工作階段重複，因此不合併；僅儲存於擴充套件轉錄的用量未納入統計。"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Les totaux Pi incluent les sessions et sous-sessions enregistrées. Les transcriptions d’extensions sont exclues pour éviter les doublons ; l’utilisation conservée uniquement dans ces transcriptions n’est pas comptabilisée."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tổng Pi bao gồm các phiên và phiên con đã lưu. Bản ghi của tiện ích mở rộng không được cộng để tránh tính trùng; mức sử dụng chỉ có trong các bản ghi đó chưa được thống kê."
-          }
-        }
-      }
-    },
-    "updates.own.viewReleases": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查看发布版本"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "View releases"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voir les versions"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Xem bản phát hành"
-          }
-        }
-      }
-    },
-    "updates.own.manualOnly": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前构建支持从本项目发布页手动下载安装更新。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This build supports manual updates from this project’s releases page."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cette version permet une mise à jour manuelle depuis les publications de ce projet."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bản dựng này hỗ trợ cập nhật thủ công từ trang phát hành của dự án."
-          }
-        }
-      }
-    },
-    "updates.upstream.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检查上游更新"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check upstream updates"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vérifier les mises à jour en amont"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kiểm tra cập nhật thượng nguồn"
-          }
-        }
-      }
-    },
-    "updates.upstream.repository": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "源码上游"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Source upstream"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dépôt en amont"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kho mã thượng nguồn"
-          }
-        }
-      }
-    },
-    "updates.upstream.currentApp": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前应用"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Current application"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Application actuelle"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ứng dụng hiện tại"
-          }
-        }
-      }
-    },
-    "updates.upstream.help": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查看上游发行信息，辅助判断需要同步的源码变更。此处不会更新或替换当前应用；应用版本号不代表源码已同步。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Review upstream releases to assess source changes to sync. This page does not install or replace the application; app version numbers do not indicate source synchronization."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consultez les versions en amont pour évaluer les changements à intégrer. Cette page ne remplace pas l’application ; son numéro de version n’indique pas la synchronisation du code."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Xem bản phát hành thượng nguồn để đánh giá thay đổi mã cần đồng bộ. Trang này không cài đặt hoặc thay thế ứng dụng; số phiên bản không thể hiện trạng thái đồng bộ mã."
-          }
-        }
-      }
-    },
-    "updates.upstream.latest": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "最新稳定版"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Latest stable release"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dernière version stable"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bản ổn định mới nhất"
-          }
-        }
-      }
-    },
-    "updates.upstream.published": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "发布时间"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Published"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Date de publication"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ngày phát hành"
-          }
-        }
-      }
-    },
-    "updates.upstream.releaseNotes": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "打开完整发布说明"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open full release notes"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ouvrir les notes de version"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mở ghi chú phát hành đầy đủ"
-          }
-        }
-      }
-    },
-    "updates.upstream.noRelease": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "上游暂未发布稳定版本。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No stable upstream release is available yet."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucune version stable en amont n’est encore disponible."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chưa có bản phát hành ổn định từ thượng nguồn."
-          }
-        }
-      }
-    },
-    "updates.upstream.source": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查看上游源码"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "View upstream source"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voir le code en amont"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Xem mã nguồn thượng nguồn"
-          }
-        }
-      }
-    },
-    "updates.upstream.compare": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "打开代码比较"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open code comparison"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ouvrir la comparaison du code"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mở so sánh mã nguồn"
-          }
-        }
-      }
-    },
-    "updates.upstream.sync": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "源码同步参考"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Source synchronization"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Synchronisation du code"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tham khảo đồng bộ mã"
-          }
-        }
-      }
-    },
-    "updates.upstream.failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "检查失败，请稍后重试；也可以直接查看上游源码。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check failed. Try again later, or open the upstream repository."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échec de la vérification. Réessayez plus tard ou ouvrez le dépôt en amont."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kiểm tra thất bại. Hãy thử lại sau hoặc mở kho mã thượng nguồn."
-          }
-        }
-      }
-    },
-    "updates.upstream.rateLimited": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "GitHub 暂时限制了检查频率，请稍后重试。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "GitHub has temporarily limited requests. Try again later."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "GitHub limite temporairement les requêtes. Réessayez plus tard."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "GitHub đang tạm giới hạn yêu cầu. Vui lòng thử lại sau."
           }
         }
       }
@@ -38906,6 +39325,75 @@
         }
       }
     },
+    "workspace.tab.sessions" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话浏览"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "會話瀏覽"
+          }
+        }
+      }
+    },
+    "workspace.tab.skills" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skills"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技能管理"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技能管理"
+          }
+        }
+      }
+    },
+    "workspace.tab.storage" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Storage & Cache"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存与空间"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "緩存與空間"
+          }
+        }
+      }
+    },
     "yubikey.error.deviceUnavailable" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -39601,6 +40089,261 @@
           }
         }
       }
+    },
+    "一键全部更新" : {
+
+    },
+    "一键全部纳管 (%lld)" : {
+
+    },
+    "一键安装到全部" : {
+
+    },
+    "从 GitHub 发现与安装" : {
+
+    },
+    "会话历史、补全缓存与诊断日志分布概览" : {
+
+    },
+    "你可以打开终端使用 Claude / Codex / OpenCode / Antigravity 发起对话" : {
+
+    },
+    "使用此自定义模型名称" : {
+
+    },
+    "全部停用" : {
+
+    },
+    "全部启用" : {
+
+    },
+    "关闭" : {
+
+    },
+    "关闭详情" : {
+
+    },
+    "分发软链接至智能体:" : {
+
+    },
+    "删除会话" : {
+
+    },
+    "删除子任务" : {
+
+    },
+    "删除此会话" : {
+
+    },
+    "删除选中" : {
+
+    },
+    "刷新会话" : {
+
+    },
+    "卸载此技能并清理软链接 (自动生成备份快照)" : {
+
+    },
+    "历史会话、模型补全与诊断日志" : {
+
+    },
+    "发现 %lld 个未受管本地技能" : {
+
+    },
+    "取消" : {
+
+    },
+    "可从下方的 GitHub 开源技能库一键安装到所有智能体" : {
+
+    },
+    "各智能体占用明细与专属清理" : {
+
+    },
+    "向所有智能体分发此技能软链接" : {
+
+    },
+    "在独立终端中继续此会话" : {
+
+    },
+    "在独立终端恢复此子任务" : {
+
+    },
+    "在终端中继续" : {
+
+    },
+    "在访达中显示" : {
+
+    },
+    "复制内容" : {
+
+    },
+    "复制恢复命令" : {
+
+    },
+    "复制消息" : {
+
+    },
+    "复制终端恢复命令行" : {
+
+    },
+    "好" : {
+
+    },
+    "子任务" : {
+
+    },
+    "导出全部技能为 .zip 归档文件" : {
+
+    },
+    "导出备份包" : {
+
+    },
+    "展开 %lld 个子任务" : {
+
+    },
+    "已安装" : {
+
+    },
+    "已挂载至 %@，点击解除软链接" : {
+
+    },
+    "已纳管技能 (%lld)" : {
+
+    },
+    "已选择 %lld 个会话" : {
+
+    },
+    "当前：平铺列表（点击切换为按项目分组）" : {
+
+    },
+    "当前：按项目分组（点击切换为平铺列表）" : {
+
+    },
+    "批量选择管理" : {
+
+    },
+    "技能统一保存在标准 SSOT 目录，通过系统软链接按需挂载至各智能体，操作前自动快照备份。" : {
+
+    },
+    "按 SKILL.md 官方规范拉取优质技能，一键部署并在多智能体中分发。" : {
+
+    },
+    "收起 %lld 个子任务" : {
+
+    },
+    "智能体技能管理中心" : {
+
+    },
+    "暂无历史消息文本记录" : {
+
+    },
+    "暂无详细功能描述" : {
+
+    },
+    "暂未安装技能" : {
+
+    },
+    "更多操作" : {
+
+    },
+    "更新于 %@" : {
+
+    },
+    "更新所有已安装技能" : {
+
+    },
+    "未发现符合条件的会话" : {
+
+    },
+    "未挂载至 %@，点击建立软链接" : {
+
+    },
+    "来源: %@" : {
+
+    },
+    "检测到在各智能体独立目录中手动存放的技能。点击“纳管到统一库”可迁移至 ~/.quotio/skills/ 并在原路径建立受管链接；同名内容冲突会保留原文件并提示。" : {
+
+    },
+    "正在分析智能体存储与缓存..." : {
+
+    },
+    "正在快速度量各智能体的历史会话、模型补全缓存与诊断日志分布" : {
+
+    },
+    "正在扫描各智能体会话..." : {
+
+    },
+    "正在扫描已安装技能与智能体软链接..." : {
+
+    },
+    "正在查询 GitHub 仓库目录树与规范..." : {
+
+    },
+    "正在索引历史会话与 Subagent 子任务" : {
+
+    },
+    "正在解析历史消息..." : {
+
+    },
+    "添加 GitHub 仓库源 (SQLite 存储)" : {
+
+    },
+    "添加 GitHub 技能仓库源" : {
+
+    },
+    "添加仓库源" : {
+
+    },
+    "添加并拉取" : {
+
+    },
+    "添加自定义仓库源..." : {
+
+    },
+    "清理旧会话 (%@)" : {
+
+    },
+    "清空缓存" : {
+
+    },
+    "清空缓存 (%@)" : {
+
+    },
+    "点击智能体胶囊即可实时挂载/解除软链接，状态即刻生效。" : {
+
+    },
+    "纳管到统一库" : {
+
+    },
+    "缓存已空" : {
+
+    },
+    "覆盖 Claude Code、Codex、OpenCode、Pi、Antigravity 及 Quotio 网关" : {
+
+    },
+    "解除此技能在所有智能体中的软链接" : {
+
+    },
+    "该仓库源暂未解析到符合 SKILL.md 规范的技能目录。" : {
+
+    },
+    "输入开源仓库（例如: anthropics/skills 或完整 GitHub 链接）" : {
+
+    },
+    "选择仓库源" : {
+
+    },
+    "重新分析磁盘与缓存占用" : {
+
+    },
+    "重新安装" : {
+
+    },
+    "重新度量" : {
+
+    },
+    "错误" : {
+
     }
   },
   "version" : "1.1"

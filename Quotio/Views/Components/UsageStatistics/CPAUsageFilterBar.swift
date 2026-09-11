@@ -22,9 +22,9 @@ struct CPAUsageFilterBar: View {
                 CPAUsageOptionMenu(titleKey: "usage.model", value: $selection.model,
                                    options: options?.models ?? [], searchable: true)
                 CPAUsageOptionMenu(titleKey: "usage.records.source", value: $selection.source,
-                                   options: options?.sources ?? [], searchable: true)
+                                   options: options?.sources ?? [], searchable: false)
                 CPAUsageOptionMenu(titleKey: "usage.records.apiKey", value: $selection.apiKey,
-                                   options: options?.apiKeys ?? [], searchable: true)
+                                   options: options?.apiKeys ?? [], searchable: false)
                 CPAUsageFilterField(titleKey: "usage.records.result") {
                     CPAUsageFilterMenu(titleKey: "usage.records.result", value: selection.outcome.titleKey.localized()) {
                         Picker("usage.records.result".localized(), selection: $selection.outcome) {

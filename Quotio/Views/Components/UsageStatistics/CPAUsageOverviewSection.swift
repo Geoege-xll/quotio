@@ -77,14 +77,12 @@ struct CPAUsageOverviewDetails: View {
     let presentation: CPAUsageOverviewPresentation
 
     var body: some View {
-        // 次级底面还有左右各 12pt 内边距：原 135pt 列宽要求外层至少 612pt，默认约 560pt 会退成两列。
-        // 改为 120pt 后，外层达到 552pt 即可四等分；更窄时仍按原布局换行，不改组内文字和数值处理。
-        CPAUsageAdaptiveGrid(maximumColumns: 4, minimumColumnWidth: 120, spacing: 16) {
+        // 移走实时性能指标后，次级底面专注呈现 Token 构成、缓存效果与请求结果三组纯净业务消耗指标
+        CPAUsageAdaptiveGrid(maximumColumns: 3, minimumColumnWidth: 140, spacing: 16) {
             CPAUsageOverviewGroup(titleKey: "usage.dashboard.tokenUsage",
                 metrics: Array(presentation.tokenAndCache.prefix(3)))
             CPAUsageOverviewGroup(titleKey: "usage.dashboard.cache",
                 metrics: Array(presentation.tokenAndCache.dropFirst(3)))
-            CPAUsageOverviewGroup(titleKey: "usage.dashboard.performance", metrics: presentation.performance)
             CPAUsageOverviewGroup(titleKey: "usage.dashboard.requestOutcomes", metrics: presentation.requestOutcomes)
         }
         .quotioInsetCard(padding: 12)

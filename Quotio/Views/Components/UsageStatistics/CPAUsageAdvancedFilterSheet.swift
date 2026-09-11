@@ -66,9 +66,9 @@ struct CPAUsageAdvancedFilterSheet: View {
                         CPAUsageOptionMenu(titleKey: "usage.model", value: $draft.selection.model,
                             options: availableOptions.models, searchable: true)
                         CPAUsageOptionMenu(titleKey: "usage.records.source", value: $draft.selection.source,
-                            options: availableOptions.sources, searchable: true)
+                            options: availableOptions.sources, searchable: false)
                         CPAUsageOptionMenu(titleKey: "usage.records.apiKey", value: $draft.selection.apiKey,
-                            options: availableOptions.apiKeys, searchable: true)
+                            options: availableOptions.apiKeys, searchable: false)
                         CPAUsageFilterField(titleKey: "usage.records.result") {
                             CPAUsageFilterMenu(titleKey: "usage.records.result", value: draft.selection.outcome.titleKey.localized()) {
                                 Picker("usage.records.result".localized(), selection: $draft.selection.outcome) {

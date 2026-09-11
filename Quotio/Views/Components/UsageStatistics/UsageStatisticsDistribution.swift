@@ -81,6 +81,8 @@ struct UsageStatisticsInsights: View {
     /// 明细不再嵌套固定高度的滚动视图，所有模型与展开内容统一随页面滚动。
     /// 名称、Token 和占比采用固定列宽，趋势图独占剩余宽度；窄屏保留两行回退，
     /// 但不再用 Spacer 或固定图宽把可用于趋势的空间变成留白。
+    /// 明细不再嵌套固定高度的滚动视图，所有模型与展开内容统一随页面滚动。
+    /// 名称、Token 和占比采用固定列宽，趋势图独占剩余宽度；排版采用现代圆角数据行。
     private func modelTable(models: [UsageStatisticsModel], total: Int, sparklines: [String: [UsageStatisticsDay]]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("usage.modelDetails".localized()).font(.headline.weight(.semibold))
@@ -89,18 +91,18 @@ struct UsageStatisticsInsights: View {
                     Text("usage.model".localized()).frame(width: modelColumnWidth, alignment: .leading)
                     Text("Tokens").frame(width: tokenColumnWidth, alignment: .trailing)
                     Text("usage.replica.share".localized()).frame(width: shareColumnWidth, alignment: .trailing)
-                    Text("usage.replica.trend".localized()).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("usage.replica.trend".localized()).frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 12)
             }
-            LazyVStack(alignment: .leading, spacing: 8) {
+            LazyVStack(alignment: .leading, spacing: 6) {
                 ForEach(models) { model in
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         modelRow(model, total: total, points: sparklines[model.id] ?? [])
                         if expandedModels.contains(model.id) {
                             modelDetails(model)
-                                .transition(.opacity)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -119,9 +121,9 @@ struct UsageStatisticsInsights: View {
     }
 
     // 表头和数据行共享列宽，窗口变宽时只把新增空间交给折线图，避免数值列漂移。
-    private let modelColumnWidth: CGFloat = 200
-    private let tokenColumnWidth: CGFloat = 88
-    private let shareColumnWidth: CGFloat = 64
+    private let modelColumnWidth: CGFloat = 220
+    private let tokenColumnWidth: CGFloat = 84
+    private let shareColumnWidth: CGFloat = 56
 
     private func modelRow(_ model: UsageStatisticsModel, total: Int, points: [UsageStatisticsDay]) -> some View {
         let expanded = expandedModels.contains(model.id)
@@ -139,7 +141,7 @@ struct UsageStatisticsInsights: View {
                         modelMetrics(model, total: total, points: points, color: color, compact: false)
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         modelIdentity(model, expanded: expanded, color: color)
                             .frame(width: modelColumnWidth, alignment: .leading)
                         HStack(spacing: 12) {
@@ -149,9 +151,9 @@ struct UsageStatisticsInsights: View {
                 }
             }
             .monospacedDigit()
-            .padding(.horizontal, 14).padding(.vertical, 12)
+            .padding(.horizontal, 12).padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Capsule())
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(UsageModelRowButtonStyle(expanded: expanded))
         .accessibilityLabel(modelName(model) + " · " + providerName(model))
@@ -164,11 +166,10 @@ struct UsageStatisticsInsights: View {
             Image(systemName: "chevron.right")
                 .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
                 .rotationEffect(.degrees(expanded ? 90 : 0)).frame(width: 12)
-            Circle().fill(color).frame(width: 8, height: 8).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(modelName(model)).font(.callout.weight(.semibold))
-                    .lineLimit(2).truncationMode(.middle)
-                    .fixedSize(horizontal: false, vertical: true)
+            Circle().fill(color).frame(width: 7, height: 7).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(modelName(model)).font(.callout.weight(.medium))
+                    .lineLimit(1).truncationMode(.middle)
                     .foregroundStyle(.primary)
                 Text(providerName(model)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -200,33 +201,41 @@ struct UsageStatisticsInsights: View {
     }
 
     private func modelDetails(_ model: UsageStatisticsModel) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(modelName(model)).font(.caption.monospaced()).textSelection(.enabled)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], spacing: 8) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
                 pill("usage.inputTokens", value: model.totals.inputTokens)
                 pill("usage.outputTokens", value: model.totals.outputTokens)
                 pill("usage.cachedTokens", value: model.totals.cachedTokens)
                 pill("usage.reasoningTokens", value: model.totals.reasoningTokens)
             }
         }
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .quotioInsetCard()
+        .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+        }
+        .padding(.horizontal, 4)
     }
 
     /// 指标使用同一套 Token 语义色；数值本身保持主文字色，避免浅色模式下彩色小字难以辨认。
     private func pill(_ key: String, value: Int) -> some View {
         HStack(spacing: 8) {
             Circle().fill(UsageStatisticsPalette.metric(key)).frame(width: 6, height: 6)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(key.localized()).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
-                Text(value.formatted()).font(.caption.weight(.semibold)).monospacedDigit()
+                Text(value.formattedCompact).font(.caption.weight(.semibold)).monospacedDigit()
+                    .help(value.formatted())
                     .textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(QuotioTheme.Colors.cardTag(for: colorScheme), in: Capsule())
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(QuotioTheme.Colors.cardTag(for: colorScheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 
@@ -381,7 +390,7 @@ struct UsageStatisticsSparkline: View, Equatable {
     }
 }
 
-/// 模型行属于可交互的胶囊控件；展开明细另用内嵌槽，不再靠分割线表达层次。
+/// 模型行采用轻量圆角数据行；展开明细无缝嵌套，支持平滑 Hover 悬停高亮。
 private struct UsageModelRowButtonStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -389,16 +398,23 @@ private struct UsageModelRowButtonStyle: ButtonStyle {
     let expanded: Bool
 
     func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
         configuration.label
-            .background(hovered || expanded
-                        ? QuotioTheme.Colors.cardElevated(for: colorScheme)
-                        : QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
-            .overlay {
-                Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+            .background {
+                if hovered || expanded {
+                    shape
+                        .fill(QuotioTheme.Colors.cardElevated(for: colorScheme))
+                        .overlay(shape.strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5))
+                } else {
+                    shape
+                        .fill(QuotioTheme.Colors.cardInset(for: colorScheme).opacity(colorScheme == .dark ? 0.5 : 0.35))
+                        .overlay(shape.strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(0.35), lineWidth: 0.5))
+                }
             }
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
-            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.72), value: configuration.isPressed)
-            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.72), value: hovered)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.25, dampingFraction: 0.75), value: configuration.isPressed)
+            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.25, dampingFraction: 0.75), value: hovered)
+            .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.25, dampingFraction: 0.75), value: expanded)
             .onHover { hovered = $0 }
     }
 }

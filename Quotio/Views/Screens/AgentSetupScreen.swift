@@ -108,6 +108,18 @@ struct AgentSetupScreen: View {
                     label: "agents.configured".localized(),
                     color: .blue
                 )
+
+                Button {
+                    quotaViewModel.currentPage = .agentManagement
+                } label: {
+                    StatChip(
+                        icon: "slider.horizontal.2.square.on.square",
+                        value: "智能体管理",
+                        label: "会话 · 技能 · 存储",
+                        color: .purple
+                    )
+                }
+                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

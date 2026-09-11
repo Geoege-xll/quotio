@@ -124,6 +124,13 @@ struct WindowChromeConfigurator: NSViewRepresentable {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .visible
             window.styleMask.insert(.fullSizeContentView)
+            window.minSize = NSSize(width: 980, height: 620)
+            if window.frame.width < 980 || window.frame.height < 620 {
+                var frame = window.frame
+                frame.size.width = max(frame.size.width, 1040)
+                frame.size.height = max(frame.size.height, 680)
+                window.setFrame(frame, display: true)
+            }
         }
     }
 
@@ -197,6 +204,7 @@ struct QuotioApp: App {
                 EmptyView()
             } else {
                 ContentView(clientUsage: clientUsage, callAnalytics: callAnalytics)
+                    .frame(minWidth: 980, minHeight: 620)
                     .id(languageManager.currentLanguage) // Force re-render on language change
                     .environment(viewModel)
                     .environment(logsViewModel)
@@ -278,7 +286,7 @@ struct QuotioApp: App {
                     }
             }
         }
-        .defaultSize(width: 1000, height: 700)
+        .defaultSize(width: 1040, height: 700)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) { }
@@ -295,6 +303,9 @@ struct QuotioApp: App {
     }
 
     private func setupBootstrapOpenWindow() -> Bool {
+        // Scene 构建早于窗口内容的测试分支，必须在访问单例前退出。
+        // 否则单元测试仍会初始化真实代理并读取系统钥匙串，可能停在授权弹窗而无法开始测试。
+        guard !isRunningUnitTests else { return false }
         bootstrap.openWindowHandler = { [openWindow] in
             openWindow(id: "main")
         }
@@ -570,6 +581,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         window.styleMask.insert(.fullSizeContentView)
+        window.minSize = NSSize(width: 980, height: 620)
+        if window.frame.width < 980 || window.frame.height < 620 {
+            var frame = window.frame
+            frame.size.width = max(frame.size.width, 1040)
+            frame.size.height = max(frame.size.height, 680)
+            window.setFrame(frame, display: true)
+        }
     }
 
     private func handleWindowDidBecomeMain(_ window: NSWindow?) {
@@ -686,10 +704,16 @@ struct ContentView: View {
                             SidebarLabel(title: "nav.agents".localized(), page: .agents)
                                 .tag(NavigationPage.agents)
 
+                            SidebarLabel(title: "nav.agentManagement".localized(), page: .agentManagement)
+                                .tag(NavigationPage.agentManagement)
+
                             SidebarLabel(title: "nav.apiKeys".localized(), page: .apiKeys)
                                 .tag(NavigationPage.apiKeys)
 
                             // 低频诊断入口集中到设置，避免与日常服务管理混排。
+                        } else {
+                            SidebarLabel(title: "nav.agentManagement".localized(), page: .agentManagement)
+                                .tag(NavigationPage.agentManagement)
                         }
 
                         SidebarLabel(title: "nav.settings".localized(), page: .settings)
@@ -765,6 +789,8 @@ struct ContentView: View {
                     ProvidersScreen()
                 case .agents:
                     AgentSetupScreen()
+                case .agentManagement:
+                    AgentManagementScreen()
                 case .apiKeys:
                     APIKeysScreen()
                 case .logs:
@@ -776,6 +802,7 @@ struct ContentView: View {
                     AboutScreen()
                 }
             }
+            .frame(minWidth: 660)
             .quotioPage()
         }
     }

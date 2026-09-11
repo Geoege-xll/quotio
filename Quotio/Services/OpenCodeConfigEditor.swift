@@ -297,6 +297,103 @@ nonisolated enum OpenCodeConfigEditor {
         return String(String.UnicodeScalarView(result))
     }
 
+    /// 精确修改一个技能的原生权限，复用现有 JSONC 定位与回读校验。
+    /// OpenCode 按最后匹配规则生效，因此将本技能规则置于 skill 对象末尾，
+    /// 其余权限、provider、MCP、注释和键顺序均保留，避免被后面的通配符覆盖。
+    static func mergingSkillPermission(existing: Data?, skillName: String, enabled: Bool) throws -> Data {
+        var data = existing ?? Data("{}".utf8)
+        let action = enabled ? "allow" : "deny"
+        var object = try parseObject(data)
+        if let permission = object["permission"] as? String {
+            guard ["allow", "ask", "deny"].contains(permission) else { throw OpenCodeConfigError.verificationFailed }
+            data = try settingSkillMember(data, path: ["permission"], value: ["*": permission])
+        } else if object["permission"] != nil, !(object["permission"] is [String: Any]) {
+            throw OpenCodeConfigError.verificationFailed
+        }
+        object = try parseObject(data)
+        if let skill = (object["permission"] as? [String: Any])?["skill"] as? String {
+            guard ["allow", "ask", "deny"].contains(skill) else { throw OpenCodeConfigError.verificationFailed }
+            data = try settingSkillMember(data, path: ["permission", "skill"], value: ["*": skill])
+        } else if let skill = (object["permission"] as? [String: Any])?["skill"], !(skill is [String: Any]) {
+            throw OpenCodeConfigError.verificationFailed
+        }
+        // 分两步定位保证删除已有成员后再追加时不会出现重叠文本编辑。
+        data = try settingSkillMember(data, path: ["permission", "skill", skillName], value: nil)
+        return try settingSkillMember(data, path: ["permission", "skill", skillName], value: action)
+    }
+
+    /// 读取全局配置中对给定技能最后匹配的规则，顺序来自语法树而非无序字典。
+    /// 返回 nil 表示此文件没有声明相关规则，供 JSON/JSONC 配置层依次合并。
+    static func skillPermission(existing: Data, skillName: String) throws -> String? {
+        let (_, text) = try decoded(existing)
+        let scalars = Array(text.unicodeScalars)
+        let root = try parseDocument(scalars)
+        let object = try parsedObject(text)
+        if let action = object["permission"] as? String { return action }
+        guard let permissionMember = try uniqueMember(named: "permission", in: root, scalars: scalars),
+              case let .object(permission) = permissionMember.value else { return nil }
+        var fallback = (object["permission"] as? [String: Any])?["*"] as? String
+        guard let skillMember = try uniqueMember(named: "skill", in: permission, scalars: scalars) else { return fallback }
+        if let action = (object["permission"] as? [String: Any])?["skill"] as? String { return action }
+        guard case let .object(skills) = skillMember.value else { throw OpenCodeConfigError.verificationFailed }
+        for member in skills.members {
+            _ = try uniqueMember(named: member.key, in: skills, scalars: scalars)
+            let regex = "^" + NSRegularExpression.escapedPattern(for: member.key)
+                .replacingOccurrences(of: "\\*", with: ".*").replacingOccurrences(of: "\\?", with: ".") + "$"
+            if skillName.range(of: regex, options: .regularExpression) != nil {
+                fallback = ((object["permission"] as? [String: Any])?["skill"] as? [String: Any])?[member.key] as? String
+            }
+        }
+        return fallback
+    }
+
+    /// 仅用于技能权限的短路径编辑，不暴露通用任意配置改写能力。
+    private static func settingSkillMember(_ data: Data, path: [String], value: Any?) throws -> Data {
+        let (bom, text) = try decoded(data)
+        let scalars = Array(text.unicodeScalars)
+        let root = try parseDocument(scalars)
+        var expected = try parsedObject(text)
+        let unit = indentUnit(scalars, root: root)
+        var span = root
+        var parents: [String] = []
+        for (offset, key) in path.enumerated() {
+            let member = try uniqueMember(named: key, in: span, scalars: scalars)
+            let last = offset == path.count - 1
+            if !last, let member, case let .object(child) = member.value {
+                parents.append(key)
+                span = child
+                continue
+            }
+            if !last, member != nil { throw OpenCodeConfigError.verificationFailed }
+            if value == nil, member == nil { return data }
+            var replacement = value
+            if !last, let value {
+                replacement = path.dropFirst(offset + 1).reversed().reduce(value) { [$1: $0] as [String: Any] }
+            }
+            func updated(_ object: [String: Any], path: ArraySlice<String>) -> [String: Any] {
+                var result = object
+                let key = path.first!
+                if path.count == 1 { result[key] = value }
+                else { result[key] = updated(result[key] as? [String: Any] ?? [:], path: path.dropFirst()) }
+                return result
+            }
+            expected = updated(expected, path: path[...])
+            let edits: [Edit]
+            if let member {
+                if let replacement {
+                    edits = [Edit(range: member.value.range, replacement: rendered(replacement, indent: lineIndent(scalars, before: member.start)))]
+                } else { edits = [Edit(range: deletionRange(of: member, scalars: scalars), replacement: "")] }
+            } else {
+                guard let replacement else { return data }
+                let indent = String(repeating: unit, count: parents.count + 1)
+                edits = insertion(of: memberText(key: key, value: replacement, indent: indent), into: span,
+                    scalars: scalars, indent: indent, closeIndent: String(repeating: unit, count: parents.count))
+            }
+            return try applyVerified(edits, to: scalars, bom: bom, expecting: expected)
+        }
+        return data
+    }
+
     // MARK: - Document model
 
     struct Member {
@@ -489,9 +586,11 @@ nonisolated enum OpenCodeConfigEditor {
 
     /// Serializes `value` and re-indents its continuation lines to `indent`.
     private static func rendered(_ value: Any, indent: String) -> String {
+        // 技能权限的成员值是 allow/deny 字符串。允许 JSON 标量，避免 Foundation
+        // 对非数组/字典顶层抛出无法由 Swift try 捕获的 Objective-C 异常。
         guard let data = try? JSONSerialization.data(
             withJSONObject: value,
-            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]
         ) else {
             return "null"
         }

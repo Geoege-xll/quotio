@@ -67,6 +67,18 @@ nonisolated struct ClientUsageStatus: Codable, Sendable, Equatable, Identifiable
     var available: Bool
     var hasErrors: Bool
     var filesScanned: Int
+    /// 新字段可选以兼容旧 JSON 归档；旧状态在下一次真实扫描前仍按原有错误提示处理，
+    /// 不能仅根据历史缓存猜测本轮文件是否读取成功。
+    var readErrors: Bool? = nil
+    var incompleteSessionCount: Int? = nil
+    var hasReadErrors: Bool { readErrors ?? hasErrors }
+    var hasIncompleteHistory: Bool { (incompleteSessionCount ?? 0) > 0 }
+    /// 读取结果与全部历史的完整性分开表达；历史有缺口不再伪装成当前读取失败。
+    var readingStatusKey: String {
+        if hasReadErrors { return "usage.client.readFailed" }
+        guard available else { return "usage.client.missing" }
+        return hasIncompleteHistory ? "usage.client.readableWithHistory" : "usage.client.readable"
+    }
     var id: String { source.rawValue }
 }
 

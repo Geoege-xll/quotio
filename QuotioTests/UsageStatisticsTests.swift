@@ -128,4 +128,18 @@ final class UsageStatisticsTests: XCTestCase {
         XCTAssertEqual(result.buckets.count, 2)
         XCTAssertEqual(result.buckets.map(\.requests), [1, 1])
     }
+
+    func testIntFormattedCompactTokens() {
+        XCTAssertEqual(0.formattedCompact, "0")
+        XCTAssertEqual(450.formattedCompact, "450")
+        XCTAssertEqual(1_000.formattedCompact, "1K")
+        XCTAssertEqual(1_500.formattedCompact, "1.5K")
+        XCTAssertEqual(999_999.formattedCompact, "1000K")
+        XCTAssertEqual(1_000_000.formattedCompact, "1M")
+        XCTAssertEqual(2_500_000.formattedCompact, "2.5M")
+        XCTAssertEqual(1_000_000_000.formattedCompact, "1G")
+        XCTAssertEqual(1_200_000_000.formattedCompact, "1.2G")
+        XCTAssertEqual(2_450_000_000.formattedCompact, "2.5G")
+        XCTAssertEqual((-1_200_000_000).formattedCompact, "-1.2G")
+    }
 }

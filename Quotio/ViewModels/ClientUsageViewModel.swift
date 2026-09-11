@@ -111,9 +111,9 @@ final class ClientUsageViewModel {
                 guard generation == current else { return }
                 publish(presentation)
                 for status in fresh.metadata.statuses {
-                    activities[status.source]?.phase = status.hasErrors ? .failed : .complete
+                    activities[status.source]?.phase = status.hasReadErrors ? .failed : .complete
                 }
-                if fresh.metadata.statuses.contains(where: \.hasErrors) { errorKey = "usage.client.partial" }
+                if fresh.metadata.statuses.contains(where: \.hasReadErrors) { errorKey = "usage.client.partial" }
                 lastCompletedRefresh = Date()
             } catch is CancellationError {
                 // 用户取消的文案由cancelRefresh设置；离开页面不会产生错误提示。
@@ -164,7 +164,7 @@ final class ClientUsageViewModel {
             if (display.metadata.collectedAt ?? .distantPast) >= (snapshot.collectedAt ?? .distantPast) {
                 publish(display)
             }
-            let failed = display.metadata.statuses.first { $0.source == source }?.hasErrors == true
+            let failed = display.metadata.statuses.first { $0.source == source }?.hasReadErrors == true
             activities[source]?.phase = failed ? .failed : .complete
             if failed { errorKey = "usage.client.partial" }
         case .failed(let source):

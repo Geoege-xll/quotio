@@ -77,19 +77,15 @@ private struct CPAUsageDashboardContent: View {
     }
 
     var body: some View {
+        @Bindable var controls = model
         VStack(alignment: .leading, spacing: 20) {
             if let result = model.result {
                 CPAUsageOverviewSection(metrics: result.summary.metrics,
                                         totalAccounts: totalAccounts, readyAccounts: readyAccounts,
                                         isIncomplete: result.omittedHistoricalRequests > 0,
                                         historicalRequests: result.historicalRequests)
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("usage.dashboard.analysis".localized()).font(.headline)
-                    // 趋势和排行直接展示，不再在外层折叠卡片内嵌套一组图表卡片。
-                    CPAUsageTrendChart(points: result.trend, hourly: result.hourly, metric: model.metric)
-                    CPAUsageDistributionChart(report: result, selection: selection, dimension: model.dimension,
-                                              metric: model.metric, limit: $limit)
-                }
+                CPAUsageDistributionChart(report: result, selection: selection, dimension: model.dimension,
+                                          metric: model.metric, limit: $limit)
                 if let date = result.summary.collectionStartedAt {
                     Text("usage.records.startedAt".localized() + " " + date.formatted(date: .abbreviated, time: .shortened))
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
@@ -124,111 +120,6 @@ private struct CPAUsageDashboardContent: View {
     }
 }
 
-/// 趋势标题、静态图形及悬停交互拆成独立视图，避免一个鼠标事件重建整套 ChartContent。
-private struct CPAUsageTrendChart: View {
-    let points: [CPAUsageTrendPoint]
-    let hourly: Bool
-    let metric: CPAUsageChartMetric
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("usage.dashboard.trend".localized()).font(.subheadline.weight(.semibold))
-                Spacer()
-                Text(metric.titleKey.localized()).font(.caption).foregroundStyle(.secondary)
-            }
-            if points.isEmpty {
-                ContentUnavailableView("usage.empty.title".localized(), systemImage: "chart.xyaxis.line",
-                    description: Text("usage.records.empty".localized())).frame(height: 190)
-            } else {
-                CPAUsageTrendPlot(points: points, metric: metric, hourly: hourly)
-                    .frame(height: 190)
-            }
-            Text("usage.dashboard.trendNote".localized()).font(.caption2).foregroundStyle(.secondary)
-        }.quotioCard()
-    }
-}
-
-/// 图表本体只依赖有界采样点和指标，不持有鼠标状态，不动态插入 RuleMark 或 annotation。
-/// 固定数值域，避免提示内容改变坐标范围后再次触发悬停/布局反馈。
-private struct CPAUsageTrendPlot: View {
-    let points: [CPAUsageTrendPoint]
-    let metric: CPAUsageChartMetric
-    let hourly: Bool
-
-    private func value(_ point: CPAUsageTrendPoint) -> Int { metric == .tokens ? point.tokens : point.requests }
-
-    var body: some View {
-        let maximum = max(1, points.map { value($0) }.max() ?? 0)
-        Chart(points) { point in
-            // 使用单一稳定的折线标记，去掉每个点内的条件标记和重复面积系列。
-            LineMark(x: .value("Time", point.date), y: .value("Usage", value(point)))
-                .foregroundStyle(QuotioTheme.Colors.info)
-                .lineStyle(StrokeStyle(lineWidth: 2))
-                .symbol(.circle).symbolSize(points.count == 1 ? 20 : 0)
-        }
-        .chartYScale(domain: 0...maximum)
-        .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { mark in
-                AxisGridLine()
-                AxisValueLabel { if let count = mark.as(Int.self) { Text(count.formattedCompact).monospacedDigit() } }
-            }
-        }
-        .chartXAxis { AxisMarks(values: .automatic(desiredCount: 6)) }
-        .chartOverlay { proxy in
-            CPAUsageTrendHover(points: points, metric: metric, hourly: hourly, proxy: proxy)
-        }
-        .transaction { $0.animation = nil }
-    }
-}
-
-/// 提示在图表覆盖层单独更新，不参与坐标轴或父容器尺寸计算。
-/// 只有命中不同的数据点才写 State，光标在同一区间移动不会反复触发视图更新。
-private struct CPAUsageTrendHover: View {
-    let points: [CPAUsageTrendPoint]
-    let metric: CPAUsageChartMetric
-    let hourly: Bool
-    let proxy: ChartProxy
-    @State private var selectedDate: Date?
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .topLeading) {
-                Rectangle().fill(.clear).contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case .active(let location):
-                            guard let anchor = proxy.plotFrame else { clearSelection(); return }
-                            let plot = geometry[anchor]
-                            guard plot.contains(location),
-                                  let date = proxy.value(atX: location.x - plot.minX, as: Date.self) else {
-                                clearSelection(); return
-                            }
-                            let nearest = points.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }?.date
-                            if selectedDate != nearest { selectedDate = nearest }
-                        case .ended: clearSelection()
-                        }
-                    }
-                if let selectedDate, let point = points.first(where: { $0.date == selectedDate }) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(point.date.formatted(date: .abbreviated, time: hourly ? .shortened : .omitted))
-                        Text((metric == .tokens ? point.tokens : point.requests).formatted() + " " + metric.titleKey.localized())
-                            .monospacedDigit()
-                    }
-                    .font(.caption).padding(8)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                    .padding(.leading, 44).padding(.top, 4)
-                    .allowsHitTesting(false)
-                }
-            }
-        }
-    }
-
-    private func clearSelection() {
-        if selectedDate != nil { selectedDate = nil }
-    }
-}
-
 /// 名称、数值与百分比为固定列，条形图使用剩余最大宽度；显示更多采用有界增量查询。
 private struct CPAUsageDistributionChart: View {
     let report: CPAUsageDashboardReport
@@ -243,10 +134,27 @@ private struct CPAUsageDistributionChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("usage.dashboard.distribution".localized()).font(.subheadline.weight(.semibold))
+            HStack(spacing: 8) {
+                Text("usage.dashboard.distribution".localized())
+                    .font(.subheadline.weight(.semibold))
+
+                if dimension != .model {
+                    Text(dimension.titleKey.localized())
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+                        .overlay(
+                            Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                        )
+                }
+
                 Spacer(minLength: 8)
-                Text("usage.dashboard.clickForRecords".localized()).font(.caption2).foregroundStyle(.secondary)
+
+                Text("usage.dashboard.clickForRecords".localized())
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             if report.categories.isEmpty {
                 ContentUnavailableView("usage.empty.title".localized(), systemImage: "chart.bar.xaxis")

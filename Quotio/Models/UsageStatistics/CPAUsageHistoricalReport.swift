@@ -102,7 +102,9 @@ nonisolated struct CPAUsageHistoricalReport {
         var categories = Dictionary(report.categories.map { (Self.sqliteNoCaseKey($0.key), $0) }, uniquingKeysWith: { first, _ in first })
         for bucket in buckets {
             var point = points[bucket.day] ?? CPAUsageTrendPoint(date: bucket.day, requests: 0, tokens: 0)
-            point.requests += bucket.requests; point.tokens += bucket.totalTokens
+            // 旧日账本保存过输入、输出和缓存总量，可直接按日合并；不推算缓存读写拆分。
+            point.add(CPAUsageTrendPoint(date: bucket.day, requests: bucket.requests, tokens: bucket.totalTokens,
+                                        input: bucket.inputTokens, output: bucket.outputTokens, cached: bucket.cachedTokens))
             points[bucket.day] = point
             let name: String
             switch dimension {
@@ -117,14 +119,7 @@ nonisolated struct CPAUsageHistoricalReport {
         }
         report.trend = points.values.sorted { $0.date < $1.date }
         // 长历史先完成逐日相加再合并连续点，否则旧历史会与已压缩的新事件日期错位。
-        if report.trend.count > 240 {
-            let stride = (report.trend.count + 239) / 240
-            report.trend = Swift.stride(from: 0, to: report.trend.count, by: stride).map { offset in
-                let slice = report.trend[offset..<min(report.trend.count, offset + stride)]
-                return CPAUsageTrendPoint(date: report.trend[offset].date,
-                    requests: slice.reduce(0) { $0 + $1.requests }, tokens: slice.reduce(0) { $0 + $1.tokens })
-            }
-        }
+        report.trend = CPAUsageTrendPoint.coalesced(report.trend)
         let sorted = categories.values.sorted {
             if $0.value(metric) != $1.value(metric) { return $0.value(metric) > $1.value(metric) }
             if $0.requests != $1.requests { return $0.requests > $1.requests }

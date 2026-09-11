@@ -213,6 +213,14 @@ final class UsageStatisticsStore {
                                         dimension: dimension, metric: metric, limit: limit)
     }
 
+    func queryRuntimeMetrics(windowSeconds: Double = 3600, now: Date = Date()) async -> CPAUsageEventMetrics? {
+        do {
+            return try await ledger.queryRuntimeMetrics(windowSeconds: windowSeconds, now: now)
+        } catch {
+            return nil
+        }
+    }
+
     func queryPricing(_ selection: CPAUsageSelection, now: Date) async throws -> CPAUsagePricingReport {
         try await ledger.queryPricing(selection.query(now: now, page: 1, pageSize: 1))
     }

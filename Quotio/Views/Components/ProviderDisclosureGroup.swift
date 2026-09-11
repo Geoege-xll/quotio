@@ -55,9 +55,13 @@ struct ProviderDisclosureGroup: View {
                 }
             }
 
-            // Expanded Accounts Well (Inset Container with zero dividers)
+            // Expanded Accounts List (Clean Inset Grouped layout with hairline dividers)
             if isExpanded {
-                accountsWell
+                Rectangle()
+                    .fill(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(0.75))
+                    .frame(height: 0.5)
+
+                accountsList
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
@@ -69,6 +73,7 @@ struct ProviderDisclosureGroup: View {
             RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
                 .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
         )
+        .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous))
     }
 
     // MARK: - Provider Header
@@ -127,19 +132,26 @@ struct ProviderDisclosureGroup: View {
         .background(
             isHeaderHovered
                 ? QuotioTheme.Colors.cardElevated(for: colorScheme).opacity(0.5)
-                : Color.clear,
-            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
+                : Color.clear
         )
         .contentShape(Rectangle())
     }
 
-    // MARK: - Accounts Well (Inset Container)
+    // MARK: - Accounts List (Zero Div-Soup, Inset Grouped)
 
-    private var accountsWell: some View {
-        VStack(spacing: 6) {
-            ForEach(displayedAccounts) { account in
+    private var accountsList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(displayedAccounts.enumerated()), id: \.element.id) { index, account in
+                if index > 0 {
+                    Rectangle()
+                        .fill(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(0.65))
+                        .frame(height: 0.5)
+                        .padding(.leading, 54)
+                }
+
                 AccountRow(
                     account: account,
+                    isActiveInIDE: isAccountActive?(account) ?? false,
                     onDelete: onDeleteAccount != nil ? { onDeleteAccount?(account) } : nil,
                     onEdit: onEditAccount != nil ? { onEditAccount?(account) } : nil,
                     onSwitch: onSwitchAccount != nil ? { onSwitchAccount?(account) } : nil,
@@ -147,21 +159,10 @@ struct ProviderDisclosureGroup: View {
                     onDownload: account.canDownloadAuthFile && onDownloadAccount != nil
                         ? { onDownloadAccount?(account) }
                         : nil,
-                    isActiveInIDE: isAccountActive?(account) ?? false
+                    isLastRow: index == displayedAccounts.count - 1
                 )
             }
         }
-        .padding(8)
-        .background(
-            QuotioTheme.Colors.cardInset(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
-                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(0.6), lineWidth: 0.5)
-        )
-        .padding(.horizontal, 12)
-        .padding(.bottom, 12)
     }
 }
 

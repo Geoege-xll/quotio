@@ -22,7 +22,54 @@ nonisolated struct CPAUsageTrendPoint: Sendable, Identifiable {
     let date: Date
     var requests: Int
     var tokens: Int
+    /// 与总览使用相同的原始分量。缓存可能属于输入的子集，不能再加进总 Token。
+    var input = 0
+    var output = 0
+    var cached = 0
     var id: Date { date }
+
+    /// 历史合并与长范围压缩共用逐分量累加，避免新增曲线在降采样后丢失用量。
+    mutating func add(_ point: Self) {
+        requests += point.requests; tokens += point.tokens
+        input += point.input; output += point.output; cached += point.cached
+    }
+
+    static func coalesced(_ points: [Self]) -> [Self] {
+        guard points.count > 240 else { return points }
+        let step = (points.count + 239) / 240
+        return stride(from: 0, to: points.count, by: step).map { offset in
+            var point = Self(date: points[offset].date, requests: 0, tokens: 0)
+            for sample in points[offset..<min(points.count, offset + step)] { point.add(sample) }
+            return point
+        }
+    }
+}
+
+/// 曲线身份使用固定枚举，语言切换、筛选和隐藏图例都不会把不同系列连接在一起。
+nonisolated enum CPAUsageTrendSeries: String, CaseIterable, Identifiable, Sendable {
+    case total, input, output, cached, requests
+    var id: Self { self }
+    static let tokenSeries: [Self] = [.total, .input, .output, .cached]
+
+    var titleKey: String {
+        switch self {
+        case .total: "usage.tokens"
+        case .input: "usage.inputTokens"
+        case .output: "usage.outputTokens"
+        case .cached: "usage.cachedTokens"
+        case .requests: "usage.cpa.requests"
+        }
+    }
+
+    func value(in point: CPAUsageTrendPoint) -> Int {
+        switch self {
+        case .total: point.tokens
+        case .input: point.input
+        case .output: point.output
+        case .cached: point.cached
+        case .requests: point.requests
+        }
+    }
 }
 
 /// 与上游按单个维度聚合，同名模型跨提供商合并；稳定身份不受排行位置影响。

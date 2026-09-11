@@ -436,6 +436,45 @@ nonisolated final class CPAUsageEventStore {
                                  collectionStartedAt: collected, hasStoredEvents: hasStoredEvents)
     }
 
+    /// 实时网关吞吐与性能遥测：只聚合近期活跃时间窗（默认最近 1 小时），不带任何模型或历史筛选条件。
+    func runtimeMetrics(windowSeconds: Double = 3600, now: Date = Date()) throws -> CPAUsageEventMetrics {
+        try openDatabase()
+        try Task.checkCancellation()
+        sqlite3_progress_handler(database, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+        defer { sqlite3_progress_handler(database, 0, nil, nil) }
+        let start = now.addingTimeInterval(-windowSeconds)
+        let query = CPAUsageQuery(start: start, end: now, page: 1, pageSize: 1)
+        let filter = filters(query, timeOnly: true)
+        let metricsSQL = """
+            SELECT COUNT(*),
+                COALESCE(SUM(outcome='success'),0), COALESCE(SUM(outcome='failed'),0), COALESCE(SUM(outcome='canceled'),0),
+                COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(reasoning_tokens),0),
+                COALESCE(SUM(cached_tokens),0), COALESCE(SUM(total_tokens),0),
+                COALESCE(SUM(cache_read),0), COUNT(cache_read), COALESCE(SUM(cache_write),0), COUNT(cache_write),
+                COALESCE(SUM(latency),0), COUNT(latency), COALESCE(SUM(ttft),0), COUNT(ttft),
+                COALESCE(SUM(generation_tokens),0), COALESCE(SUM(generation_ms),0), COUNT(generation_ms), MIN(ts), MAX(ts)
+            FROM cpa_events
+            """ + filter.sql
+        let summary = try prepare(metricsSQL)
+        defer { sqlite3_finalize(summary) }
+        try bind(filter.values, to: summary)
+        guard sqlite3_step(summary) == SQLITE_ROW else { throw StoreError.queryFailed }
+        func integer(_ column: Int32) -> Int { Int(sqlite3_column_int64(summary, column)) }
+        func number(_ column: Int32) -> Double { sqlite3_column_double(summary, column) }
+        var metrics = CPAUsageEventMetrics()
+        metrics.requests = integer(0); metrics.successes = integer(1); metrics.failures = integer(2); metrics.canceled = integer(3)
+        metrics.input = integer(4); metrics.output = integer(5); metrics.reasoning = integer(6); metrics.cached = integer(7)
+        metrics.tokens = integer(8); metrics.cacheRead = integer(9); metrics.cacheReadSamples = integer(10)
+        metrics.cacheWrite = integer(11); metrics.cacheWriteSamples = integer(12)
+        metrics.latencyTotal = number(13); metrics.latencySamples = integer(14)
+        metrics.ttftTotal = number(15); metrics.ttftSamples = integer(16)
+        metrics.generationTokens = number(17); metrics.generationMilliseconds = number(18); metrics.generationSamples = integer(19)
+        let s = metrics.requests > 0 ? number(20) : start.timeIntervalSince1970
+        let e = metrics.requests > 0 ? number(21) : now.timeIntervalSince1970
+        metrics.minutes = max(1, (e - s) / 60)
+        return metrics
+    }
+
     /// Sheet 打开时只查询全时间可选目录，不运行请求指标聚合，也不解码任何事件 payload。
     /// 与 query 中仍受当前时间窗约束的选项分开，草稿编辑不会改变已应用统计口径。
     func filterOptions() throws -> CPAUsageFilterOptions {
@@ -499,7 +538,11 @@ nonisolated final class CPAUsageEventStore {
         // 小时按绝对时间分桶以区分夏令时重复小时；日桶按本机日历日期对齐。
         let bucket = hourly ? "CAST(ts / 3600 AS INTEGER) * 3600"
             : "CAST(strftime('%s', date(ts,'unixepoch','localtime'),'utc') AS REAL)"
-        let trendStatement = try prepare("SELECT " + bucket + ",COUNT(*),COALESCE(SUM(total_tokens),0) FROM cpa_events" + filter.sql + " GROUP BY 1 ORDER BY 1")
+        // 一次查询取回所有曲线分量，共用时间桶和六维筛选；图例切换不发起额外 SQL。
+        let trendStatement = try prepare("SELECT " + bucket + """
+            ,COUNT(*),COALESCE(SUM(total_tokens),0),COALESCE(SUM(input_tokens),0),
+            COALESCE(SUM(output_tokens),0),COALESCE(SUM(cached_tokens),0) FROM cpa_events
+            """ + filter.sql + " GROUP BY 1 ORDER BY 1")
         defer { sqlite3_finalize(trendStatement) }
         try bind(filter.values, to: trendStatement)
         var points: [CPAUsageTrendPoint] = []
@@ -508,7 +551,9 @@ nonisolated final class CPAUsageEventStore {
             if result == SQLITE_DONE { break }
             guard result == SQLITE_ROW else { throw StoreError.queryFailed }
             points.append(CPAUsageTrendPoint(date: Date(timeIntervalSince1970: sqlite3_column_double(trendStatement, 0)),
-                requests: Int(sqlite3_column_int64(trendStatement, 1)), tokens: Int(sqlite3_column_int64(trendStatement, 2))))
+                requests: Int(sqlite3_column_int64(trendStatement, 1)), tokens: Int(sqlite3_column_int64(trendStatement, 2)),
+                input: Int(sqlite3_column_int64(trendStatement, 3)), output: Int(sqlite3_column_int64(trendStatement, 4)),
+                cached: Int(sqlite3_column_int64(trendStatement, 5))))
         }
         // 短范围补齐零点，不能把无请求时间段误画成持续流量；超长历史限制到 240 个绘制点。
         if let start = query.start, let end = query.end, end.timeIntervalSince(start) <= 366 * 86400 {
@@ -524,16 +569,7 @@ nonisolated final class CPAUsageEventStore {
             }
             points = filled
         }
-        if points.count > 240 && !includesHistory {
-            let stride = (points.count + 239) / 240
-            var reduced: [CPAUsageTrendPoint] = []
-            for offset in Swift.stride(from: 0, to: points.count, by: stride) {
-                let slice = points[offset..<min(points.count, offset + stride)]
-                reduced.append(CPAUsageTrendPoint(date: points[offset].date,
-                    requests: slice.reduce(0) { $0 + $1.requests }, tokens: slice.reduce(0) { $0 + $1.tokens }))
-            }
-            points = reduced
-        }
+        if !includesHistory { points = CPAUsageTrendPoint.coalesced(points) }
         let column: String
         switch dimension {
         case .model: column = "model"

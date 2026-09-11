@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 仪表盘筛选默认折叠，标题行保留当前条件摘要和完整面板入口；展开后显示三组常用条件。
-/// 折叠只影响呈现，不清空选择、不重建查询状态，也不会触发采集任务。
+/// 仪表盘筛选精炼为单行轻量工具栏：左侧快速切换常用时间范围，右侧展示已选条件摘要与“更多筛选”入口。
+/// 彻底移除分组与提供商冗余胶囊，分组下沉至分布图表头，复杂筛选统一收归“更多筛选”面板。
 struct CPAUsageFilterCard: View {
     @Binding var selection: CPAUsageSelection
     let options: CPAUsageEventPage?
@@ -12,8 +12,7 @@ struct CPAUsageFilterCard: View {
     var loadOptions: (() async throws -> CPAUsageFilterOptions)? = nil
     let onApply: (CPAUsageFilterDraft) -> Void
     @State private var presentedFilters: PresentedFilters?
-    @State private var isExpanded = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     /// 条件在点击时冻结，当前页面选项仅作为加载占位；完整目录独立恢复，不重置草稿。
     private struct PresentedFilters: Identifiable {
@@ -21,63 +20,69 @@ struct CPAUsageFilterCard: View {
         let draft: CPAUsageFilterDraft
         let options: CPAUsageEventPage?
     }
-    private var current: CPAUsageFilterDraft { .init(selection: selection, dimension: dimension, metric: metric) }
-    private var summaryText: String {
-        let summary = CPAUsageFilterSummary(selection: selection, options: options)
-        return [summary.fullText, "usage.dashboard.groupBy".localized() + ": " + dimension.titleKey.localized(),
-                metric.titleKey.localized()].joined(separator: " · ")
+
+    private var current: CPAUsageFilterDraft {
+        .init(selection: selection, dimension: dimension, metric: metric)
     }
-    private var providerChoices: [CPAUsageFilterChoice] {
-        CPAUsageFilterChoice.options(options?.providers ?? [], selected: selection.provider,
-            allTitle: "usage.records.outcome.all".localized(), unknownTitle: "usage.records.unknown".localized())
+
+    private var rangeChoices: [CPAUsageFilterChoice] {
+        CPAUsageTimeRange.dashboardOptions.map { .init(id: $0.rawValue, title: $0.titleKey.localized()) }
+    }
+
+    private var rangeBinding: Binding<CPAUsageFilterChoice> {
+        Binding(get: {
+            .init(id: selection.range.rawValue, title: selection.range.titleKey.localized())
+        }, set: {
+            if let range = CPAUsageTimeRange(rawValue: $0.id) { selection.range = range }
+        })
+    }
+
+    private var activeConditions: [String] {
+        CPAUsageFilterSummary(selection: selection, options: options).conditions
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { isExpanded.toggle() }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary).rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        Text("usage.dashboard.filters".localized()).font(.headline).fixedSize()
-                        if !isExpanded {
-                            Text(summaryText).font(.caption).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle)
-                        }
-                        Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                // 宽屏模式：单行展示常用时间、激活标签与操作入口
+                HStack(spacing: 8) {
+                    timeRangeControl
+                    Spacer(minLength: 8)
+                    if selection.range == .custom {
+                        customRangeBadge
                     }
-                    .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(summaryText)
-                .accessibilityLabel((isExpanded ? "usage.dashboard.collapseFilters" : "usage.dashboard.expandFilters").localized())
-                .accessibilityValue(summaryText)
-                .accessibilityIdentifier("cpaToggleFiltersButton")
-                Button {
-                    presentedFilters = PresentedFilters(draft: current, options: options)
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("usage.dashboard.moreFilters".localized())
-                        if current.hiddenConditionCount > 0 {
-                            Text(current.hiddenConditionCount.formatted()).monospacedDigit()
-                        }
+                    if !activeConditions.isEmpty {
+                        activeConditionsBadges
                     }
+                    if current.hiddenConditionCount > 0 {
+                        resetButton
+                    }
+                    moreFiltersButton
                 }
-                .buttonStyle(.bordered).controlSize(.small).fixedSize()
-                .disabled(!isAvailable)
-                .help(String(format: "usage.dashboard.hiddenFilters".localized(), current.hiddenConditionCount))
-                .accessibilityLabel("usage.dashboard.moreFilters".localized())
-                .accessibilityValue(String(format: "usage.dashboard.hiddenFilters".localized(), current.hiddenConditionCount))
-                .accessibilityIdentifier("cpaMoreFiltersButton")
-            }
 
-            if isExpanded {
-                expandedControls
-                    .disabled(!isAvailable)
-                    .transition(.opacity)
+                // 窄屏或标签较多时：第一行保留时间与操作入口，第二行自适应展示激活标签
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        timeRangeControl
+                        Spacer(minLength: 8)
+                        if current.hiddenConditionCount > 0 {
+                            resetButton
+                        }
+                        moreFiltersButton
+                    }
+
+                    if selection.range == .custom || !activeConditions.isEmpty {
+                        HStack(spacing: 6) {
+                            if selection.range == .custom {
+                                customRangeBadge
+                            }
+                            if !activeConditions.isEmpty {
+                                activeConditionsBadges
+                            }
+                            Spacer()
+                        }
+                    }
+                }
             }
 
             if !isAvailable {
@@ -85,79 +90,121 @@ struct CPAUsageFilterCard: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .quotioCard(cornerRadius: QuotioTheme.Radius.lg, padding: 14)
+        .padding(10)
+        .background(
+            QuotioTheme.Colors.cardBackground(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
+                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+        )
         .sheet(item: $presentedFilters) { presentation in
             CPAUsageAdvancedFilterSheet(draft: presentation.draft, options: presentation.options,
                                         loadOptions: loadOptions, onApply: onApply)
         }
     }
 
-    /// 完整面板始终挂在卡片上，不依赖展开区域；收起时也可直接编辑自定义时间等全部条件。
-    private var expandedControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            rangeControls
-            // 并排时每组还需容纳标签和四项分段，至少 390pt 才能保留主要选项可读空间。
-            CPAUsageAdaptiveGrid(maximumColumns: 2, minimumColumnWidth: 390) {
-                filterCluster("usage.dashboard.groupBy", icon: "chart.bar.xaxis") {
-                    ScrollView(.horizontal) {
-                        QuotioCapsuleSegmentedControl(dimensionChoices, selection: dimensionBinding,
-                            size: .medium, tint: .accentColor, isEqualWidth: false, title: { $0.title })
-                    }.scrollIndicators(.hidden).frame(height: 38)
-                }
-                filterCluster("usage.provider", icon: "square.stack.3d.up") {
-                    ScrollView(.horizontal) {
-                        QuotioCapsuleSegmentedControl(providerChoices, selection: providerBinding,
-                            size: .medium, optionTint: providerTint, isEqualWidth: false, title: { $0.title })
-                    }.scrollIndicators(.hidden).frame(height: 38)
-                }
+    private var timeRangeControl: some View {
+        QuotioCapsuleSegmentedControl(
+            rangeChoices,
+            selection: rangeBinding,
+            size: .small,
+            tint: .accentColor,
+            isEqualWidth: false,
+            title: { $0.title }
+        )
+        .disabled(!isAvailable)
+    }
+
+    private var customRangeBadge: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "calendar")
+                .font(.system(size: 10))
+            Text(CPAUsageFilterSummary(selection: selection, options: options).rangeTitle)
+                .font(.caption2.weight(.medium))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+        .overlay(
+            Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+        )
+        .foregroundStyle(.secondary)
+    }
+
+    private var activeConditionsBadges: some View {
+        HStack(spacing: 6) {
+            ForEach(activeConditions.prefix(2), id: \.self) { condition in
+                Text(condition)
+                    .font(.caption2.weight(.medium))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+                    .overlay(
+                        Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                    )
+                    .foregroundStyle(.secondary)
+            }
+            if activeConditions.count > 2 {
+                Text("+\(activeConditions.count - 2)")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+                    .foregroundStyle(.secondary)
             }
         }
     }
 
-    private var rangeControls: some View {
-        filterCluster("usage.records.range", icon: "calendar") {
-            ScrollView(.horizontal) {
-                QuotioCapsuleSegmentedControl(rangeChoices, selection: rangeBinding,
-                    size: .medium, tint: .accentColor, isEqualWidth: false, title: { $0.title })
-            }.scrollIndicators(.hidden).frame(height: 38)
+    private var resetButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                selection.provider = ""
+                selection.model = ""
+                selection.source = ""
+                selection.apiKey = ""
+                selection.outcome = .all
+                if selection.range == .custom {
+                    selection.range = .today
+                }
+                dimension = .model
+                metric = .tokens
+            }
+        } label: {
+            Image(systemName: "arrow.counterclockwise")
+                .font(.system(size: 11, weight: .medium))
         }
+        .buttonStyle(.quotioMicroCapsule(height: 26))
+        .help("usage.cpa.resetFilters".localized())
+        .accessibilityLabel("usage.cpa.resetFilters".localized())
     }
 
-    private func filterCluster<Content: View>(_ key: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack(spacing: 10) {
-            Label(key.localized(), systemImage: icon).font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-            content().frame(maxWidth: .infinity, alignment: .leading)
+    private var moreFiltersButton: some View {
+        Button {
+            presentedFilters = PresentedFilters(draft: current, options: options)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 11, weight: .medium))
+                Text("usage.dashboard.moreFilters".localized())
+                    .font(.system(size: 12, weight: .medium))
+                if current.hiddenConditionCount > 0 {
+                    Text("\(current.hiddenConditionCount)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(Color.accentColor)
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                }
+            }
         }
-    }
-
-    private var rangeChoices: [CPAUsageFilterChoice] {
-        CPAUsageTimeRange.dashboardOptions.map { .init(id: $0.rawValue, title: $0.titleKey.localized()) }
-    }
-    private var dimensionChoices: [CPAUsageFilterChoice] {
-        CPAUsageDimension.allCases.map { .init(id: $0.rawValue, title: $0.titleKey.localized()) }
-    }
-    private var rangeBinding: Binding<CPAUsageFilterChoice> {
-        Binding(get: { .init(id: selection.range.rawValue, title: selection.range.titleKey.localized()) }, set: {
-            if let range = CPAUsageTimeRange(rawValue: $0.id) { selection.range = range }
-        })
-    }
-    private var dimensionBinding: Binding<CPAUsageFilterChoice> {
-        Binding(get: { .init(id: dimension.rawValue, title: dimension.titleKey.localized()) }, set: {
-            if let value = CPAUsageDimension(rawValue: $0.id) { dimension = value }
-        })
-    }
-    private var providerBinding: Binding<CPAUsageFilterChoice> {
-        Binding(get: {
-            providerChoices.first { $0.id == selection.provider } ?? .init(id: selection.provider, title: selection.provider)
-        }, set: { selection.provider = $0.id })
-    }
-    private func providerTint(_ choice: CPAUsageFilterChoice) -> Color? {
-        // 品牌只影响外观，仍按数据库原始 ID 筛选；不把自定义 OpenAI 兼容服务猜成 Codex。
-        let provider = AIProvider(rawValue: choice.id.lowercased())
-            ?? AIProvider.allCases.first { $0.displayName.caseInsensitiveCompare(choice.title) == .orderedSame }
-        return provider?.color ?? .accentColor
+        .buttonStyle(.quotioMicroCapsule(height: 26))
+        .disabled(!isAvailable)
+        .help(String(format: "usage.dashboard.hiddenFilters".localized(), current.hiddenConditionCount))
+        .accessibilityLabel("usage.dashboard.moreFilters".localized())
+        .accessibilityIdentifier("cpaMoreFiltersButton")
     }
 }
 

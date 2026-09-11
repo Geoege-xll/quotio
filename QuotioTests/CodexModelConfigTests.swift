@@ -147,6 +147,31 @@ final class CodexModelConfigTests: XCTestCase {
         XCTAssertNotNil(result.backupPath)
     }
 
+    /// Codex 的菜单目录与启动模型分别配置；更换默认模型不能覆盖用户自建的菜单目录。
+    func testReconfigurePreservesCustomCatalogAndCLISelectedModelRoundTrips() async throws {
+        _ = try await read("""
+        model = "old-model"
+        model_catalog_json = "/custom/models.json"
+        model_provider = "cliproxyapi"
+        [model_providers.cliproxyapi]
+        base_url = "http://127.0.0.1:8317/v1"
+        """)
+        var config = AgentConfiguration(agent: .codexCLI, proxyURL: "http://127.0.0.1:8317/v1", apiKey: "test-key")
+        config.codexModel = "custom/proxy-alias"
+        _ = try await service.generateConfiguration(
+            agent: .codexCLI, config: config, mode: .automatic, detectionService: AgentDetectionService()
+        )
+        var content = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(content.contains("model_catalog_json = \"/custom/models.json\""))
+        XCTAssertTrue(content.contains("model = \"custom/proxy-alias\""))
+
+        // 模拟 Codex /model 更新顶层选择；回填必须读取新值，不能返回旧别名或 Claude 角色槽默认值。
+        content = content.replacingOccurrences(of: "model = \"custom/proxy-alias\"", with: "model = \"gpt-5.6-sol\"")
+        let saved = try await read(content)
+        XCTAssertEqual(saved.modelSlots[.sonnet], "gpt-5.6-sol")
+        XCTAssertTrue(saved.isProxyConfigured)
+    }
+
     @MainActor
     func testDefaultModelSelectionUpdatesOnlyTheSelectedAgent() {
         let viewModel = AgentSetupViewModel()

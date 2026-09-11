@@ -178,12 +178,13 @@ struct AccountRowData: Identifiable, Hashable {
 struct AccountRow: View {
     @Environment(\.colorScheme) private var colorScheme
     let account: AccountRowData
+    var isActiveInIDE: Bool = false
     var onDelete: (() -> Void)?
     var onEdit: (() -> Void)?
     var onSwitch: (() -> Void)?
     var onToggleDisabled: (() -> Void)?
     var onDownload: (() -> Void)?
-    var isActiveInIDE: Bool = false
+    var isLastRow: Bool = false
 
     @State private var settings = MenuBarSettingsManager.shared
     @State private var showWarning = false
@@ -208,42 +209,46 @@ struct AccountRow: View {
         }
     }
 
+    private var avatarInitial: String {
+        let cleaned = account.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let first = cleaned.first, first.isLetter || first.isNumber {
+            return String(first).uppercased()
+        }
+        return ""
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            // Provider icon
-            ProviderIcon(provider: account.provider, size: 24)
+            // Account Identity Avatar
+            accountAvatar
 
             // Account info
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(maskedDisplayName)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
-                    // Provider name
-                    Text(account.provider.displayName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
                     // Status indicator (only for proxy accounts)
                     if let status = account.status {
                         Circle()
                             .fill(statusColor)
-                            .frame(width: 6, height: 6)
+                            .frame(width: 5.5, height: 5.5)
 
                         Text(status)
                             .font(.caption)
                             .foregroundStyle(statusColor)
-                    } else {
-                        // Source indicator for non-proxy accounts
+
                         Text("•")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
-
-                        Text(account.source.displayName)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
                     }
+
+                    // Source indicator
+                    Text(account.source.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 if let message = account.statusMessage, !message.isEmpty {
@@ -254,126 +259,104 @@ struct AccountRow: View {
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
-            // Disabled badge
-            if account.isDisabled {
-                Text("providers.disabled".localized())
-                    .font(.caption2)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.secondary.opacity(0.2))
-                    .clipShape(Capsule())
-            }
+            // Right-side actions & badges
+            HStack(spacing: 8) {
+                // Disabled badge
+                if account.isDisabled {
+                    Text("providers.disabled".localized())
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(Capsule().fill(Color.secondary.opacity(0.18)))
+                        .foregroundStyle(.secondary)
+                }
 
-            // Active in IDE badge (Antigravity only)
-            if account.provider == .antigravity && isActiveInIDE {
-                Text("antigravity.active".localized())
-                    .font(.caption2)
-                    .fontWeight(.medium)
-                    .foregroundStyle(Color(red: 0.13, green: 0.55, blue: 0.13))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color(red: 0.85, green: 0.95, blue: 0.85))
-                    .clipShape(Capsule())
-            }
-
-            // Switch button (Antigravity only, for proxy/direct accounts that are not active)
-            if account.provider == .antigravity && !isActiveInIDE && account.source != .autoDetected {
-                Button {
-                    onSwitch?()
-                } label: {
+                // Active in IDE badge (Antigravity only)
+                if account.provider == .antigravity && isActiveInIDE {
                     HStack(spacing: 4) {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                            .font(.caption2)
-                        Text("antigravity.useInIDE".localized())
-                            .font(.caption2)
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 5, height: 5)
+                        Text("antigravity.active".localized())
+                            .font(.caption2.weight(.semibold))
                     }
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.1))
-                    .foregroundStyle(.blue)
-                    .clipShape(Capsule())
+                    .padding(.vertical, 3.5)
+                    .background(Capsule().fill(Color.green.opacity(colorScheme == .dark ? 0.20 : 0.12)))
+                    .overlay(
+                        Capsule().strokeBorder(Color.green.opacity(0.35), lineWidth: 0.5)
+                    )
+                    .foregroundStyle(Color.green)
                 }
-                .buttonStyle(.plain)
-                .help("antigravity.switch.title".localized())
-            }
 
-            // Menu bar toggle
-            MenuBarBadge(
-                isSelected: isMenuBarSelected,
-                onTap: handleMenuBarToggle
-            )
-
-            // Disable/Enable toggle button (only for proxy accounts)
-            if account.source.supportsDisable, let onToggleDisabled = onToggleDisabled {
-                Button {
-                    onToggleDisabled()
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(account.isDisabled ? Color.red.opacity(0.12) : (isHovered ? QuotioTheme.Colors.cardInset(for: colorScheme) : Color.clear))
-                            .frame(width: 26, height: 26)
-
-                        Image(systemName: account.isDisabled ? "xmark.circle.fill" : "checkmark.circle")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(account.isDisabled ? .red : .secondary)
+                // Switch button (Antigravity only, for proxy/direct accounts that are not active)
+                if account.provider == .antigravity && !isActiveInIDE && account.source != .autoDetected {
+                    Button {
+                        onSwitch?()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .font(.system(size: 9.5))
+                            Text("antigravity.useInIDE".localized())
+                                .font(.system(size: 11, weight: .medium))
+                        }
                     }
+                    .buttonStyle(.quotioMicroCapsule(height: 24))
+                    .help("antigravity.switch.title".localized())
                 }
-                .buttonStyle(.plain)
-                .help(account.isDisabled ? "providers.enable".localized() : "providers.disable".localized())
-                .accessibilityLabel(account.isDisabled ? "providers.enable".localized() : "providers.disable".localized())
-            }
 
-            // Edit button (GLM only)
-            if account.canEdit, let onEdit = onEdit {
-                Button {
-                    onEdit()
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(Color.blue.opacity(0.10))
-                            .frame(width: 26, height: 26)
+                // Menu bar toggle (26pt circular icon button)
+                MenuBarBadge(
+                    isSelected: isMenuBarSelected,
+                    onTap: handleMenuBarToggle
+                )
 
-                        Image(systemName: "pencil")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.blue)
+                // Disable/Enable toggle button (only for proxy accounts)
+                if account.source.supportsDisable, let onToggleDisabled = onToggleDisabled {
+                    QuotioCircularIconButton(
+                        systemImage: account.isDisabled ? "xmark.circle.fill" : "checkmark.circle",
+                        tint: account.isDisabled ? .red : .secondary,
+                        backgroundTint: account.isDisabled ? .red : nil
+                    ) {
+                        onToggleDisabled()
                     }
+                    .help(account.isDisabled ? "providers.enable".localized() : "providers.disable".localized())
+                    .accessibilityLabel(account.isDisabled ? "providers.enable".localized() : "providers.disable".localized())
                 }
-                .buttonStyle(.plain)
-                .help("action.edit".localized())
-            }
 
-            // Delete button (only for proxy accounts)
-            if account.canDelete, onDelete != nil {
-                Button(role: .destructive) {
-                    showDeleteConfirmation = true
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(Color.red.opacity(0.08))
-                            .frame(width: 26, height: 26)
-
-                        Image(systemName: "trash")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.red.opacity(0.85))
+                // Edit button (GLM only)
+                if account.canEdit, let onEdit = onEdit {
+                    QuotioCircularIconButton(
+                        systemImage: "pencil",
+                        tint: .blue,
+                        backgroundTint: .blue
+                    ) {
+                        onEdit()
                     }
+                    .help("action.edit".localized())
                 }
-                .buttonStyle(.plain)
-                .help("action.delete".localized())
+
+                // Delete button (only for proxy accounts)
+                if account.canDelete, onDelete != nil {
+                    QuotioCircularIconButton(
+                        systemImage: "trash",
+                        tint: .red,
+                        backgroundTint: .red
+                    ) {
+                        showDeleteConfirmation = true
+                    }
+                    .help("action.delete".localized())
+                }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(
             isHovered
-                ? QuotioTheme.Colors.cardElevated(for: colorScheme)
-                : QuotioTheme.Colors.cardBackground(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
-                .strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme).opacity(isHovered ? 0.8 : 0.4), lineWidth: 0.5)
+                ? QuotioTheme.Colors.cardElevated(for: colorScheme).opacity(0.55)
+                : Color.clear
         )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) {
@@ -460,6 +443,40 @@ struct AccountRow: View {
                 settings.menuBarMaxItems
             ))
         }
+    }
+
+    private var accountAvatar: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Circle()
+                .fill(account.provider.color.opacity(colorScheme == .dark ? 0.22 : 0.12))
+                .overlay(
+                    Circle().strokeBorder(account.provider.color.opacity(0.35), lineWidth: 0.5)
+                )
+                .frame(width: 28, height: 28)
+
+            if !avatarInitial.isEmpty {
+                Text(avatarInitial)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(account.provider.color)
+            } else {
+                Image(systemName: "person.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(account.provider.color)
+            }
+
+            // Status dot badge on bottom right
+            if account.status != nil {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 7, height: 7)
+                    .overlay(
+                        Circle()
+                            .stroke(QuotioTheme.Colors.cardBackground(for: colorScheme), lineWidth: 1.5)
+                    )
+                    .offset(x: 1.5, y: 1.5)
+            }
+        }
+        .frame(width: 28, height: 28)
     }
     
     private func handleMenuBarToggle() {

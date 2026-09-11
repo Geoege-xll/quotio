@@ -46,7 +46,7 @@ struct AgentConfigSheet: View {
             
             footerView
         }
-        .frame(width: 720, height: 600)
+        .frame(width: 580, height: 620)
         .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
         .task { await aliasStore.load(client: viewModel.quotaViewModel?.apiClient) }
         .sheet(isPresented: $showModelAliases, onDismiss: {
@@ -151,37 +151,38 @@ struct AgentConfigSheet: View {
             if viewModel.selectedSetupMode == .proxy {
                 connectionInfoSection
                 
-                if agent == .codexCLI || agent == .pi {
-                    VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("agents.modelSlots".localized()).font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Button("cpaAliases.manage".localized()) { showModelAliases = true }
-                            .buttonStyle(.quotioMicroCapsule)
-                    }
-                    AgentDefaultModelPicker(
-                        agent: agent,
-                        selectedModel: Binding(
-                            get: {
-                                agent == .pi
-                                    ? (viewModel.currentConfiguration?.modelSlots[.sonnet] ?? "")
-                                    : (viewModel.currentConfiguration?.codexModel ?? AgentConfiguration.defaultCodexModel)
-                            },
-                            set: { model in
-                                viewModel.updateDefaultModel(model)
-                                if isManualMode { generatePreview() }
-                            }
-                        ),
-                        availableModels: viewModel.availableModels,
-                        isFetchingModels: viewModel.isFetchingModels,
-                        onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
-                        aliases: aliasStore.aliases
+                if agent == .codexCLI {
+                    CodexModelConfigSection(
+                        viewModel: viewModel,
+                        aliases: aliasStore.aliases,
+                        onManageAliases: { showModelAliases = true },
+                        onModelOrEffortChange: {
+                            if isManualMode { generatePreview() }
+                        }
                     )
-                    // CPA 固定别名会覆盖客户端强度，界面不能再展示一个看似能生效的编辑器。
-                    let model = viewModel.currentConfiguration?.codexModel ?? AgentConfiguration.defaultCodexModel
-                    if agent == .codexCLI && !CPAModelAliasPolicy.entries(for: model, in: aliasStore.aliases).contains(where: { $0.effort != nil }) {
-                        reasoningEffortSection
-                    }
+                } else if agent == .pi {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("agents.defaultModel".localized()).font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Button("cpaAliases.manage".localized()) { showModelAliases = true }
+                                .buttonStyle(.quotioMicroCapsule)
+                        }
+                        AgentDefaultModelPicker(
+                            agent: agent,
+                            selectedModel: Binding(
+                                get: { viewModel.currentConfiguration?.modelSlots[.sonnet] ?? "" },
+                                set: { model in
+                                    viewModel.updateDefaultModel(model)
+                                    if isManualMode { generatePreview() }
+                                }
+                            ),
+                            availableModels: viewModel.availableModels,
+                            isFetchingModels: viewModel.isFetchingModels,
+                            onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
+                            aliases: aliasStore.aliases,
+                            showsHeader: false
+                        )
                     }
                     .quotioInsetCard()
                 }
@@ -341,53 +342,6 @@ struct AgentConfigSheet: View {
         return String(key.prefix(4)) + "••••" + String(key.suffix(4))
     }
     
-    /// Named efforts plus, when the existing config holds a value Quotio does
-    /// not name, that value — so it stays selected and survives a save.
-    private var reasoningEffortOptions: [CodexReasoningEffort] {
-        let current = viewModel.currentConfiguration?.codexReasoningEffort ?? .defaultEffort
-        var options = CodexReasoningEffort.allCases
-        if !options.contains(current) {
-            options.append(current)
-        }
-        return options
-    }
-
-    private var reasoningEffortSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("agents.reasoningEffort".localized())
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                Spacer(minLength: 12)
-
-                Picker("", selection: Binding(
-                    get: { viewModel.currentConfiguration?.codexReasoningEffort ?? .defaultEffort },
-                    set: { effort in
-                        viewModel.updateReasoningEffort(effort)
-                        if isManualMode {
-                            generatePreview()
-                        }
-                    }
-                )) {
-                    ForEach(reasoningEffortOptions) { effort in
-                        Text(effort.displayName)
-                            .tag(effort)
-                    }
-                }
-                .pickerStyle(.menu)
-                .modifier(AgentConfigMenuStyle())
-                .frame(maxWidth: 280)
-                .accessibilityLabel("agents.reasoningEffort".localized())
-            }
-
-            Text("agents.reasoningEffort.info".localized())
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.top, 4)
-    }
-
     private var oauthToggleSection: some View {
         Toggle(isOn: Binding(
             get: { viewModel.currentConfiguration?.useOAuth ?? true },
@@ -683,7 +637,9 @@ private struct ClaudeAdvancedSettingsSection: View {
 
     private var uses1MContext: Bool {
         guard let configuration = viewModel.currentConfiguration else { return false }
-        return ModelSlot.allCases.contains { configuration.usesClaude1MContext(for: $0) }
+        // 默认行可独立开启 1M；提示覆盖四种用途，不表示所有模型或全局普通窗口都已变成 1M。
+        return configuration.claudeDefaultUses1MContext
+            || ModelSlot.allCases.contains { configuration.usesClaude1MContext(for: $0) }
     }
 
     private var maxContextBinding: Binding<Int> {
@@ -723,7 +679,7 @@ private struct ClaudeAdvancedSettingsSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             header
             contextField
             autoCompactField
@@ -734,68 +690,96 @@ private struct ClaudeAdvancedSettingsSection: View {
 
     private var header: some View {
         HStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(QuotioTheme.Colors.claudeOrange.opacity(0.15))
+                    .frame(width: 24, height: 24)
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(QuotioTheme.Colors.claudeOrange)
+            }
+
             Text("agents.claude.advanced".localized())
-                .font(.subheadline)
-                .fontWeight(.medium)
+                .font(.subheadline.weight(.semibold))
+
             Spacer()
+
             if uses1MContext {
-                Label(
-                    "agents.claude.advanced.context.effective1M".localized(),
-                    systemImage: "arrow.up.right.circle.fill"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.right.circle.fill")
+                        .font(.system(size: 10))
+                    Text("agents.claude.advanced.context.effective1M".localized())
+                        .font(.caption2.weight(.medium))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                .foregroundStyle(Color.accentColor)
             }
         }
     }
 
     private var contextField: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("agents.claude.advanced.context".localized())
-                    .font(.subheadline)
+                    .font(.subheadline.weight(.medium))
                 Text("agents.claude.advanced.context.info".localized())
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+
             Spacer(minLength: 8)
-            TextField(
-                "agents.claude.advanced.context".localized(),
-                value: maxContextBinding,
-                format: .number
-            )
-            .multilineTextAlignment(.trailing)
-            .modifier(AgentConfigNumericFieldStyle())
-            .frame(width: 126)
-            .accessibilityLabel("agents.claude.advanced.context".localized())
-            Text("agents.claude.advanced.tokens".localized())
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                TextField(
+                    "agents.claude.advanced.context".localized(),
+                    value: maxContextBinding,
+                    format: .number
+                )
+                .multilineTextAlignment(.trailing)
+                .font(.system(size: 12, design: .monospaced))
+                .modifier(AgentConfigNumericFieldStyle())
+                .frame(width: 120)
+                .accessibilityLabel("agents.claude.advanced.context".localized())
+
+                Text("agents.claude.advanced.tokens".localized())
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .leading)
+            }
         }
     }
 
     private var autoCompactField: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("agents.claude.advanced.compaction".localized())
-                    .font(.subheadline)
+                    .font(.subheadline.weight(.medium))
                 Text("agents.claude.advanced.compaction.info".localized())
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+
             Spacer(minLength: 8)
-            TextField(
-                "agents.claude.advanced.compaction".localized(),
-                value: autoCompactBinding,
-                format: .number
-            )
-            .multilineTextAlignment(.trailing)
-            .modifier(AgentConfigNumericFieldStyle())
-            .frame(width: 74)
-            .accessibilityLabel("agents.claude.advanced.compaction".localized())
-            Text("%")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                TextField(
+                    "agents.claude.advanced.compaction".localized(),
+                    value: autoCompactBinding,
+                    format: .number
+                )
+                .multilineTextAlignment(.trailing)
+                .font(.system(size: 12, design: .monospaced))
+                .modifier(AgentConfigNumericFieldStyle())
+                .frame(width: 74)
+                .accessibilityLabel("agents.claude.advanced.compaction".localized())
+
+                Text("%")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .leading)
+            }
         }
     }
 
@@ -803,12 +787,14 @@ private struct ClaudeAdvancedSettingsSection: View {
         Toggle(isOn: disableAutoCompactBinding) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("agents.claude.advanced.disableAutoCompact".localized())
-                    .font(.subheadline)
+                    .font(.subheadline.weight(.medium))
                 Text("agents.claude.advanced.disableAutoCompact.info".localized())
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
         }
+        .toggleStyle(.switch)
+        .controlSize(.small)
         .accessibilityHint("agents.claude.advanced.disableAutoCompact.info".localized())
     }
 }
@@ -1075,6 +1061,268 @@ private struct RawConfigView: View {
             .background(QuotioTheme.Colors.cardInset(for: colorScheme))
             .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous))
         }
+    }
+}
+
+// MARK: - Codex Model & Reasoning Effort Section
+
+/// Codex CLI 专用的模型与思考强度配置卡片。
+/// 消除与模型槽概念的混淆，将默认模型选择器与思考强度策略整合进同一个结构严密的卡片中，
+/// 并支持 CPA 思考策略自动继承与受管状态指示。
+struct CodexModelConfigSection: View {
+    @Bindable var viewModel: AgentSetupViewModel
+    var aliases: [CPAModelAlias] = []
+    var onManageAliases: () -> Void = {}
+    let onModelOrEffortChange: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var selectedModel: String {
+        viewModel.currentConfiguration?.codexModel ?? AgentConfiguration.defaultCodexModel
+    }
+
+    private var matchingAlias: CPAModelAlias? {
+        aliases.first { $0.alias.caseInsensitiveCompare(selectedModel) == .orderedSame }
+    }
+
+    private var fixedEffort: String? {
+        CPAModelAliasPolicy.fixedEffort(for: selectedModel, in: aliases)
+    }
+
+    private var hasServerEffortOverride: Bool {
+        CPAModelAliasPolicy.entries(for: selectedModel, in: aliases).contains(where: { $0.effort != nil })
+    }
+
+    private var currentEffort: CodexReasoningEffort {
+        viewModel.currentConfiguration?.codexReasoningEffort ?? .defaultEffort
+    }
+
+    private var reasoningEffortOptions: [CodexReasoningEffort] {
+        let current = currentEffort
+        var options = CodexReasoningEffort.allCases
+        if !options.contains(current) {
+            options.append(current)
+        }
+        return options
+    }
+
+    private var lockedEffortDisplayName: String {
+        if let fixedEffort, let effort = CodexReasoningEffort(rawValue: fixedEffort) {
+            return effort.displayName
+        }
+        return (fixedEffort ?? currentEffort.rawValue).capitalized
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            headerBar
+
+            // 核心双列垂直对齐布局（Column-based：确保标题与对应控件同轴 100% 垂直像素对齐）
+            HStack(alignment: .top, spacing: 12) {
+                // 左列：默认模型
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text("agents.defaultModel".localized())
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+
+                        if matchingAlias != nil {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.system(size: 8))
+                                Text("cpaAliases.title".localized())
+                                    .font(.system(size: 9, weight: .semibold))
+                            }
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .frame(height: 16, alignment: .leading)
+
+                    AgentDefaultModelPicker(
+                        agent: .codexCLI,
+                        selectedModel: Binding(
+                            get: { selectedModel },
+                            set: { model in
+                                viewModel.updateDefaultModel(model)
+                                onModelOrEffortChange()
+                            }
+                        ),
+                        availableModels: viewModel.availableModels,
+                        isFetchingModels: viewModel.isFetchingModels,
+                        onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
+                        aliases: aliases,
+                        showsHeader: false
+                    )
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // 右列：推理强度（固定宽度 140pt，标题与胶囊控件同轴垂直对齐）
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 4) {
+                        Text("agents.reasoningEffort".localized())
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+
+                        if hasServerEffortOverride {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(height: 16, alignment: .leading)
+
+                    if hasServerEffortOverride {
+                        serverEffortLockedBadge
+                    } else {
+                        clientReasoningEffortPicker
+                    }
+                }
+                .frame(width: 140, alignment: .leading)
+            }
+
+            // 辅助提示说明
+            if hasServerEffortOverride {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.top, 1)
+
+                    Text(String(format: "cpaAliases.fixedSummary".localized(), fixedEffort ?? ""))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 2)
+            }
+
+            // 启动模型和 /model 目录分别配置；即使别名已绑定服务端思考策略，也需保留此说明。
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "info.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 1)
+
+                Text("agents.defaultModel.codexInfo".localized())
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 2)
+        }
+        .quotioInsetCard()
+    }
+
+    private var headerBar: some View {
+        HStack {
+            HStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(QuotioTheme.Colors.codexGreen.opacity(0.15))
+                        .frame(width: 24, height: 24)
+                    Image(systemName: "chevron.left.forwardslash.chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(QuotioTheme.Colors.codexGreen)
+                }
+
+                Text(String(format: "%@ & %@", "agents.defaultModel".localized(), "agents.reasoningEffort".localized()))
+                    .font(.subheadline.weight(.semibold))
+            }
+
+            Spacer()
+
+            Button("cpaAliases.manage".localized(), action: onManageAliases)
+                .buttonStyle(.quotioMicroCapsule)
+
+            Button {
+                Task { await viewModel.loadModels(forceRefresh: true) }
+            } label: {
+                if viewModel.isFetchingModels {
+                    SmallProgressView()
+                } else {
+                    Image(systemName: "arrow.clockwise").font(.caption)
+                }
+            }
+            .buttonStyle(.quotioMicroCapsule)
+            .disabled(viewModel.isFetchingModels)
+            .help("agents.models.refresh".localized())
+            .accessibilityLabel("agents.models.refresh".localized())
+        }
+    }
+
+    private var serverEffortLockedBadge: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "brain.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.accentColor)
+
+            Text(lockedEffortDisplayName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            Image(systemName: "lock.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, minHeight: 36)
+        .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+        .overlay(
+            Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.5)
+        )
+        .help(String(format: "cpaAliases.fixedSummary".localized(), fixedEffort ?? ""))
+        .accessibilityLabel(String(format: "cpaAliases.fixedSummary".localized(), fixedEffort ?? ""))
+    }
+
+    private var clientReasoningEffortPicker: some View {
+        Menu {
+            ForEach(reasoningEffortOptions) { effort in
+                Button {
+                    viewModel.updateReasoningEffort(effort)
+                    onModelOrEffortChange()
+                } label: {
+                    HStack {
+                        Text(effort.displayName)
+                        if currentEffort == effort {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "brain")
+                    .font(.system(size: 11))
+                    .foregroundStyle(QuotioTheme.Colors.codexGreen)
+
+                Text(currentEffort.displayName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("agents.reasoningEffort".localized())
+        .help(String(format: "%@: %@", "agents.reasoningEffort".localized(), currentEffort.displayName))
     }
 }
 

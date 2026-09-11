@@ -154,7 +154,8 @@ nonisolated struct CodexClientUsageSource {
         for (key, cached) in fileCaches where !consumedCacheKeys.contains(key) {
             try Task.checkCancellation()
             if !writesIncrementally { scan.codexCheckpoints.append(contentsOf: cached.checkpoints) }
-            scan.hasErrors = scan.hasErrors || cached.hasErrors
+            // 已消失文件的统计检查点仍保留在账本，但其旧读取失败不属于本轮读取结果。
+            // 相关检查点的证据不足仍由历史投影状态表达；当前文件失败由上面的实际读取捕获。
         }
         scan.codexReadErrors = scan.hasErrors
         if projectRecords && !writesIncrementally {

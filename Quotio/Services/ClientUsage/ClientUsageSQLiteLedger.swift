@@ -5,6 +5,8 @@ import SQLite3
 /// 不再随全部历史增长；扫描水位、待处理标记和最终投影分别拥有可恢复的事务边界。
 nonisolated extension ClientUsageSQLiteStore {
     func prepareIncrementalLedgerTables() throws {
+        // 附表不改变旧状态表的列顺序，兼容已有数据库与归档导入；只有真实采集完成后写入新诊断。
+        try database.execute("CREATE TABLE IF NOT EXISTS client_usage_status_details (source TEXT PRIMARY KEY, read_errors INTEGER, incomplete_sessions INTEGER)")
         try database.execute("CREATE TABLE IF NOT EXISTS client_usage_dirty_scopes (scope TEXT PRIMARY KEY)")
         try database.execute("CREATE TABLE IF NOT EXISTS client_usage_projection_dirty (session_id TEXT PRIMARY KEY)")
         try database.execute("CREATE TABLE IF NOT EXISTS client_usage_projection_status (session_id TEXT PRIMARY KEY, has_errors INTEGER NOT NULL)")
@@ -58,19 +60,21 @@ nonisolated extension ClientUsageSQLiteStore {
                 }
             }
             if scan.source == .codex { try consumePendingProjections() }
-            var hasErrors = scan.hasErrors
+            var readErrors = scan.hasErrors
+            var incompleteSessions = 0
             if scan.source == .codex {
-                let projectionErrors = try database.scalarInt(
-                    "SELECT 1 FROM client_usage_projection_status WHERE has_errors=1 LIMIT 1") != nil
+                incompleteSessions = Int(try database.scalarInt(
+                    "SELECT count(*) FROM client_usage_projection_status WHERE has_errors=1") ?? 0)
                 let hasCheckpoints = try database.scalarInt(
                     "SELECT 1 FROM client_usage_checkpoints WHERE scope='ledger' LIMIT 1") != nil
-                // 扫描器单独投影时可能因父日志缺失而标为部分成功；账本里的父会话可以补全它。
-                // 因而已有检查点时，最终状态由实际读取错误与已合并账本的投影错误共同决定。
-                hasErrors = scan.codexReadErrors || projectionErrors || (!hasCheckpoints && scan.hasErrors)
+                // 历史投影缺口可能长期存在，但不能把本轮成功读取改成失败。
+                // 无检查点的失败来源保留旧降级判断，真正的 I/O/解析错误始终独立上报。
+                readErrors = scan.codexReadErrors || (!hasCheckpoints && scan.hasErrors)
             }
             try database.transaction {
-                try database.execute("INSERT OR REPLACE INTO client_usage_status VALUES(?,?,?,?)", [
-                    .text(scan.source.rawValue), Self.bool(scan.available), Self.bool(hasErrors), Self.integer(scan.filesScanned)])
+                try saveStatus(ClientUsageStatus(source: scan.source, available: scan.available,
+                    hasErrors: readErrors || incompleteSessions > 0, filesScanned: scan.filesScanned,
+                    readErrors: readErrors, incompleteSessionCount: incompleteSessions))
                 try database.execute("INSERT OR REPLACE INTO client_usage_metadata VALUES('collected_at',?)", [.real(date.timeIntervalSince1970)])
             }
         }

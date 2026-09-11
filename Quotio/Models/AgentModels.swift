@@ -410,11 +410,15 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
     /// nil 时跟随 Opus 槽，保持旧版首次配置的实际行为，而不是复制槽中的模型 ID。
     var claudeDefaultModel: String?
 
+    /// 直接指定的启动模型独立声明 1M；跟随角色时只读取角色的开关，不改写这份独立选择。
+    /// 与模型 ID 相同的其他角色无关，避免同一模型在不同用途下意外共享上下文设置。
+    var claudeDefaultModel1M: Bool
+
     /// 显示名称与请求 ID 分开存储；可选字典兼容旧配置，缺省或留空时展示实际模型 ID。
     var claudeModelDisplayNames: [ModelSlot: String]?
 
-    /// Claude Code 的普通上下文窗口。任一模型槽位启用 1M 时，生成器临时写入 1,000,000，
-    /// 但不改写这里的用户选择，以便关闭 1M 后恢复该值。
+    /// Claude Code 的普通上下文窗口。1M 由各模型自己的后缀声明，不能提升这个全局值，
+    /// 否则未开启 1M 的其他自定义模型也会被当成大上下文模型。
     var claudeMaxContextTokens: Int
     /// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 的用户选择，必须为 1...100。
     var claudeAutoCompactPercentage: Int
@@ -423,11 +427,15 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
     /// 每个 Claude 角色独立决定是否在最终请求模型 ID 追加 `[1m]`。
     var claudeModel1M: [ModelSlot: Bool]
 
+    /// 网关发现只决定是否把代理目录加入 /model，不改变三个角色槽的请求映射。
+    /// 新配置默认只使用客户端模型项；回填时保留用户已有的网关发现设置。
+    var claudeGatewayModelDiscovery: Bool
+
     enum CodingKeys: String, CodingKey {
         case agent, modelSlots, proxyURL, apiKey, useOAuth, setupMode
-        case codexReasoningEffort, claudeDefaultModel, claudeModelDisplayNames
+        case codexReasoningEffort, claudeDefaultModel, claudeDefaultModel1M, claudeModelDisplayNames
         case claudeMaxContextTokens, claudeAutoCompactPercentage
-        case claudeDisableAutoCompact, claudeModel1M
+        case claudeDisableAutoCompact, claudeModel1M, claudeGatewayModelDiscovery
     }
 
     init(from decoder: any Decoder) throws {
@@ -440,6 +448,13 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
         setupMode = try container.decode(ConfigurationSetup.self, forKey: .setupMode)
         codexReasoningEffort = try container.decodeIfPresent(CodexReasoningEffort.self, forKey: .codexReasoningEffort) ?? .defaultEffort
         claudeDefaultModel = try container.decodeIfPresent(String.self, forKey: .claudeDefaultModel)
+        let legacyDefault = Self.normalizedClaudeModelID(claudeDefaultModel ?? "")
+        claudeDefaultModel1M = try container.decodeIfPresent(Bool.self, forKey: .claudeDefaultModel1M)
+            ?? legacyDefault.uses1M
+        // 旧数据可能把后缀直接存在模型字段里；完整角色选择器留给原生 CLI 解析。
+        if legacyDefault.uses1M, ModelSlot(rawValue: legacyDefault.base) == nil {
+            claudeDefaultModel = legacyDefault.base
+        }
         claudeModelDisplayNames = try container.decodeIfPresent([ModelSlot: String].self, forKey: .claudeModelDisplayNames)
         let decodedContextTokens = try container.decodeIfPresent(Int.self, forKey: .claudeMaxContextTokens)
         claudeMaxContextTokens = decodedContextTokens.map { $0 > 0 ? $0 : Self.defaultClaudeMaxContextTokens }
@@ -449,6 +464,7 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
             ?? Self.defaultClaudeAutoCompactPercentage
         claudeDisableAutoCompact = try container.decodeIfPresent(Bool.self, forKey: .claudeDisableAutoCompact) ?? false
         claudeModel1M = try container.decodeIfPresent([ModelSlot: Bool].self, forKey: .claudeModel1M) ?? [:]
+        claudeGatewayModelDiscovery = try container.decodeIfPresent(Bool.self, forKey: .claudeGatewayModelDiscovery) ?? false
     }
 
     func claudeDisplayName(for slot: ModelSlot) -> String {
@@ -462,10 +478,66 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
         claudeModel1M[slot] ?? false
     }
 
+    /// 兼容 cc-switch 等配置来源的大写后缀，输出统一使用 Claude 的小写 `[1m]`。
+    /// 只剥离末尾的一份声明，不改写模型本身的大小写，也不猜测代理别名的真实指向。
+    static func normalizedClaudeModelID(_ value: String) -> (base: String, uses1M: Bool) {
+        let model = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard model.lowercased().hasSuffix("[1m]") else { return (model, false) }
+        return (String(model.dropLast(4)).trimmingCharacters(in: .whitespacesAndNewlines), true)
+    }
+
+    /// 配置输出和显示预览共用最终请求 ID，避免开启 1M 后预览仍展示普通上下文模型。
+    /// 仅规范化一个末尾后缀，保持与既有配置回读规则一致。
+    func claudeRequestModel(for slot: ModelSlot) -> String {
+        let selected = modelSlots[slot]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let model = selected.isEmpty ? (AvailableModel.defaultModels[slot]?.name ?? "") : selected
+        let base = Self.normalizedClaudeModelID(model).base
+        return usesClaude1MContext(for: slot) ? base + "[1m]" : base
+    }
+
+    /// Claude Code 的补全使用说明，选择面板使用显示名称；自定义名称不能代替请求 ID。
+    /// 两者相同时不重复显示，否则同时呈现名称和目标，方便核对角色映射。
+    func claudeModelDescription(for slot: ModelSlot) -> String {
+        let request = claudeRequestModel(for: slot)
+        let name = claudeDisplayName(for: slot)
+        return name == request ? request : "\(name) · \(request)"
+    }
+
     var effectiveClaudeMaxContextTokens: Int {
-        ModelSlot.allCases.contains { usesClaude1MContext(for: $0) }
-            ? 1_000_000
-            : claudeMaxContextTokens
+        claudeMaxContextTokens
+    }
+
+    /// 只有明确的角色标识才表示继承。直接指定的实际 ID 即使与某个槽相同，仍然独立。
+    var claudeDefaultModelSlot: ModelSlot? {
+        ModelSlot(rawValue: claudeModel)
+    }
+
+    var claudeDefaultUses1MContext: Bool {
+        claudeDefaultModelSlot.map { usesClaude1MContext(for: $0) } ?? claudeDefaultModel1M
+    }
+
+    /// 保存角色本身而不是展开后的 ID，确保重新打开表单仍能识别「跟随角色」。
+    var claudeDefaultModelSelector: String {
+        if let slot = claudeDefaultModelSlot { return slot.rawValue }
+        let base = Self.normalizedClaudeModelID(claudeModel).base
+        return claudeDefaultModel1M ? base + "[1m]" : base
+    }
+
+    /// 默认行的只读名称和请求预览均从最终选择推导，不伪造原生 Default 的名称配置字段。
+    var claudeDefaultRequestModel: String {
+        let parsed = Self.normalizedClaudeModelID(claudeModel)
+        if let slot = ModelSlot(rawValue: parsed.base) {
+            let request = claudeRequestModel(for: slot)
+            // 显式角色[1m]仍通过该角色解析目标，只单独增加上下文声明。
+            return claudeDefaultModelSlot == nil && claudeDefaultModel1M
+                ? Self.normalizedClaudeModelID(request).base + "[1m]" : request
+        }
+        return claudeDefaultModelSelector
+    }
+
+    var claudeDefaultDisplayName: String {
+        ModelSlot(rawValue: Self.normalizedClaudeModelID(claudeModel).base).map { claudeDisplayName(for: $0) }
+            ?? Self.normalizedClaudeModelID(claudeModel).base
     }
 
     var claudeModel: String {
@@ -473,7 +545,13 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
             let model = claudeDefaultModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return model.isEmpty ? ModelSlot.opus.rawValue : model
         }
-        set { claudeDefaultModel = newValue }
+        set {
+            let parsed = Self.normalizedClaudeModelID(newValue)
+            // 原生 opus[1m] 等选择器具有显式覆盖语义，保留它与普通角色继承的区别。
+            claudeDefaultModel = parsed.uses1M && ModelSlot(rawValue: parsed.base) != nil
+                ? parsed.base + "[1m]" : parsed.base
+            if parsed.uses1M { claudeDefaultModel1M = true }
+        }
     }
 
     /// 为兼容已保存的 AgentConfiguration，单模型仍存放在原来的 sonnet 字段中。
@@ -497,6 +575,8 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
         self.claudeAutoCompactPercentage = Self.defaultClaudeAutoCompactPercentage
         self.claudeDisableAutoCompact = false
         self.claudeModel1M = [:]
+        self.claudeDefaultModel1M = false
+        self.claudeGatewayModelDiscovery = false
         // Pi 必须使用 CPA 实际返回的模型，不继承 Claude 槽默认值。
         if agent == .pi {
             self.modelSlots = [:]
