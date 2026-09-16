@@ -5,7 +5,7 @@
 
 import XCTest
 import SQLite3
-@testable import Quotio
+@testable import QuotioPlus
 
 final class WorkspaceTests: XCTestCase {
     private var tempHomeURL: URL!
@@ -139,13 +139,14 @@ final class WorkspaceTests: XCTestCase {
 
         let parentFile = codexSessionsDir.appendingPathComponent("rollout-2026-09-03T17-26-31-01a06697-602c-7820-bb9c-036f39405abf.jsonl")
         let parentContent = """
-        {"timestamp":"2026-09-03T09:26:31.000Z","ordinal":0,"type":"session_meta","payload":{"id":"01a06697-602c-7820-bb9c-036f39405abf","cwd":"/Users/test/ghk","timestamp":"2026-09-03T09:26:31.000Z"}}
+        {"timestamp":"2026-09-03T09:26:31.000Z","ordinal":0,"type":"session_meta","payload":{"id":"01a06697-602c-7820-bb9c-036f39405abf","source":"cli","cwd":"/Users/test/ghk","timestamp":"2026-09-03T09:26:31.000Z"}}
         {"timestamp":"2026-09-03T09:26:35.000Z","ordinal":1,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"现在开始c 端微信小程序的开发工作"}]}}
         """
         try parentContent.write(to: parentFile, atomically: true, encoding: .utf8)
 
         let childFile = codexSessionsDir.appendingPathComponent("rollout-2026-09-03T22-55-31-01a06697-602c-7820-bb9c-036f39405abf_01a067c4-958a-7783-b037-4c4e246e570e.jsonl")
         let childContent = """
+        {"type":"session_meta","payload":{"id":"01a067c4-958a-7783-b037-4c4e246e570e","source":{"subagent":{"thread_spawn":{"parent_thread_id":"01a06697-602c-7820-bb9c-036f39405abf","depth":1}}}}}
         {"timestamp":"2026-09-03T14:55:34.000Z","ordinal":1411,"type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"01a06697-602c-7820-bb9c-036f39405abf"}}
         {"timestamp":"2026-09-03T14:55:40.000Z","ordinal":1412,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"执行子任务：重构小程序导航栏"}]}}
         """
@@ -797,5 +798,61 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(sessionsAfter.count, 0)
         XCTAssertFalse(fileManager.fileExists(atPath: brainDir1.path))
         XCTAssertFalse(fileManager.fileExists(atPath: brainDir2.path))
+    }
+
+    func testAGYWALModeAndTranscriptFullAndDBFallback() async throws {
+        let agyDir = tempHomeURL.appendingPathComponent(".gemini/antigravity-cli")
+        let brainDir = agyDir.appendingPathComponent("brain/agy-wal-1/.system_generated/logs")
+        let convsDir = agyDir.appendingPathComponent("conversations")
+        try fileManager.createDirectory(at: brainDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: convsDir, withIntermediateDirectories: true)
+
+        let transcriptFull = brainDir.appendingPathComponent("transcript_full.jsonl")
+        let fullJSONL = """
+        {"type":"USER_INPUT","content":"<USER_REQUEST>Full Prompt</USER_REQUEST>","created_at":"2026-09-14 10:00:00.123456+00:00"}
+        {"type":"PLANNER_RESPONSE","content":"Full Response","created_at":"2026-09-14 10:00:05.123456+00:00"}
+        """
+        try fullJSONL.write(to: transcriptFull, atomically: true, encoding: .utf8)
+
+        let dbPath = agyDir.appendingPathComponent("conversation_summaries.db").path
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbPath, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil), SQLITE_OK)
+        let schema = """
+        CREATE TABLE conversation_summaries (
+            conversation_id TEXT PRIMARY KEY,
+            title TEXT,
+            preview TEXT,
+            step_count INTEGER,
+            last_modified_time TEXT,
+            workspace_uris TEXT,
+            parent_conversation_id TEXT,
+            nesting_depth INTEGER,
+            agent_name TEXT
+        );
+        INSERT INTO conversation_summaries VALUES ('agy-wal-1', 'WAL Session', 'Preview', 2, '2026-09-14 10:00:00.123456+00:00', '["/Users/test/proj"]', NULL, 0, NULL);
+        """
+        XCTAssertEqual(sqlite3_exec(db, schema, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+
+        let fallbackDbFile = convsDir.appendingPathComponent("agy-db-fallback.db")
+        try Data().write(to: fallbackDbFile)
+
+        let service = WorkspaceSessionService(homeDir: tempHomeURL.path)
+        let sessions = await service.scanAllSessions(agentFilter: .agy)
+        XCTAssertEqual(sessions.count, 2)
+
+        let walSession = sessions.first { $0.id == "agy-wal-1" }
+        XCTAssertNotNil(walSession)
+        XCTAssertEqual(walSession?.title, "WAL Session")
+        XCTAssertTrue(walSession?.filePath.hasSuffix("transcript_full.jsonl") ?? false)
+
+        let messages = try await service.loadSessionMessages(session: walSession!)
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[0].content, "Full Prompt")
+        XCTAssertEqual(messages[1].content, "Full Response")
+
+        let dbFallbackSession = sessions.first { $0.id == "agy-db-fallback" }
+        XCTAssertNotNil(dbFallbackSession)
     }
 }

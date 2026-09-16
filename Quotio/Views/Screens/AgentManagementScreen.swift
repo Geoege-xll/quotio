@@ -8,6 +8,8 @@ import SwiftUI
 
 public struct AgentManagementScreen: View {
     @State private var viewModel = WorkspaceViewModel.shared
+    // 实际 Sheet 的关闭动画晚于操作状态清空；等 onDismiss 后再展示后台读取错误，避免弹窗竞争。
+    @State private var isDeletionSheetVisible = false
     @Environment(\.colorScheme) private var colorScheme
 
     public init() {}
@@ -31,6 +33,14 @@ public struct AgentManagementScreen: View {
         }
         .task {
             await viewModel.loadInitialDataIfNeeded()
+        }
+        .sheet(item: Binding(
+            get: { viewModel.sessionDeletionProgress },
+            set: { if $0 == nil { viewModel.dismissSessionDeletionProgress() } }
+        ), onDismiss: { isDeletionSheetVisible = false }) { _ in
+            // 用稳定操作 ID 驱动一次展示，内容观察 ViewModel；数量变化不重新创建删除任务。
+            WorkspaceSessionDeletionProgressSheet(viewModel: viewModel)
+                .onAppear { isDeletionSheetVisible = true }
         }
         .overlay(alignment: .bottom) {
             if let toast = viewModel.toastMessage {
@@ -59,7 +69,7 @@ public struct AgentManagementScreen: View {
             }
         }
         .alert("错误", isPresented: Binding(
-            get: { viewModel.errorMessage != nil },
+            get: { viewModel.errorMessage != nil && viewModel.sessionDeletionProgress == nil && !isDeletionSheetVisible },
             set: { if !$0 { viewModel.errorMessage = nil } }
         )) {
             Button("好", role: .cancel) { viewModel.errorMessage = nil }
@@ -127,7 +137,7 @@ public struct AgentManagementScreen: View {
                 }
             }
             .help("刷新会话")
-            .disabled(viewModel.isLoadingSessions)
+            .disabled(viewModel.isLoadingSessions || viewModel.isDeletingSessions)
 
         case .skills:
             Button {
@@ -400,7 +410,7 @@ private struct AgentSessionsView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(24)
-            } else if viewModel.filteredSessions.isEmpty {
+            } else if viewModel.rootFilteredSessions.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "bubble.left.and.bubble.right")
                         .font(.system(size: 34))
@@ -638,6 +648,7 @@ private struct AgentSessionsView: View {
             } label: {
                 Label("删除会话", systemImage: "trash")
             }
+            .disabled(viewModel.isDeletingSessions)
         }
     }
 
@@ -731,6 +742,7 @@ private struct AgentSessionsView: View {
             } label: {
                 Label("删除子任务", systemImage: "trash")
             }
+            .disabled(viewModel.isDeletingSessions)
         }
     }
 
@@ -811,6 +823,7 @@ private struct AgentSessionsView: View {
                             } label: {
                                 Label("删除此会话", systemImage: "trash")
                             }
+                            .disabled(viewModel.isDeletingSessions)
                         }
                         .help("更多操作")
 
@@ -1372,6 +1385,10 @@ private struct AgentSkillsView: View {
                 .frame(width: 180)
 
                 repoDropdownMenu
+
+                if let repository = viewModel.selectedRepo {
+                    WorkspaceSkillRepositoryAddressButton(repository: repository)
+                }
             }
         }
     }
@@ -1408,6 +1425,8 @@ private struct AgentSkillsView: View {
                 Text(viewModel.selectedRepo.map { "\($0.owner)/\($0.name)" } ?? "选择仓库源")
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
@@ -1428,7 +1447,7 @@ private struct AgentSkillsView: View {
     private var subTabSubtitle: String {
         switch viewModel.selectedSkillSubTab {
         case .installed:
-            return "点击智能体胶囊即可实时挂载/解除软链接，状态即刻生效。"
+            return "按来源仓库展开技能，点击地址查看 GitHub 仓库；智能体胶囊可实时挂载或解除软链接。"
         case .discover:
             return "按 SKILL.md 官方规范拉取优质技能，一键部署并在多智能体中分发。"
         }
@@ -1438,6 +1457,7 @@ private struct AgentSkillsView: View {
 
     @ViewBuilder
     private var installedSkillsContent: some View {
+        let groups = viewModel.installedSkillGroups
         VStack(alignment: .leading, spacing: 14) {
             // Unmanaged Local Skills Alert (if any)
             if !viewModel.unmanagedSkills.isEmpty {
@@ -1477,7 +1497,7 @@ private struct AgentSkillsView: View {
                 .frame(maxWidth: .infinity)
                 .padding(32)
                 .quotioCard(cornerRadius: QuotioTheme.Radius.lg)
-            } else if viewModel.filteredInstalledSkills.isEmpty {
+            } else if groups.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 26))
@@ -1495,8 +1515,14 @@ private struct AgentSkillsView: View {
                 .quotioCard(cornerRadius: QuotioTheme.Radius.lg)
             } else {
                 LazyVStack(spacing: 12) {
-                    ForEach(viewModel.filteredInstalledSkills) { skill in
-                        skillRow(skill: skill)
+                    ForEach(groups) { group in
+                        WorkspaceSkillRepositorySection(group: group, searchText: viewModel.skillSearchText) {
+                            LazyVStack(spacing: 12) {
+                                ForEach(group.skills) { skill in
+                                    skillRow(skill: skill)
+                                }
+                            }
+                        }
                     }
                 }
             }

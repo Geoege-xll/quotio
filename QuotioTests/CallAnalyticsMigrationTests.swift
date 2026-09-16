@@ -1,7 +1,7 @@
 // 使用隔离临时目录验证日志格式、日摘要与权限；禁止接触开发机真实会话和配置。
 import XCTest
 import SQLite3
-@testable import Quotio
+@testable import QuotioPlus
 
 final class CallAnalyticsMigrationTests: XCTestCase {
     private func temporaryHome() throws -> URL {

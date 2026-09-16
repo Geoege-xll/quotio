@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 @MainActor
 final class CustomProviderHeaderTests: XCTestCase {

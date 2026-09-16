@@ -16,8 +16,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "78D386932EFBF30400C40FB6"
-               BuildableName = "Quotio.app"
-               BlueprintName = "Quotio"
+               BuildableName = "QuotioPlus.app"
+               BlueprintName = "QuotioPlus"
                ReferencedContainer = "container:Quotio.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -36,8 +36,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "A10000000000000000000004"
-               BuildableName = "QuotioTests.xctest"
-               BlueprintName = "QuotioTests"
+               BuildableName = "QuotioPlusTests.xctest"
+               BlueprintName = "QuotioPlusTests"
                ReferencedContainer = "container:Quotio.xcodeproj">
             </BuildableReference>
          </TestableReference>
@@ -58,8 +58,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "78D386932EFBF30400C40FB6"
-            BuildableName = "Quotio.app"
-            BlueprintName = "Quotio"
+            BuildableName = "QuotioPlus.app"
+            BlueprintName = "QuotioPlus"
             ReferencedContainer = "container:Quotio.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -75,8 +75,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "78D386932EFBF30400C40FB6"
-            BuildableName = "Quotio.app"
-            BlueprintName = "Quotio"
+            BuildableName = "QuotioPlus.app"
+            BlueprintName = "QuotioPlus"
             ReferencedContainer = "container:Quotio.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

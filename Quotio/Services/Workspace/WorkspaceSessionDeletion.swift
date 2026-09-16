@@ -32,6 +32,7 @@ public nonisolated enum WorkspaceSessionArtifactPaths {
             let base = URL(fileURLWithPath: homeDirectory).appendingPathComponent(".gemini/antigravity-cli")
             targets.append(WorkspaceSessionDeletionTarget(base.appendingPathComponent("brain/\(identifier)").path, directory: true))
             targets.append(WorkspaceSessionDeletionTarget(base.appendingPathComponent("conversations/\(identifier).json").path))
+            targets.append(WorkspaceSessionDeletionTarget(base.appendingPathComponent("conversations/\(identifier).db").path))
         case .opencode:
             targets.append(WorkspaceSessionDeletionTarget(URL(fileURLWithPath: homeDirectory).appendingPathComponent(".local/share/opencode/storage/session/\(identifier).json").path))
         case .codex, .pi: break
@@ -92,9 +93,7 @@ nonisolated enum WorkspaceSessionDeletionEngine {
                 for row in rows {
                     if let child = row[0], let source = row[2], let parent = parentThreadID(in: source) { edges.append((parent, child)) }
                 }
-                if cleanupConstraint != nil {
-                    edges += relatedSessions.compactMap { record in record.parentSessionID.map { (parent: $0, child: record.id) } }
-                }
+                edges = mergingEdges(edges, relatedSessions: relatedSessions)
                 identifiers = WorkspaceSessionDeletionTransaction.descendants(root: session.id, edges: edges)
                 let wanted = Set(identifiers)
                 if let cleanupConstraint {
@@ -111,9 +110,7 @@ nonisolated enum WorkspaceSessionDeletionEngine {
                 for row in rows where row[0].map(wanted.contains) == true {
                     if let path = row[1], !path.isEmpty { targets.append(WorkspaceSessionDeletionTarget(path)) }
                 }
-                if cleanupConstraint != nil {
-                    targets += relatedSessions.filter { wanted.contains($0.id) && !$0.filePath.isEmpty && !$0.filePath.hasPrefix("sqlite:") }.map { WorkspaceSessionDeletionTarget($0.filePath) }
-                }
+                targets += relatedSessions.filter { wanted.contains($0.id) && !$0.filePath.isEmpty && !$0.filePath.hasPrefix("sqlite:") }.map { WorkspaceSessionDeletionTarget($0.filePath) }
                 return targets
             } mutateDatabase: {
                 guard let database else { return false }
@@ -144,16 +141,19 @@ nonisolated enum WorkspaceSessionDeletionEngine {
                     let activityName = isOpenCode ? "time_updated" : "last_modified_time"
                     let activityColumn = try database.hasColumn(activityName, table: table) ? activityName : "NULL"
                     let rows = try database.rows("SELECT \(key), \(parentColumn), \(activityColumn) FROM \(table)")
-                    let edges: [(parent: String, child: String)] = rows.compactMap { row in
+                    let databaseEdges: [(parent: String, child: String)] = rows.compactMap { row in
                         guard let child = row[0], let parent = row[1], !parent.isEmpty else { return nil }; return (parent, child)
                     }
+                    let edges = mergingEdges(databaseEdges, relatedSessions: relatedSessions)
                     identifiers = WorkspaceSessionDeletionTransaction.descendants(root: session.id, edges: edges)
                     if let cleanupConstraint {
-                        let checked = rows.compactMap { row -> (id: String, path: String?, date: Date?, parent: String?)? in
+                        var checked = rows.compactMap { row -> (id: String, path: String?, date: Date?, parent: String?)? in
                             guard let id = row[0] else { return nil }
                             let date = isOpenCode ? activityDate(row[2], milliseconds: true) : row[2].flatMap { SessionIOUtils.parseDate($0) }
-                            return (id, nil, date, row[1].flatMap { $0.isEmpty ? nil : $0 })
+                            return (id, nil, date, edges.first { $0.child == id }?.parent)
                         }
+                        let databaseIDs = Set(checked.map(\.id))
+                        checked += relatedSessions.filter { !databaseIDs.contains($0.id) }.map { ($0.id, $0.filePath, $0.lastActiveAt, $0.parentSessionID) }
                         try cleanupConstraint.validateDatabase(ids: identifiers, rows: checked)
                     }
                 } else {
@@ -204,16 +204,18 @@ nonisolated enum WorkspaceSessionDeletionEngine {
     }
 
     static func parentThreadID(in source: String) -> String? {
-        guard let data = source.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data) else { return nil }
-        func find(_ value: Any) -> String? {
-            if let dictionary = value as? [String: Any] {
-                if let identifier = dictionary["parent_thread_id"] as? String, !identifier.isEmpty { return identifier }
-                for child in dictionary.values { if let identifier = find(child) { return identifier } }
-            } else if let values = value as? [Any] {
-                for child in values { if let identifier = find(child) { return identifier } }
-            }
-            return nil
+        WorkspaceSessionRelationshipAdapter.codexParent(in: source)
+    }
+
+    /// 与发现阶段保持同样优先级：事务内数据库关系优先，文件只补缺失关系。
+    /// 同一子任务出现冲突父 ID 时不能同时挂到两棵删除树，否则会扩大删除范围。
+    private static func mergingEdges(_ primary: [(parent: String, child: String)], relatedSessions: [WorkspaceSession]) -> [(parent: String, child: String)] {
+        var parents: [String: String] = [:]
+        let secondary = relatedSessions.compactMap { record in record.parentSessionID.map { (parent: $0, child: record.id) } }
+        for edge in primary + secondary {
+            guard let parent = WorkspaceSessionRelationship.identifier(edge.parent), parents[edge.child] == nil else { continue }
+            parents[edge.child] = parent
         }
-        return find(value)
+        return parents.keys.sorted().map { (parent: parents[$0]!, child: $0) }
     }
 }

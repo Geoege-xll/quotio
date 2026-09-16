@@ -2,7 +2,8 @@ import Foundation
 import Observation
 
 /// 注入协议让队列消费顺序与磁盘故障可在完全隔离的测试中验证。
-protocol UsageStatisticsClient: Sendable {
+/// 用量客户端及测试队列由独立 actor 提供，异步接口不应继承页面模块的 MainActor 默认隔离。
+nonisolated protocol UsageStatisticsClient: Sendable {
     func getUsageStatisticsEnabled() async throws -> Bool
     func setUsageStatisticsEnabled(_ enabled: Bool) async throws
     func fetchUsageQueue(count: Int) async throws -> UsageQueueBatch

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 使用有序合成数据验证分页边界，防止漏行、重复行或把顶部汇总的来源截成当前页。
 final class CPAUsageTablePageTests: XCTestCase {

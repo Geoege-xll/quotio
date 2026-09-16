@@ -3,7 +3,7 @@ import LocalAuthentication
 import Security
 import SQLite3
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 final class MonitorRuntimeTests: XCTestCase {
     func testMonitorCredentialCASUsesActiveVaultBackend() {

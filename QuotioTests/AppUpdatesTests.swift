@@ -1,6 +1,6 @@
 import XCTest
 import Sparkle
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 使用临时 Bundle 和注入的上游响应验证更新边界，不联网、不启动 Sparkle、不安装任何应用。
 @MainActor

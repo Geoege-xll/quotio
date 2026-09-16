@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 模拟侧栏切页与筛选，验证它们复用正在运行的采集和已完成快照。
 @MainActor

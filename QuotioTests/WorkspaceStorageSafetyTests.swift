@@ -1,6 +1,6 @@
 import XCTest
 import SQLite3
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 所有夹具都位于独立临时 home，禁止用 shared 服务触碰本机正在运行的客户端目录。
 final class WorkspaceStorageSafetyTests: XCTestCase {

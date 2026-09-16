@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// Regression tests for the ring display paths of issue #219.
 ///

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 全部输入在临时目录构造，覆盖统一持久化的三方去重、事务回滚与只读迁移约束。
 final class CPAUsageSQLiteMigrationTests: XCTestCase {

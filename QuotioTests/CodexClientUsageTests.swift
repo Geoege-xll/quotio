@@ -1,6 +1,6 @@
 // Codex 用量解析回归仅使用临时 JSONL，不读取开发机账号、会话和 API key。
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 final class CodexClientUsageTests: XCTestCase {
     private func home() throws -> URL {

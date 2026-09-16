@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 final class AgentBackupDeletionTests: XCTestCase {
     private var homeDirectory: URL!

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 全部依赖为内存闭包；显式悬挂凭据返回，复现“running 已发布而 key 稍后才就绪”的真实次序。
 final class DashboardModelCatalogLoaderTests: XCTestCase {

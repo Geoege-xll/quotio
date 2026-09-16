@@ -18,25 +18,25 @@
 			containerPortal = 78D3868C2EFBF30400C40FB6 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 78D386932EFBF30400C40FB6;
-			remoteInfo = Quotio;
+			remoteInfo = QuotioPlus;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		78D386942EFBF30400C40FB6 /* Quotio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Quotio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		78D386942EFBF30400C40FB6 /* QuotioPlus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuotioPlus.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		78D386B22EFBF30500C40FB6 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		78D386B32EFBF30500C40FB6 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		78D386B42EFBF30500C40FB6 /* Local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig.example; sourceTree = "<group>"; };
-		A10000000000000000000001 /* QuotioTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuotioTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000001 /* QuotioPlusTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuotioPlusTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		78D386962EFBF30400C40FB7 /* Exceptions for "Quotio" folder in "Quotio" target */ = {
+		78D386962EFBF30400C40FB7 /* Exceptions for "Quotio" folder in "QuotioPlus" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = 78D386932EFBF30400C40FB6 /* Quotio */;
+			target = 78D386932EFBF30400C40FB6 /* QuotioPlus */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -44,7 +44,7 @@
 		78D386962EFBF30400C40FB6 /* Quotio */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				78D386962EFBF30400C40FB7 /* Exceptions for "Quotio" folder in "Quotio" target */,
+				78D386962EFBF30400C40FB7 /* Exceptions for "Quotio" folder in "QuotioPlus" target */,
 			);
 			path = Quotio;
 			sourceTree = "<group>";
@@ -90,8 +90,8 @@
 		78D386952EFBF30400C40FB6 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				78D386942EFBF30400C40FB6 /* Quotio.app */,
-				A10000000000000000000001 /* QuotioTests.xctest */,
+				78D386942EFBF30400C40FB6 /* QuotioPlus.app */,
+				A10000000000000000000001 /* QuotioPlusTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -109,9 +109,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		78D386932EFBF30400C40FB6 /* Quotio */ = {
+		78D386932EFBF30400C40FB6 /* QuotioPlus */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 78D3869F2EFBF30500C40FB6 /* Build configuration list for PBXNativeTarget "Quotio" */;
+			buildConfigurationList = 78D3869F2EFBF30500C40FB6 /* Build configuration list for PBXNativeTarget "QuotioPlus" */;
 			buildPhases = (
 				78D386902EFBF30400C40FB6 /* Sources */,
 				78D386912EFBF30400C40FB6 /* Frameworks */,
@@ -124,19 +124,19 @@
 			fileSystemSynchronizedGroups = (
 				78D386962EFBF30400C40FB6 /* Quotio */,
 			);
-			name = Quotio;
+			name = QuotioPlus;
 			packageProductDependencies = (
 				78D386B12EFBF30500C40FB6 /* Sparkle */,
 				78A4D0032F01000100AA0001 /* PostHog */,
 				A20000000000000000000003 /* Yams */,
 			);
-			productName = Quotio;
-			productReference = 78D386942EFBF30400C40FB6 /* Quotio.app */;
+			productName = QuotioPlus;
+			productReference = 78D386942EFBF30400C40FB6 /* QuotioPlus.app */;
 			productType = "com.apple.product-type.application";
 		};
-		A10000000000000000000004 /* QuotioTests */ = {
+		A10000000000000000000004 /* QuotioPlusTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A10000000000000000000008 /* Build configuration list for PBXNativeTarget "QuotioTests" */;
+			buildConfigurationList = A10000000000000000000008 /* Build configuration list for PBXNativeTarget "QuotioPlusTests" */;
 			buildPhases = (
 				A10000000000000000000005 /* Sources */,
 				A10000000000000000000006 /* Frameworks */,
@@ -150,11 +150,11 @@
 			fileSystemSynchronizedGroups = (
 				A10000000000000000000002 /* QuotioTests */,
 			);
-			name = QuotioTests;
+			name = QuotioPlusTests;
 			packageProductDependencies = (
 			);
-			productName = QuotioTests;
-			productReference = A10000000000000000000001 /* QuotioTests.xctest */;
+			productName = QuotioPlusTests;
+			productReference = A10000000000000000000001 /* QuotioPlusTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -197,8 +197,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				78D386932EFBF30400C40FB6 /* Quotio */,
-				A10000000000000000000004 /* QuotioTests */,
+				78D386932EFBF30400C40FB6 /* QuotioPlus */,
+				A10000000000000000000004 /* QuotioPlusTests */,
 			);
 		};
 /* End PBXProject section */
@@ -240,7 +240,7 @@
 /* Begin PBXTargetDependency section */
 		A1000000000000000000000C /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 78D386932EFBF30400C40FB6 /* Quotio */;
+			target = 78D386932EFBF30400C40FB6 /* QuotioPlus */;
 			targetProxy = A1000000000000000000000B /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -374,7 +374,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Quotio/Quotio.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 75;
+				CURRENT_PROJECT_VERSION = 76;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -398,7 +398,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0.01;
+				MARKETING_VERSION = 1.0.02;
 				PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -424,7 +424,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Quotio/Quotio.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 75;
+				CURRENT_PROJECT_VERSION = 76;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -448,7 +448,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0.01;
+				MARKETING_VERSION = 1.0.02;
 				PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -479,7 +479,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Quotio.app/Contents/MacOS/Quotio";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/QuotioPlus.app/Contents/MacOS/QuotioPlus";
 			};
 			name = Debug;
 		};
@@ -496,7 +496,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Quotio.app/Contents/MacOS/Quotio";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/QuotioPlus.app/Contents/MacOS/QuotioPlus";
 			};
 			name = Release;
 		};
@@ -512,7 +512,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		78D3869F2EFBF30500C40FB6 /* Build configuration list for PBXNativeTarget "Quotio" */ = {
+		78D3869F2EFBF30500C40FB6 /* Build configuration list for PBXNativeTarget "QuotioPlus" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				78D386A02EFBF30500C40FB6 /* Debug */,
@@ -521,7 +521,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A10000000000000000000008 /* Build configuration list for PBXNativeTarget "QuotioTests" */ = {
+		A10000000000000000000008 /* Build configuration list for PBXNativeTarget "QuotioPlusTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A10000000000000000000009 /* Debug */,

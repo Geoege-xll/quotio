@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 final class AuthFileTransferTests: XCTestCase {
     func testDirectUploadRejectsUnsafeFileNames() async {

@@ -1,7 +1,7 @@
 import XCTest
 import SwiftUI
 import AppKit
-@testable import Quotio
+@testable import QuotioPlus
 
 final class ClaudeCodeConfigTests: XCTestCase {
     /// 每个测试通过临时用户目录执行完整配置流程，不读取或修改真实 Claude Code 的凭据。

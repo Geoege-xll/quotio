@@ -54,10 +54,10 @@ cd quotio
 open Quotio.xcodeproj
 ```
 
-使用 Xcode 26.1 或更新版本，选择 `Quotio` scheme 后构建运行。也可从终端构建：
+使用 Xcode 26.1 或更新版本，选择 `QuotioPlus` scheme 后构建运行。也可从终端构建：
 
 ```bash
-xcodebuild -project Quotio.xcodeproj -scheme Quotio \
+xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus \
   -configuration Debug -destination 'platform=macOS' build
 ```
 

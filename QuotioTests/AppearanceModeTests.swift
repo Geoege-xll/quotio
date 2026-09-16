@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 @MainActor
 final class AppearanceModeTests: XCTestCase {

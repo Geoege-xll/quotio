@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 在真实承载窗口中反复切换数据、尺寸并滚动图表，检查 Swift Charts 布局是否持续占用主线程。
 /// 使用合成的日汇总，不启动客户端采集、不访问用户数据库或请求任何录屏权限。

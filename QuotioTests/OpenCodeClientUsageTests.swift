@@ -1,6 +1,6 @@
 import XCTest
 import SQLite3
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 每项测试创建真实临时 SQLite，数据库及 WAL 留在沙箱临时目录；不访问用户 OpenCode 会话。
 final class OpenCodeClientUsageTests: XCTestCase {

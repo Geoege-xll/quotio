@@ -341,7 +341,9 @@ private struct UsageDistributionDonut: View {
     }
 }
 
-private struct UsageDistributionArc: Shape {
+/// 扇区只包含不可变的数值参数，路径计算不访问主线程状态。
+/// 显式退出项目的默认 MainActor 隔离，满足 Swift 6.4 对 Shape 非隔离协议实现的检查。
+private nonisolated struct UsageDistributionArc: Shape {
     let start: Double
     let end: Double
     let hasGap: Bool

@@ -54,10 +54,10 @@ cd quotio
 open Quotio.xcodeproj
 ```
 
-Use Xcode 26.1 or later and select the `Quotio` scheme. You can also build from the terminal:
+Use Xcode 26.1 or later and select the `QuotioPlus` scheme. You can also build from the terminal:
 
 ```bash
-xcodebuild -project Quotio.xcodeproj -scheme Quotio \
+xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus \
   -configuration Debug -destination 'platform=macOS' build
 ```
 

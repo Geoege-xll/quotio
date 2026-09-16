@@ -5,7 +5,8 @@
 // Default Debug settings (will be overridden by Local.xcconfig if it exists)
 #include "Updates.xcconfig"
 PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus
-PRODUCT_NAME = Quotio
+// 产物名和 Swift 模块名跟随 Target，确保 Debug、测试宿主与 Release 使用同一命名。
+PRODUCT_NAME = $(TARGET_NAME)
 INFOPLIST_KEY_CFBundleDisplayName = QuotioPlus
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
 POSTHOG_PROJECT_TOKEN =

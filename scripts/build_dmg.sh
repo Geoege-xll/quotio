@@ -2,13 +2,13 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PROJECT_NAME="Quotio"
 APP_NAME="QuotioPlus"
+# 工程路径与产品名称分开：归档直接生成 QuotioPlus.app，无需把旧名称产物重新命名。
 # 与应用 Bundle 共用仓库配置；不能用上游脚本默认值生成二开版的下载链接。
 UPDATE_CONFIG="${PROJECT_DIR}/Config/Updates.xcconfig"
 GITHUB_REPO="$(awk '/^QUOTIO_RELEASE_REPOSITORY = / { print $3; exit }' "${UPDATE_CONFIG}")"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-$(awk '/^SPARKLE_PUBLIC_ED_KEY = / { print $3; exit }' "${UPDATE_CONFIG}")}"
-PROJECT_FILE="${PROJECT_DIR}/${PROJECT_NAME}.xcodeproj"
+PROJECT_FILE="${PROJECT_DIR}/Quotio.xcodeproj"
 PBXPROJ="${PROJECT_FILE}/project.pbxproj"
 CHANGELOG="${PROJECT_DIR}/CHANGELOG.md"
 BUILD_DIR="${PROJECT_DIR}/build"
@@ -376,7 +376,7 @@ BUILD_NUMBER="$(read_build_setting CURRENT_PROJECT_VERSION)"
 
 log "Building ${APP_NAME} ${VERSION} (build ${BUILD_NUMBER})"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quotio-release.XXXXXX")"
-ARCHIVE_PATH="${TEMP_ROOT}/${PROJECT_NAME}.xcarchive"
+ARCHIVE_PATH="${TEMP_ROOT}/${APP_NAME}.xcarchive"
 DERIVED_DATA="${TEMP_ROOT}/DerivedData"
 DMG_STAGING="${TEMP_ROOT}/dmg-staging"
 
@@ -386,7 +386,7 @@ mkdir -p "${BUILD_DIR}" "${RELEASE_DIR}"
 ARCHIVE_ARGS=(
     archive
     -project "${PROJECT_FILE}"
-    -scheme "${PROJECT_NAME}"
+    -scheme "${APP_NAME}"
     -configuration Release
     -archivePath "${ARCHIVE_PATH}"
     -derivedDataPath "${DERIVED_DATA}"
@@ -409,8 +409,8 @@ fi
 
 xcodebuild "${ARCHIVE_ARGS[@]}" 2>&1 | tee "${BUILD_DIR}/release-build.log"
 
-ARCHIVED_APP="${ARCHIVE_PATH}/Products/Applications/${PROJECT_NAME}.app"
-[ -d "${ARCHIVED_APP}" ] || fail "archive did not contain ${PROJECT_NAME}.app"
+ARCHIVED_APP="${ARCHIVE_PATH}/Products/Applications/${APP_NAME}.app"
+[ -d "${ARCHIVED_APP}" ] || fail "archive did not contain ${APP_NAME}.app"
 cp -R "${ARCHIVED_APP}" "${APP_PATH}"
 # 确保 Info.plist 显示名称与应用包一致
 /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName QuotioPlus' "${APP_PATH}/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string QuotioPlus' "${APP_PATH}/Contents/Info.plist"

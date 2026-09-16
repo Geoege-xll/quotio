@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 迁移回归只构造脱敏记录与临时目录，验证旧文件只读、关系型行存储和中断后的重放边界。
 final class ClientUsageSQLiteMigrationTests: XCTestCase {

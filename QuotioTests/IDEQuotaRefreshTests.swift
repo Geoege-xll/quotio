@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// Covers the quota refresh applied to IDE-derived providers (Cursor, Trae) by the
 /// global refresh actions — the path the menu bar "Refresh" uses (issues #163, #257).

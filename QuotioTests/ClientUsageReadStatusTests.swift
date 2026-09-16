@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 用临时数据库和合成检查点验证状态分离；不扫描、删除或重置真实用户历史。
 final class ClientUsageReadStatusTests: XCTestCase {

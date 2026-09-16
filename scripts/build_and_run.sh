@@ -2,13 +2,14 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PROJECT_NAME="Quotio"
-PROJECT_FILE="${PROJECT_DIR}/${PROJECT_NAME}.xcodeproj"
+# 工程文件保留源码仓库名称；Target、共享 Scheme、可执行文件统一使用 QuotioPlus。
+TARGET_NAME="QuotioPlus"
+PROJECT_FILE="${PROJECT_DIR}/Quotio.xcodeproj"
 BUILD_DIR="${PROJECT_DIR}/build"
 DERIVED_DATA="${BUILD_DIR}/DebugDerivedData"
 CACHE_OWNER_FILE="${DERIVED_DATA}/.project-path"
-APP_PATH="${DERIVED_DATA}/Build/Products/Debug/${PROJECT_NAME}.app"
-APP_BINARY="${APP_PATH}/Contents/MacOS/${PROJECT_NAME}"
+APP_PATH="${DERIVED_DATA}/Build/Products/Debug/${TARGET_NAME}.app"
+APP_BINARY="${APP_PATH}/Contents/MacOS/${TARGET_NAME}"
 # 实际日志子系统跟随构建后的 Bundle ID，不固定为旧应用身份。
 BUNDLE_ID="com.app.george.quotioplus"
 MODE="run"
@@ -16,7 +17,7 @@ MODE="run"
 usage() {
     echo "Usage: $0 [--debug|--logs|--telemetry|--verify]"
     echo ""
-    echo "Build the Debug app, stop any running Quotio process, and launch the fresh build."
+    echo "Build the Debug app, stop any running ${TARGET_NAME} process, and launch the fresh build."
     echo "  --debug      launch the app binary under lldb"
     echo "  --logs       launch and stream logs for the app process"
     echo "  --telemetry  launch and stream logs for subsystem ${BUNDLE_ID}"
@@ -51,10 +52,10 @@ fi
 mkdir -p "${DERIVED_DATA}"
 printf '%s\n' "${PROJECT_DIR}" > "${CACHE_OWNER_FILE}"
 
-echo "==> Building ${PROJECT_NAME} (Debug)"
+echo "==> Building ${TARGET_NAME} (Debug)"
 xcodebuild \
     -project "${PROJECT_FILE}" \
-    -scheme "${PROJECT_NAME}" \
+    -scheme "${TARGET_NAME}" \
     -configuration Debug \
     -destination "platform=macOS" \
     -derivedDataPath "${DERIVED_DATA}" \
@@ -66,8 +67,8 @@ if [ ! -d "${APP_PATH}" ]; then
     exit 1
 fi
 
-echo "==> Stopping any running ${PROJECT_NAME} process"
-pkill -x "${PROJECT_NAME}" 2>/dev/null || true
+echo "==> Stopping any running ${TARGET_NAME} process"
+pkill -x "${TARGET_NAME}" 2>/dev/null || true
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP_PATH}/Contents/Info.plist")"
 sleep 0.5
 
@@ -82,7 +83,7 @@ case "${MODE}" in
     logs)
         /usr/bin/open -n "${APP_PATH}"
         echo "==> Streaming process logs; press Ctrl-C to stop"
-        exec /usr/bin/log stream --style compact --predicate "process == \"${PROJECT_NAME}\""
+        exec /usr/bin/log stream --style compact --predicate "process == \"${TARGET_NAME}\""
         ;;
     telemetry)
         /usr/bin/open -n "${APP_PATH}"
@@ -92,11 +93,11 @@ case "${MODE}" in
     verify)
         /usr/bin/open -n "${APP_PATH}"
         sleep 1
-        if ! pgrep -x "${PROJECT_NAME}" >/dev/null; then
-            echo "error: ${PROJECT_NAME} did not start" >&2
+        if ! pgrep -x "${TARGET_NAME}" >/dev/null; then
+            echo "error: ${TARGET_NAME} did not start" >&2
             exit 1
         fi
-        echo "==> ${PROJECT_NAME} is running"
+        echo "==> ${TARGET_NAME} is running"
         ;;
 esac
 

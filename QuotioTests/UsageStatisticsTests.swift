@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// CPA 7 队列迁移回归：所有记录、目录和网络依赖均为构造数据，不读取用户凭据或真实会话。
 final class UsageStatisticsTests: XCTestCase {

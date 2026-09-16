@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 绘图抽样不能改变原始统计，也不能漏掉峰值、首尾日期或返回虚构的悬停读数。
 final class UsageTrendPlotDataTests: XCTestCase {

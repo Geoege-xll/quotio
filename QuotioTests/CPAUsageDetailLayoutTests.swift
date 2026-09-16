@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 使用真实 SwiftUI 承载器测量页面，防止原生表格与多行说明再次抬高窗口最小尺寸。
 /// 数据库放在独立临时目录；布局验证不会读取或修改用户的统计记录。

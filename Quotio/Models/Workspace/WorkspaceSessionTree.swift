@@ -1,7 +1,7 @@
 import Foundation
 
 /// 会话图以“客户端 + 会话 ID”作为身份，避免不同客户端使用相同 ID 时串联。
-/// 浏览、搜索和删除后的状态更新共用遍历规则；孤立节点仍可见，损坏的环不会无限递归。
+/// 搜索和删除后的状态更新共用遍历规则；完整遍历保留孤立节点和环，浏览主列表另外按 isMainSession 筛选。
 public nonisolated struct WorkspaceSessionTree {
     private let sessions: [WorkspaceSession]
     private let lookup: [String: WorkspaceSession]

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 全部使用固定服务端响应，不读取本机凭据、不访问真实账号，用于保护不同提供方的额度语义。
 @MainActor

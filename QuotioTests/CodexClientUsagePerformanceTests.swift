@@ -1,7 +1,7 @@
 // 大历史和增量行为只使用可删除的合成日志，不读取真实用户数据；进度只记录字节与计数。
 import XCTest
 import Foundation
-@testable import Quotio
+@testable import QuotioPlus
 
 final class CodexClientUsagePerformanceTests: XCTestCase {
     private nonisolated final class ProgressBox: @unchecked Sendable {

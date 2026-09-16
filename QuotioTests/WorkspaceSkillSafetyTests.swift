@@ -1,6 +1,6 @@
 import XCTest
 import Foundation
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 所有文件和配置都在每个测试独立的临时 HOME 下，网络由 URLProtocol fixture 接管，
 /// 防止回归测试初始化真实技能库、修改用户 CLI 配置或访问外部仓库。
@@ -221,7 +221,7 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
 
     func testLockSourceSurvivesImportIntoPrivateLibrary() async throws {
         let source = try writeSkill(".agents/skills/review")
-        let lock: [String: Any] = ["skills": ["review": ["source": "owner/repository", "skillPath": "skills/nested/review/SKILL.md", "installedAt": "2026-08-08T03:49:22.152Z"]]]
+        let lock: [String: Any] = ["skills": ["review": ["sourceType": "github", "source": "owner/repository", "skillPath": "skills/nested/review/SKILL.md", "installedAt": "2026-08-08T03:49:22.152Z"]]]
         try JSONSerialization.data(withJSONObject: lock).write(to: home.appendingPathComponent(".agents/.skill-lock.json"))
         let service = try await service()
         try await service.importUnmanagedSkill(UnmanagedSkill(name: "review", agent: .codex, directoryPath: source.path))
@@ -237,7 +237,7 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
     func testSameNameLocalSkillCannotInheritUnrelatedLockSource() async throws {
         let recorded = try writeSkill(".agents/skills/review", body: "repository A")
         let local = try writeSkill(".claude/skills/review", body: "private local B")
-        let lock: [String: Any] = ["skills": ["review": ["source": "owner/repository-a", "skillPath": "skills/review/SKILL.md"]]]
+        let lock: [String: Any] = ["skills": ["review": ["sourceType": "github", "source": "owner/repository-a", "skillPath": "skills/review/SKILL.md"]]]
         try JSONSerialization.data(withJSONObject: lock).write(to: home.appendingPathComponent(".agents/.skill-lock.json"))
         let service = try await service()
         let originalA = try Data(contentsOf: recorded.appendingPathComponent("SKILL.md"))

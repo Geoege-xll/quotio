@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 展示层只用构造的日桶，测试不触碰真实凭据、队列或用户账本。
 final class UsageStatisticsPresentationTests: XCTestCase {

@@ -16,6 +16,7 @@ public actor WorkspaceSkillService {
     private let dbPath: String
     private let backupsDir: String
     private let session: URLSession
+    private let skillLockPath: String
     private var prepared = false
     /// actor 在网络 await 时允许重入，因此显式锁住同一个技能的整个操作，
     /// 防止更新等待下载时被卸载，随后又把已卸载的目录写回来。
@@ -24,13 +25,24 @@ public actor WorkspaceSkillService {
     private var repositoryTrees: [String: (Date, [TreeEntry])] = [:]
 
     /// 构造只保存依赖；不创建目录、不迁移用户文件，测试和页面状态初始化均无磁盘副作用。
-    public init(homeDir: String = FileManager.default.homeDirectoryForCurrentUser.path, session: URLSession = .shared) {
+    public init(homeDir: String = FileManager.default.homeDirectoryForCurrentUser.path, session: URLSession = .shared,
+                skillLockPath: String? = nil) {
         let homeDir = URL(fileURLWithPath: homeDir).resolvingSymlinksInPath().path
         self.homeDir = homeDir
         self.ssotSkillsDir = (homeDir as NSString).appendingPathComponent(".quotio/skills")
         self.dbPath = (homeDir as NSString).appendingPathComponent(".quotio/quotio.db")
         self.backupsDir = (homeDir as NSString).appendingPathComponent(".quotio/skill_backups")
         self.session = session
+        // skills CLI 的全局安装记录优先使用 XDG_STATE_HOME/skills/.skill-lock.json。
+        // 临时 Home 不继承真实用户的 XDG 路径，避免测试/隔离实例读到用户的安装记录。
+        let realHome = FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path
+        if let skillLockPath {
+            self.skillLockPath = skillLockPath
+        } else if homeDir == realHome, let xdg = ProcessInfo.processInfo.environment["XDG_STATE_HOME"], xdg.hasPrefix("/") {
+            self.skillLockPath = (xdg as NSString).appendingPathComponent("skills/.skill-lock.json")
+        } else {
+            self.skillLockPath = homeDir + "/.agents/.skill-lock.json"
+        }
     }
 
     /// 唯一的显式启动入口。只初始化 Quotio 自有存储，不自动搬动 ~/.agents/skills。
@@ -722,7 +734,7 @@ public actor WorkspaceSkillService {
         return (defaultName, lines.first(where: { !$0.isEmpty && !$0.hasPrefix("#") }) ?? "本地技能")
     }
 
-    // MARK: - SQLite 元数据与旧 lock 一次导入
+    // MARK: - SQLite 元数据与 skills CLI 来源记录
 
     private struct SkillMetadata {
         let readmeURL: String?
@@ -748,6 +760,28 @@ public actor WorkspaceSkillService {
                 repositoryPath: row["repository_path"], installedAt: Date(timeIntervalSince1970: Double(row["installed_at"] ?? "0") ?? 0),
                 updatedAt: Date(timeIntervalSince1970: Double(row["updated_at"] ?? "0") ?? 0), contentHash: row["content_hash"])
         }
+        // 来源记录不能只在第一次建库时导入：用户之后仍可能通过 skills.sh 安装技能。
+        // 每次只读合并最新安装凭据，保留 Quotio 已保存的来源；浏览不会写库或修改外部锁文件。
+        for (directory, receipt) in readSkillLockMetadata() {
+            guard let saved = result[directory] else { result[directory] = receipt; continue }
+            let savedRepo = WorkspaceSkillRepositorySource.repository(owner: saved.repoOwner, name: saved.repoName, sourceURL: saved.readmeURL)
+            // 不完整或暂不支持解析的来源仍是用户已有的证据，不能被同名 lock 记录裁决。
+            let hasSavedSource = [saved.repoOwner, saved.repoName, saved.readmeURL].contains {
+                !($0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            }
+            if !hasSavedSource {
+                result[directory] = SkillMetadata(readmeURL: receipt.readmeURL, repoOwner: receipt.repoOwner,
+                    repoName: receipt.repoName, repoBranch: receipt.repoBranch, repositoryPath: receipt.repositoryPath,
+                    installedAt: saved.installedAt, updatedAt: saved.updatedAt, contentHash: saved.contentHash)
+            } else if savedRepo?.owner.lowercased() == receipt.repoOwner?.lowercased(),
+                      savedRepo?.name.lowercased() == receipt.repoName?.lowercased(),
+                      saved.repoBranch == receipt.repoBranch, saved.repositoryPath == nil {
+                // 路径属于具体分支；仅同仓库、同 ref 才能补齐，避免把新分支目录拼到旧分支下载。
+                result[directory] = SkillMetadata(readmeURL: saved.readmeURL, repoOwner: saved.repoOwner,
+                    repoName: saved.repoName, repoBranch: saved.repoBranch, repositoryPath: receipt.repositoryPath,
+                    installedAt: saved.installedAt, updatedAt: saved.updatedAt, contentHash: saved.contentHash)
+            }
+        }
         return result
     }
 
@@ -759,24 +793,57 @@ public actor WorkspaceSkillService {
     }
 
     private func importSkillLockMetadata(db: WorkspaceSkillDatabase) throws {
-        let path = homeDir + "/.agents/.skill-lock.json"
-        guard fileManager.fileExists(atPath: path) else { return }
-        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any]
-        guard let skills = json?["skills"] as? [String: [String: Any]] else { return }
+        for (directory, meta) in readSkillLockMetadata() {
+            try saveMetadata(db, directory: directory, meta: meta, ignoreExisting: true)
+            // 仅为同仓库、同分支的旧记录补齐路径；Git ref 区分大小写，不能跨分支拼接身份。
+            try db.execute("UPDATE skills_metadata SET repository_path=? WHERE directory=? AND repository_path IS NULL AND lower(repo_owner)=lower(?) AND lower(repo_name)=lower(?) AND repo_branch=?",
+                           [meta.repositoryPath, directory, meta.repoOwner, meta.repoName, meta.repoBranch])
+        }
+    }
+
+    /// 适配 skills CLI v3 的 source/sourceType/sourceUrl/ref/skillPath；只接受 GitHub 来源。
+    /// 安装记录损坏时仍能浏览本地库，未确认的来源保持空值，不能通过猜测归组。
+    private func readSkillLockMetadata() -> [String: SkillMetadata] {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: skillLockPath)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let skills = json["skills"] as? [String: [String: Any]] else { return [:] }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plainFormatter = ISO8601DateFormatter()
+        func date(_ value: Any?) -> Date? {
+            guard let text = value as? String else { return nil }
+            return formatter.date(from: text) ?? plainFormatter.date(from: text)
+        }
+        var result: [String: SkillMetadata] = [:]
         for (directory, item) in skills {
-            let source = (item["source"] as? String ?? "").split(separator: "/")
-            guard source.count == 2 else { continue }
+            guard !directory.contains("/"), directory != ".", directory != "..", !directory.isEmpty,
+                  item["sourceType"] as? String == "github",
+                  let repository = (item["source"] as? String).flatMap(WorkspaceSkillRepositorySource.parse)
+                    ?? (item["sourceUrl"] as? String).flatMap(WorkspaceSkillRepositorySource.parse) else { continue }
             let rawPath = item["skillPath"] as? String
             let relative = rawPath.map { ($0 as NSString).lastPathComponent == "SKILL.md" ? ($0 as NSString).deletingLastPathComponent : $0 }
-            let installed = (item["installedAt"] as? String).flatMap(formatter.date(from:)) ?? .distantPast
-            let meta = SkillMetadata(readmeURL: item["sourceUrl"] as? String, repoOwner: String(source[0]), repoName: String(source[1]),
-                repoBranch: item["branch"] as? String ?? "main", repositoryPath: relative, installedAt: installed,
-                updatedAt: (item["updatedAt"] as? String).flatMap(formatter.date(from:)) ?? installed, contentHash: item["skillFolderHash"] as? String)
-            try saveMetadata(db, directory: directory, meta: meta, ignoreExisting: true)
-            // 仅补齐旧记录缺失的真实路径，不覆盖 Quotio 后续更新保存的来源、时间或内容哈希。
-            try db.execute("UPDATE skills_metadata SET repository_path=? WHERE directory=? AND repository_path IS NULL", [relative, directory])
+            if let relative, !relative.isEmpty, (try? validateRelativePath(relative)) == nil { continue }
+            guard receiptMatchesManagedDirectory(directory) else { continue }
+            let installed = date(item["installedAt"]) ?? .distantPast
+            result[directory] = SkillMetadata(readmeURL: repository.repositoryURL?.absoluteString,
+                repoOwner: repository.owner, repoName: repository.name,
+                repoBranch: item["ref"] as? String ?? item["branch"] as? String ?? "HEAD",
+                repositoryPath: relative, installedAt: installed, updatedAt: date(item["updatedAt"]) ?? installed,
+                contentHash: nil) // skills CLI 的 Git tree SHA 不是 Quotio 的目录内容哈希，不能混用。
         }
+        return result
+    }
+
+    /// lock 的键只有技能名，不能作为跨客户端的唯一身份。私有库已有同名目录时，
+    /// 必须确认 skills CLI 的共享目录指向它，或两份完整内容相同，才使用外部来源。
+    /// 尚未纳管的记录交给 importUnmanagedSkill 的来源校验；本方法不搬移或重写任何文件。
+    private func receiptMatchesManagedDirectory(_ directory: String) -> Bool {
+        guard let managed = try? managedPath(directory) else { return false }
+        guard fileManager.fileExists(atPath: managed) else { return true }
+        let shared = homeDir + "/.agents/skills/" + directory
+        if isOwnedLink(shared, target: managed) { return true }
+        guard isRegularDirectory(shared), isRegularDirectory(managed),
+              let sharedHash = try? directoryHash(shared), let managedHash = try? directoryHash(managed) else { return false }
+        return sharedHash == managedHash
     }
 }

@@ -14,7 +14,7 @@
 ## Observed repository baseline
 
 - `.` → role `xy-apple`; stacks: platform:apple; evidence: Quotio.xcodeproj/project.pbxproj
-  - Discovered verification commands: ["xcodebuild", "-scheme", "Quotio", "build"]
+  - Discovered verification commands: ["xcodebuild", "-scheme", "QuotioPlus", "build"]
 
 These observations guide routing and verification; they are not upgrade targets or project rules.
 

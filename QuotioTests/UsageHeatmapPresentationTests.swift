@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 固定日历测试网格和筛选规则，不接触真实账本或网络；特意使用周日开周地区复现边界差异。
 final class UsageHeatmapPresentationTests: XCTestCase {

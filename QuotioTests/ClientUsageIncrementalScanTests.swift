@@ -1,6 +1,6 @@
 import XCTest
 import SQLite3
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 生产扫描入口的边界测试：所有日志、SQLite 和清理都只作用于临时合成目录。
 /// 检查状态结果不携带历史数组，并证明追加、截断、取消后仍可从磁盘恢复完整事实。

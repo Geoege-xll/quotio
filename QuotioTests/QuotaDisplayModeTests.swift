@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// Regression tests for issue #219: a "no data" sentinel of -1 remaining percent
 /// must never be converted into a fake display value (100 - (-1) = 101%).

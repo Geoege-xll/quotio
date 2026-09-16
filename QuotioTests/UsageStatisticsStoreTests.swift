@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 使用可控 actor 模拟 CPA，验证弹出式队列始终只有一个消费者以及启停时的数据提交顺序。
 final class UsageStatisticsStoreTests: XCTestCase {

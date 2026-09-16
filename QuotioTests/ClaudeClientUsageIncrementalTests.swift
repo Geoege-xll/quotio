@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 所有扫描、落盘和取消用例都在独立临时目录执行，不触碰真实 Claude 日志或用户账本。
 final class ClaudeClientUsageIncrementalTests: XCTestCase {

@@ -172,8 +172,10 @@ public nonisolated struct WorkspaceSession: Identifiable, Sendable {
     public let fileSizeBytes: Int64
     public let messageCount: Int
     public let resumeCommand: String
-    public let parentSessionID: String?
-    public let isSubagent: Bool
+    public let relationship: WorkspaceSessionRelationship
+    public var parentSessionID: String? { relationship.parentSessionID }
+    public var isSubagent: Bool { relationship.isSubagent }
+    public var isMainSession: Bool { relationship.isMainSession }
 
     public init(
         id: String,
@@ -189,7 +191,8 @@ public nonisolated struct WorkspaceSession: Identifiable, Sendable {
         messageCount: Int,
         resumeCommand: String,
         parentSessionID: String? = nil,
-        isSubagent: Bool? = nil
+        isSubagent: Bool? = nil,
+        relationship: WorkspaceSessionRelationship? = nil
     ) {
         self.id = id
         self.agent = agent
@@ -203,8 +206,32 @@ public nonisolated struct WorkspaceSession: Identifiable, Sendable {
         self.fileSizeBytes = fileSizeBytes
         self.messageCount = messageCount
         self.resumeCommand = resumeCommand
-        self.parentSessionID = parentSessionID
-        self.isSubagent = isSubagent ?? (parentSessionID != nil)
+        // 兼容现有调用点，统一规范空父 ID，并禁止“有父关系但显式为主会话”的矛盾状态。
+        let legacy = WorkspaceSessionRelationship(kind: isSubagent == true ? .subagent : .main, parentSessionID: parentSessionID)
+        self.relationship = relationship.map { value in
+            parentSessionID != nil || isSubagent == true ? value.merging(legacy) : value
+        } ?? legacy
+    }
+
+    /// 补充关系元数据不改变标题、正文位置和活动时间；用于同一 AGY 会话的摘要与缓存合并。
+    func mergingRelationship(_ value: WorkspaceSessionRelationship) -> Self {
+        Self(id: id, agent: agent, title: title, summary: summary, projectDirectory: projectDirectory,
+             projectName: projectName, createdAt: createdAt, lastActiveAt: lastActiveAt, filePath: filePath,
+             fileSizeBytes: fileSizeBytes, messageCount: messageCount, resumeCommand: resumeCommand,
+             relationship: relationship.merging(value))
+    }
+
+    /// 数据库优先保留展示信息，但旧库缺少 rollout_path 时必须接纳文件扫描得到的正文路径。
+    /// 否则关系虽然正确，主列表中的记录仍无法打开；已有实体路径不被低优先级来源替换。
+    func mergingSupplement(_ other: Self) -> Self {
+        let needsFile = filePath.isEmpty || filePath.hasPrefix("sqlite:")
+        let hasFile = !other.filePath.isEmpty && !other.filePath.hasPrefix("sqlite:")
+        return Self(id: id, agent: agent, title: title, summary: summary,
+                    projectDirectory: projectDirectory, projectName: projectName, createdAt: createdAt,
+                    lastActiveAt: lastActiveAt, filePath: needsFile && hasFile ? other.filePath : filePath,
+                    fileSizeBytes: needsFile && hasFile ? other.fileSizeBytes : fileSizeBytes,
+                    messageCount: messageCount, resumeCommand: resumeCommand,
+                    relationship: relationship.merging(other.relationship))
     }
 }
 

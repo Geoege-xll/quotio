@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 使用隔离日志证明筛选与侧栏重入复用快照；不读取真实会话，也不为测试加入生产诊断接口。
 @MainActor

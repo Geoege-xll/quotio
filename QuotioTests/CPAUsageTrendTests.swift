@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 从真实 SQLite 查询到趋势结果验证分量，不使用生产数据库或按总量反推输入、输出、缓存。
 final class CPAUsageTrendTests: XCTestCase {

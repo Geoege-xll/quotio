@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 final class CodexUsageMapperTests: XCTestCase {
     private func map(_ json: String) throws -> ProviderQuotaData {

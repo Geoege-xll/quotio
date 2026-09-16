@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 final class CopilotQuotaFetcherTests: XCTestCase {
     // Issue #404: a single auth file (github-copilot-marcosvrs.json with

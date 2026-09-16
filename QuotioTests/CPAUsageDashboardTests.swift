@@ -1,6 +1,6 @@
 import XCTest
 import SQLite3
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 使用隔离的日账本和 SQLite 回归历史迁移及上游统计口径，不读取或消费真实 CPA 队列。
 final class CPAUsageDashboardTests: XCTestCase {

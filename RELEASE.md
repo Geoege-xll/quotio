@@ -96,7 +96,7 @@ After a release:
 
 - Download and open the DMG on a Mac that has not built Quotio locally.
 - 对已公证发行包验证 Gatekeeper 能正常打开；临时签名包必须明确标注未公证状态。
-- 已公证发行包应通过 `spctl --assess --type execute --verbose=2 /Applications/Quotio.app`，显示 `accepted` 与 `Notarized Developer ID`。
+- 已公证发行包应通过 `spctl --assess --type execute --verbose=2 /Applications/QuotioPlus.app`，显示 `accepted` 与 `Notarized Developer ID`。
 - 确认 ZIP 和 DMG 已上传；只有启用 Sparkle 签名的发行版才要求提供 `appcast.xml`。
 - Check stable and beta update channels as applicable.
 

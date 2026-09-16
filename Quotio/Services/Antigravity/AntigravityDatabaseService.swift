@@ -14,17 +14,37 @@ actor AntigravityDatabaseService {
     
     // MARK: - Constants
     
-    private static let databasePath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/state.vscdb")
+    private static var resolvedGlobalStorageDirectory: URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidateIDE = home.appendingPathComponent("Library/Application Support/Antigravity IDE/User/globalStorage")
+        let candidateStandard = home.appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage")
+        if FileManager.default.fileExists(atPath: candidateIDE.appendingPathComponent("state.vscdb").path) {
+            return candidateIDE
+        }
+        if FileManager.default.fileExists(atPath: candidateStandard.appendingPathComponent("state.vscdb").path) {
+            return candidateStandard
+        }
+        if FileManager.default.fileExists(atPath: candidateIDE.path) {
+            return candidateIDE
+        }
+        return candidateStandard
+    }
+
+    private static var databasePath: URL {
+        resolvedGlobalStorageDirectory.appendingPathComponent("state.vscdb")
+    }
     
-    private static let backupPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/state.vscdb.quotio.backup")
+    private static var backupPath: URL {
+        resolvedGlobalStorageDirectory.appendingPathComponent("state.vscdb.quotio.backup")
+    }
     
-    private static let walPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/state.vscdb-wal")
+    private static var walPath: URL {
+        resolvedGlobalStorageDirectory.appendingPathComponent("state.vscdb-wal")
+    }
     
-    private static let shmPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/state.vscdb-shm")
+    private static var shmPath: URL {
+        resolvedGlobalStorageDirectory.appendingPathComponent("state.vscdb-shm")
+    }
     
     private static let oldFormatKey = "jetskiStateSync.agentManagerInitState"
     private static let newFormatKey = "antigravityUnifiedStateSync.oauthToken"

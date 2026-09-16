@@ -1,5 +1,6 @@
 import XCTest
-@testable import Quotio
+import Observation
+@testable import QuotioPlus
 
 /// 全部依赖使用内存替身；异步返回顺序由 continuation 控制，
 /// 不使用真实 Home、网络或时间等待验证竞态。
@@ -71,8 +72,147 @@ final class WorkspaceViewModelSafetyTests: XCTestCase {
         XCTAssertEqual(vm.sessions.map(\.id), ["failed"])
         XCTAssertEqual(vm.selectedSessionIDs, ["failed"])
         XCTAssertTrue(vm.batchDeleteMode)
-        XCTAssertTrue(vm.errorMessage?.contains("1 项失败") == true)
+        XCTAssertEqual(vm.sessionDeletionProgress?.phase, .finished)
+        XCTAssertEqual(vm.sessionDeletionProgress?.result.failures.count, 1)
+        XCTAssertNil(vm.errorMessage, "删除失败在进度面板内展示，避免 Sheet 和 Alert 竞争")
         XCTAssertNil(vm.toastMessage)
+    }
+
+    @MainActor
+    func testDeletionPublishesProgressAndRejectsRepeatedActionsForEveryAgent() async {
+        for agent in WorkspaceAgent.allCases {
+            let service = WorkspaceSessionStub()
+            await service.setDeferredDeletes()
+            let vm = makeViewModel(sessions: service)
+            vm.selectedAgentFilter = agent
+            let first = session("a", agent: agent)
+            let second = session("b", agent: agent)
+            vm.sessions = [first, second]
+            let deleting = Task { await vm.deleteSession(first) }
+            await service.waitForDelete()
+            let operationID = vm.sessionDeletionProgress?.id
+            XCTAssertTrue(vm.isDeletingSessions)
+            XCTAssertEqual(vm.sessionDeletionProgress?.phase, .deleting)
+            XCTAssertEqual(vm.sessionDeletionProgress?.totalCount, 1)
+            XCTAssertEqual(vm.sessionDeletionProgress?.processedCount, 0)
+            XCTAssertEqual(vm.sessionDeletionProgress?.currentSessionTitle, "a")
+            XCTAssertEqual(vm.sessionDeletionProgress?.currentAgentName, agent.displayName)
+            vm.dismissSessionDeletionProgress()
+            await vm.deleteSession(second)
+            let calls = await service.deletionCalls
+            XCTAssertEqual(calls, ["a"], "提示框关闭尝试和重复点击不能重复提交删除")
+            XCTAssertEqual(vm.sessionDeletionProgress?.id, operationID)
+            await service.finishDelete()
+            await deleting.value
+            XCTAssertFalse(vm.isDeletingSessions)
+            XCTAssertNil(vm.sessionDeletionProgress, "成功后自动收起，不等待容量扫描")
+            XCTAssertEqual(vm.sessions.map(\.id), ["b"])
+        }
+    }
+
+    @MainActor
+    func testBatchProgressCountsUniqueRootsAndPreservesPartialFailures() async {
+        let service = WorkspaceSessionStub()
+        await service.setDeferredDeletes()
+        await service.setFailedDeletes(["failed"])
+        let vm = makeViewModel(sessions: service)
+        vm.sessions = [session("good"), session("child", parent: "good"), session("failed"), session("missing")]
+        vm.selectedSessionIDs = ["good", "child", "failed", "missing"]
+        vm.batchDeleteMode = true
+        let deleting = Task { await vm.deleteSelectedBatchSessions() }
+        await service.waitForDelete()
+        let operationID = vm.sessionDeletionProgress?.id
+        XCTAssertEqual(vm.sessionDeletionProgress?.totalCount, 3, "父子同时勾选只算一次实际删除")
+        XCTAssertEqual(vm.sessionDeletionProgress?.processedCount, 0)
+        XCTAssertEqual(vm.sessionDeletionProgress?.includesDescendants, true)
+        await service.finishDelete()
+        // 中间一项抛出错误后继续处理下一项；失败也算已处理，但不能算删除成功。
+        await service.waitForDelete()
+        XCTAssertEqual(vm.sessionDeletionProgress?.id, operationID)
+        XCTAssertEqual(vm.sessionDeletionProgress?.currentSessionTitle, "missing")
+        XCTAssertEqual(vm.sessionDeletionProgress?.processedCount, 2)
+        XCTAssertEqual(vm.sessionDeletionProgress?.result.succeededCount, 1)
+        XCTAssertEqual(vm.sessionDeletionProgress?.result.failures.count, 1)
+        await service.finishDelete(success: false)
+        await deleting.value
+        XCTAssertFalse(vm.isDeletingSessions)
+        XCTAssertEqual(vm.sessionDeletionProgress?.phase, .finished)
+        XCTAssertEqual(vm.sessionDeletionProgress?.processedCount, 3)
+        XCTAssertEqual(vm.sessionDeletionProgress?.result.succeededCount, 1)
+        XCTAssertEqual(vm.sessionDeletionProgress?.result.failures.count, 2)
+        XCTAssertNotNil(vm.sessionDeletionProgress?.finishedAt)
+        XCTAssertEqual(vm.sessions.map(\.id), ["failed", "missing"])
+        XCTAssertEqual(vm.selectedSessionIDs, ["failed", "missing"])
+        XCTAssertNil(vm.toastMessage)
+        let calls = await service.deletionCalls
+        XCTAssertEqual(calls, ["good", "failed", "missing"])
+        vm.dismissSessionDeletionProgress()
+        XCTAssertNil(vm.sessionDeletionProgress)
+    }
+
+    @MainActor
+    func testDeletionKeepsRefreshingPhaseUntilNextSessionDetailIsReady() async {
+        let service = WorkspaceSessionStub()
+        await service.setDeferredMessages(true)
+        let vm = makeViewModel(sessions: service)
+        let first = session("a")
+        vm.sessions = [first, session("b")]
+        vm.selectedSession = first
+        let deleting = Task { await vm.deleteSession(first) }
+        await service.waitForMessage("b")
+        XCTAssertTrue(vm.isDeletingSessions)
+        XCTAssertEqual(vm.sessionDeletionProgress?.phase, .refreshing)
+        XCTAssertEqual(vm.sessionDeletionProgress?.processedCount, 1)
+        XCTAssertEqual(vm.sessions.map(\.id), ["b"])
+        await service.finishMessage("b", text: "下一条会话")
+        await deleting.value
+        XCTAssertNil(vm.sessionDeletionProgress)
+        XCTAssertFalse(vm.isDeletingSessions)
+        XCTAssertEqual(vm.selectedSessionMessages.first?.content, "下一条会话")
+    }
+
+    @MainActor
+    func testSuccessfulDeletionPreservesFollowingDetailErrorForAfterSheetDismissal() async {
+        let service = WorkspaceSessionStub()
+        await service.setDeferredMessages(true)
+        let vm = makeViewModel(sessions: service)
+        let first = session("a")
+        vm.sessions = [first, session("b")]
+        vm.selectedSession = first
+        let deleting = Task { await vm.deleteSession(first) }
+        await service.waitForMessage("b")
+        XCTAssertEqual(vm.sessionDeletionProgress?.phase, .refreshing)
+        await service.failMessage("b")
+        await deleting.value
+        XCTAssertNil(vm.sessionDeletionProgress)
+        XCTAssertFalse(vm.isDeletingSessions)
+        XCTAssertEqual(vm.sessions.map(\.id), ["b"])
+        XCTAssertTrue(vm.errorMessage?.contains("详情读取失败") == true,
+                      "删除结束不能吞掉后续详情读取错误，界面在 Sheet 关闭后展示它")
+        XCTAssertTrue(vm.toastMessage?.contains("成功删除") == true)
+    }
+
+    @MainActor
+    func testEmptyOrStaleBatchSelectionDoesNotShowDeletionProgress() async {
+        let service = WorkspaceSessionStub()
+        let vm = makeViewModel(sessions: service)
+        await vm.deleteSelectedBatchSessions()
+        vm.selectedSessionIDs = ["no-longer-present"]
+        await vm.deleteSelectedBatchSessions()
+        XCTAssertNil(vm.sessionDeletionProgress)
+        XCTAssertFalse(vm.isDeletingSessions)
+        XCTAssertNil(vm.toastMessage)
+        let calls = await service.deletionCalls
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+    func testDeletionElapsedTimeFreezesAtCompletion() {
+        let start = Date(timeIntervalSince1970: 100)
+        var progress = WorkspaceSessionDeletionProgress(startedAt: start)
+        XCTAssertEqual(progress.elapsedText(at: start.addingTimeInterval(65)), "已用时 1 分 5 秒")
+        progress.finishedAt = start.addingTimeInterval(70)
+        progress.phase = .finished
+        XCTAssertEqual(progress.elapsedText(at: start.addingTimeInterval(200)), "已用时 1 分 10 秒")
     }
 
     @MainActor
@@ -94,6 +234,53 @@ final class WorkspaceViewModelSafetyTests: XCTestCase {
         XCTAssertEqual(vm.sessions.map(\.id), ["new"])
         XCTAssertEqual(vm.selectedAgentFilter, .codex)
         XCTAssertFalse(vm.isLoadingSessions)
+    }
+
+    @MainActor
+    func testDeletionDoesNotWaitForStorageAndCoalescesRefreshes() async {
+        let storage = WorkspaceStorageStub()
+        await storage.setDeferredAnalysis()
+        let vm = makeViewModel(storage: storage)
+        vm.sessions = [session("a"), session("b"), session("c")]
+        let refreshing = Task { await vm.analyzeStorage() }
+        await storage.waitForAnalysis(1)
+
+        // 容量读取刻意不返回；实际删除完成后必须立即解锁，允许继续删除下一项。
+        for id in ["a", "b", "c"] {
+            await vm.deleteSession(session(id))
+            XCTAssertFalse(vm.isDeletingSessions)
+        }
+        XCTAssertTrue(vm.sessions.isEmpty)
+        XCTAssertTrue(vm.isAnalyzingStorage)
+        let firstCount = await storage.analysisCount
+        XCTAssertEqual(firstCount, 1, "连续删除不应并发启动多个容量扫描")
+
+        await storage.finishAnalysis(.init(oldSessionsCount: 3))
+        await storage.waitForAnalysis(2)
+        XCTAssertNil(vm.storageReport, "删除之前开始读取的旧报告不能覆盖当前状态")
+        await storage.finishAnalysis(.init(oldSessionsCount: 0))
+        await refreshing.value
+        let finalCount = await storage.analysisCount
+        XCTAssertEqual(finalCount, 2, "多个删除请求只需补一次最新扫描")
+        XCTAssertEqual(vm.storageReport?.oldSessionsCount, 0)
+        XCTAssertFalse(vm.isAnalyzingStorage)
+    }
+
+    @MainActor
+    func testCachedListStillObservesInputChanges() async {
+        let vm = makeViewModel()
+        vm.sessions = [session("a"), session("b")]
+        _ = vm.rootFilteredSessions
+        let changed = expectation(description: "命中缓存后的视图仍订阅 sessions")
+        withObservationTracking {
+            _ = vm.rootFilteredSessions
+            _ = vm.projectGroups
+        } onChange: {
+            changed.fulfill()
+        }
+        vm.sessions.removeFirst()
+        await fulfillment(of: [changed], timeout: 1)
+        XCTAssertEqual(vm.rootFilteredSessions.map(\.id), ["b"])
     }
 
     @MainActor
@@ -154,13 +341,49 @@ final class WorkspaceViewModelSafetyTests: XCTestCase {
     }
 
     @MainActor
-    func testSearchRetainsAncestorsAndOrphansRemainVisible() {
+    func testSearchRetainsAncestorsWithoutPromotingOrphanSubagents() {
         let vm = makeViewModel()
         vm.sessions = [session("root"), session("child", parent: "root"), session("needle", parent: "child"), session("orphan", parent: "missing")]
-        XCTAssertEqual(Set(vm.rootFilteredSessions.map(\.id)), ["root", "orphan"])
+        XCTAssertEqual(vm.rootFilteredSessions.map(\.id), ["root"])
         vm.sessionSearchText = "needle"
         XCTAssertEqual(vm.rootFilteredSessions.map(\.id), ["root"])
         XCTAssertEqual(vm.descendantRows(for: session("root")).map { $0.session.id }, ["child", "needle"])
+        vm.sessionSearchText = "orphan"
+        XCTAssertTrue(vm.rootFilteredSessions.isEmpty, "搜索不能把缺失父会话的子任务提升为主会话")
+        XCTAssertEqual(vm.sessions.count, 4, "浏览筛选不能删除原始会话记录")
+    }
+
+    @MainActor
+    func testMainSessionListExcludesUnlinkedHelpersAndBrokenRelationshipsForEveryAgent() {
+        // 所有客户端共用主会话规则；guardian、缺失父节点和环只能保留在完整数据中。
+        // 主会话目录即使叫 agent_workflow 也应正常显示，不能按项目名做黑名单。
+        for agent in WorkspaceAgent.allCases {
+            let vm = makeViewModel()
+            vm.selectedAgentFilter = agent
+            let main = WorkspaceSession(id: "main", agent: agent, title: "工作流开发",
+                projectDirectory: "/projects/agent_workflow", projectName: "agent_workflow",
+                lastActiveAt: Date(), filePath: "/fixture/main.jsonl", fileSizeBytes: 1,
+                messageCount: 1, resumeCommand: "")
+            let guardian = WorkspaceSession(id: "guardian", agent: agent, title: "辅助审查",
+                projectDirectory: "/projects/agent_workflow", projectName: "agent_workflow",
+                lastActiveAt: Date(), filePath: "/fixture/guardian.jsonl", fileSizeBytes: 1,
+                messageCount: 1, resumeCommand: "", isSubagent: true)
+            let conflicting = WorkspaceSession(id: "conflicting", agent: agent, title: "关系不一致",
+                projectName: "test", lastActiveAt: Date(), filePath: "/fixture/conflicting.jsonl",
+                fileSizeBytes: 1, messageCount: 1, resumeCommand: "", parentSessionID: "missing", isSubagent: false)
+            vm.sessions = [main, guardian, session("child", parent: "main", agent: agent),
+                session("orphan", parent: "missing", agent: agent), session("self", parent: "self", agent: agent),
+                session("a", parent: "b", agent: agent), session("b", parent: "a", agent: agent), conflicting]
+
+            XCTAssertEqual(vm.rootFilteredSessions.map(\.id), ["main"])
+            XCTAssertEqual(vm.projectGroups.map(\.projectName), ["agent_workflow"])
+            XCTAssertEqual(vm.projectGroups.flatMap(\.sessions).map(\.id), ["main"])
+            XCTAssertEqual(vm.descendantRows(for: main).map { $0.session.id }, ["child"])
+            vm.sessionSearchText = "辅助审查"
+            XCTAssertTrue(vm.rootFilteredSessions.isEmpty)
+            XCTAssertTrue(vm.projectGroups.isEmpty)
+            XCTAssertEqual(vm.sessions.count, 8)
+        }
     }
 
     func testTreeTerminatesCyclesAndKeepsDifferentAgentsSeparate() {
@@ -171,11 +394,15 @@ final class WorkspaceViewModelSafetyTests: XCTestCase {
 
     @MainActor
     private func makeViewModel(
-        sessions: WorkspaceSessionStub = WorkspaceSessionStub(),
-        skills: WorkspaceSkillStub = WorkspaceSkillStub(),
-        storage: WorkspaceStorageStub = WorkspaceStorageStub()
+        sessions: WorkspaceSessionStub? = nil,
+        skills: WorkspaceSkillStub? = nil,
+        storage: WorkspaceStorageStub? = nil
     ) -> WorkspaceViewModel {
-        WorkspaceViewModel(sessionService: sessions, skillService: skills, storageService: storage)
+        // 默认替身在明确的 MainActor 函数体内创建，避免 Swift 6.4 对默认参数中的 actor
+        // 构造表达式推导出无效的 nonisolated 初始化标记；每次调用仍使用独立的测试依赖。
+        WorkspaceViewModel(sessionService: sessions ?? WorkspaceSessionStub(),
+                           skillService: skills ?? WorkspaceSkillStub(),
+                           storageService: storage ?? WorkspaceStorageStub())
     }
 
     private func session(_ id: String, parent: String? = nil, agent: WorkspaceAgent = .claude) -> WorkspaceSession {
@@ -190,6 +417,9 @@ private actor WorkspaceSessionStub: WorkspaceSessionServicing {
     private var observers: [String: CheckedContinuation<Void, Never>] = [:]
     func setDeferredMessages(_ value: Bool) { deferredMessages = value }
     func setFailedDeletes(_ ids: Set<String>) { failedDeletes = ids }
+    private var deferredDeletes = false
+    private(set) var deletionCalls: [String] = []
+    func setDeferredDeletes() { deferredDeletes = true }
     private var deferredScanAndDelete = false
     private var scan: CheckedContinuation<[WorkspaceSession], Never>?
     private var scanObserver: CheckedContinuation<Void, Never>?
@@ -212,7 +442,7 @@ private actor WorkspaceSessionStub: WorkspaceSessionServicing {
         guard deletion == nil else { return }
         await withCheckedContinuation { deleteObserver = $0 }
     }
-    func finishDelete() { deletion?.resume(returning: true); deletion = nil }
+    func finishDelete(success: Bool = true) { deletion?.resume(returning: success); deletion = nil }
     func loadSessionMessages(session: WorkspaceSession) async throws -> [WorkspaceSessionMessage] {
         guard deferredMessages else { return [] }
         return try await withCheckedThrowingContinuation { continuation in
@@ -227,9 +457,14 @@ private actor WorkspaceSessionStub: WorkspaceSessionServicing {
     func finishMessage(_ id: String, text: String) {
         pending.removeValue(forKey: id)?.resume(returning: [.init(role: .assistant, content: text)])
     }
+    func failMessage(_ id: String) {
+        pending.removeValue(forKey: id)?.resume(throwing: NSError(domain: "Fixture", code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "模拟详情读取失败"]))
+    }
     func deleteSession(_ session: WorkspaceSession) async throws -> Bool {
+        deletionCalls.append(session.id)
         if failedDeletes.contains(session.id) { throw NSError(domain: "Fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "模拟删除失败"]) }
-        if deferredScanAndDelete {
+        if deferredScanAndDelete || deferredDeletes {
             return await withCheckedContinuation {
                 deletion = $0
                 deleteObserver?.resume(); deleteObserver = nil
@@ -293,7 +528,27 @@ private actor WorkspaceSkillStub: WorkspaceSkillServicing {
 private actor WorkspaceStorageStub: WorkspaceStorageServicing {
     private let cacheResult: WorkspaceOperationResult
     init(cacheResult: WorkspaceOperationResult = .init()) { self.cacheResult = cacheResult }
-    func analyzeStorage() async -> WorkspaceStorageReport { .init() }
+    private var deferredAnalysis = false
+    private var pendingAnalysis: CheckedContinuation<WorkspaceStorageReport, Never>?
+    private var analysisObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+    private(set) var analysisCount = 0
+    func setDeferredAnalysis() { deferredAnalysis = true }
+    func analyzeStorage() async -> WorkspaceStorageReport {
+        analysisCount += 1
+        guard deferredAnalysis else { return .init() }
+        return await withCheckedContinuation {
+            pendingAnalysis = $0
+            analysisObservers.removeValue(forKey: analysisCount)?.resume()
+        }
+    }
+    func waitForAnalysis(_ count: Int) async {
+        guard analysisCount < count else { return }
+        await withCheckedContinuation { analysisObservers[count] = $0 }
+    }
+    func finishAnalysis(_ report: WorkspaceStorageReport) {
+        pendingAnalysis?.resume(returning: report)
+        pendingAnalysis = nil
+    }
     func clearCachesReport(for agent: WorkspaceAgent?) async -> WorkspaceOperationResult { cacheResult }
     func cleanOldSessionsReport(olderThanDays: Int) async -> WorkspaceOperationResult { .init() }
 }

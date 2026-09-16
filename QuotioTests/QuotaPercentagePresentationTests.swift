@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 final class QuotaPercentagePresentationTests: XCTestCase {
     /// 同一个未知额度切换已用/剩余模式后都不能变成真实的 0% 或 100%。

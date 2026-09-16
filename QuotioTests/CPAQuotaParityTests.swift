@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 按 EasyCLIProxyAPI 的公开响应形状构造离线样例，不依赖任何真实账号或在线请求。
 final class CPAQuotaParityTests: XCTestCase {

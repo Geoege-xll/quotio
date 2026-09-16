@@ -1,6 +1,6 @@
 import XCTest
 import Darwin
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 手动性能验收使用只读备份得到的临时数据库副本。普通回归未提供目录时跳过，绝不自动读取生产库。
 /// 指标为同一测试进程的 physical footprint，不能与另一个应用的 RSS 直接比较。

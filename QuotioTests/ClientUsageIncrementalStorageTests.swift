@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 只使用临时数据库和合成用量验证生产内存边界；测试不扫描真实客户端目录。
 final class ClientUsageIncrementalStorageTests: XCTestCase {

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 覆盖常显指标的统计口径，不通过截图文字或视图层级断言复制布局实现。
 final class CPAUsageOverviewPresentationTests: XCTestCase {

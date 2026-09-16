@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 草稿和选项的回归不启动查询、不读取用户数据，直接验证常驻条件与附加条件的产品契约。
 final class CPAUsageFilterDraftTests: XCTestCase {

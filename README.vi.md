@@ -108,7 +108,7 @@ Các bản phát hành chính thức được ký bằng Developer ID và đư�
    ```
 
 3. **Build và chạy:**
-   - Chọn scheme "Quotio"
+   - Chọn scheme "QuotioPlus"
    - Nhấn `Cmd + R`
 
 > Ứng dụng sẽ tự động tải binary `CLIProxyAPI` trong lần chạy đầu tiên.

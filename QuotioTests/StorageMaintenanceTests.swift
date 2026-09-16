@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 所有清理测试只使用临时数据库；不启动真实客户端扫描、不清理用户缓存或生产统计。
 @MainActor

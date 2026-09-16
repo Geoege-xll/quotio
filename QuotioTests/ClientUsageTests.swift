@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 三客户端数据层的回归只使用临时文件与内存事件，绝不读取真实会话或写入用户账本。
 final class ClientUsageTests: XCTestCase {

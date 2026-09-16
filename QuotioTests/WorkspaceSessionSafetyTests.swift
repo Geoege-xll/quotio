@@ -1,6 +1,6 @@
 import XCTest
 import SQLite3
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 所有会话、数据库和故障场景都创建于独立临时 home，禁止触碰本机客户端记录。
 final class WorkspaceSessionSafetyTests: XCTestCase {
@@ -100,6 +100,53 @@ final class WorkspaceSessionSafetyTests: XCTestCase {
         """)
         let records = await PiSessionProvider(homeDir: home.path).scanSessions()
         XCTAssertEqual(records.first?.parentSessionID, parentID)
+    }
+
+    func testCodexFileScanRecognizesParentlessSubagentsWithoutGuessingFromFilename() async throws {
+        // 本机 guardian 的 source 明确标记 subagent，却没有 parent_thread_id。
+        // 覆盖对象、序列化字符串及旧纯字符串，确保数据库不可用时也不会恢复成主会话。
+        let sources: [(id: String, source: Any)] = [
+            ("guardian", ["subagent": ["other": "guardian"]]),
+            ("serialized", "{\"subagent\":{\"other\":\"guardian\"}}"),
+            ("legacy", "subagent"),
+            ("child", ["subagent": ["thread_spawn": ["parent_thread_id": "main"]]]),
+            ("main", "cli"),
+            ("has_underscore", "vscode"),
+            ("description", ["note": "subagent is mentioned in unrelated metadata"])
+        ]
+        for (id, source) in sources {
+            let line = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": [
+                "id": id, "source": source, "cwd": "/projects/agent_workflow", "timestamp": "2026-09-14T10:00:00Z"
+            ]])
+            _ = try write(".codex/sessions/\(id).jsonl", String(decoding: line, as: UTF8.self))
+        }
+        let records = await CodexSessionProvider(homeDir: home.path).scanSessions()
+        XCTAssertEqual(records.count, sources.count)
+        XCTAssertEqual(Set(records.filter(\.isSubagent).map(\.id)), ["guardian", "serialized", "legacy", "child"])
+        XCTAssertNil(records.first { $0.id == "guardian" }?.parentSessionID)
+        XCTAssertEqual(records.first { $0.id == "child" }?.parentSessionID, "main")
+    }
+
+    func testCodexDatabaseRetainsParentlessSourceAndRestoresParentFromSource() async throws {
+        _ = try write(".codex/sessions/fixture.jsonl", "{}")
+        let database = home.appendingPathComponent(".codex/state_5.sqlite").path
+        // 标题、目录和正文均不参与身份推断；parent ID 也不限定为 UUID 格式。
+        try execute(database, """
+        CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, first_user_message TEXT, cwd TEXT,
+            rollout_path TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, agent_nickname TEXT, agent_role TEXT);
+        CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT);
+        INSERT INTO threads VALUES ('main', 'subagent 工作流开发', '', '/projects/agent_workflow', '', 1, 2, 'cli', NULL, NULL);
+        INSERT INTO threads VALUES ('guardian', '辅助审查', '', '/projects/agent_workflow', '', 1, 2,
+            '{"subagent":{"other":"guardian"}}', NULL, NULL);
+        INSERT INTO threads VALUES ('child', '子任务', '', '/projects/agent_workflow', '', 1, 2,
+            '{"subagent":{"thread_spawn":{"parent_thread_id":"main"}}}', NULL, NULL);
+        INSERT INTO thread_spawn_edges VALUES ('', 'child');
+        """)
+        let records = await CodexSessionProvider(homeDir: home.path).scanSessions()
+        XCTAssertFalse(try XCTUnwrap(records.first { $0.id == "main" }).isSubagent)
+        XCTAssertTrue(try XCTUnwrap(records.first { $0.id == "guardian" }).isSubagent)
+        XCTAssertNil(records.first { $0.id == "guardian" }?.parentSessionID)
+        XCTAssertEqual(records.first { $0.id == "child" }?.parentSessionID, "main")
     }
 
     func testCodexDeletesThreeLevelsAndLeavesHistoricalDatabaseUntouched() async throws {

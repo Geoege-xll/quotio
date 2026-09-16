@@ -1,6 +1,6 @@
 import XCTest
 import SQLite3
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 公共数据库只使用临时路径，验证统一存储依赖的事务、隔离和迁移边界。
 final class AnalyticsDatabaseTests: XCTestCase {

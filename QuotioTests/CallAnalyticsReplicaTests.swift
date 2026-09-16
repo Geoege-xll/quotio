@@ -1,6 +1,6 @@
 // 验证 AIUsage 页面复刻的统计派生：只使用内存 fixture，不读取真实会话或修改用户配置。
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 final class CallAnalyticsReplicaTests: XCTestCase {
     private func entry(_ name: String, source: CallSourceKind = .claude, kind: CallKind = .mcp,

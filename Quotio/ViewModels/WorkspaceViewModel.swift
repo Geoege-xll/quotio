@@ -24,22 +24,34 @@ public final class WorkspaceViewModel {
     private var repositoryDataRevision = 0
     private var skillRevision = 0
     private var storageRevision = 0
+    // 容量刷新独立于删除按钮生命周期；同一时刻只运行一个任务，新请求通过版本号合并。
+    @ObservationIgnored private var storageAnalysisTask: Task<Void, Never>?
+    // 缓存不是 UI 状态，输入变更时失效；访问入口仍读取可观察输入，保证 SwiftUI 正常刷新。
+    @ObservationIgnored private var sessionListCache: WorkspaceSessionListSnapshot?
     private var hasStartedInitialLoad = false
     private var isSavingRepositories = false
     public private(set) var isDeletingSessions = false
+    /// 所有会话浏览删除入口共享一份进度，页面重绘不会丢失当前项目、结果或开始时间。
+    private(set) var sessionDeletionProgress: WorkspaceSessionDeletionProgress?
     public private(set) var isMutatingSkills = false
 
     // MARK: - Top Navigation
     public var selectedTab: WorkspaceTab = .storage
 
     // MARK: - Sessions State
-    public var sessions: [WorkspaceSession] = []
+    public var sessions: [WorkspaceSession] = [] {
+        didSet { sessionListCache = nil }
+    }
     public var selectedSession: WorkspaceSession? = nil
     public var selectedSessionMessages: [WorkspaceSessionMessage] = []
     public var isLoadingSessions = false
     public var isLoadingMessages = false
-    public var sessionSearchText = ""
-    public var selectedAgentFilter: WorkspaceAgent = .claude
+    public var sessionSearchText = "" {
+        didSet { sessionListCache = nil }
+    }
+    public var selectedAgentFilter: WorkspaceAgent = .claude {
+        didSet { sessionListCache = nil }
+    }
     public var isGroupedView = true
     public var batchDeleteMode = false
     public var selectedSessionIDs: Set<String> = []
@@ -181,43 +193,48 @@ public final class WorkspaceViewModel {
     }
 
     public func deleteSession(_ session: WorkspaceSession) async {
-        guard !isDeletingSessions else { return }
-        isDeletingSessions = true
-        defer { isDeletingSessions = false }
-        let removedKeys = deletionKeys(for: session, in: sessions)
-        do {
-            let success = try await sessionService.deleteSession(session)
-            if success {
-                await reconcileDeletedSessions(removedKeys)
-                showToast("已成功删除会话")
-                await analyzeStorage()
-            } else {
-                errorMessage = "删除会话失败：未找到对应的会话记录或文件"
-            }
-        } catch {
-            errorMessage = "删除失败: \(error.localizedDescription)"
-        }
+        await deleteSessions([session], isBatch: false)
     }
 
     public func deleteSelectedBatchSessions() async {
         guard !selectedSessionIDs.isEmpty, !isDeletingSessions else { return }
-        isDeletingSessions = true
-        defer { isDeletingSessions = false }
-        let snapshot = sessions
         let agent = selectedAgentFilter
         let selectedIDs = selectedSessionIDs
-        let selected = snapshot.filter { $0.agent == agent && selectedIDs.contains($0.id) }
+        let selected = sessions.filter { $0.agent == agent && selectedIDs.contains($0.id) }
+        await deleteSessions(selected, isBatch: true)
+    }
+
+    /// 单条、子任务和批量删除统一推进进度。耗时磁盘操作仍由服务在后台执行，
+    /// 每项 await 返回后才更新计数；列表同步期间继续展示状态，容量分析则独立刷新。
+    private func deleteSessions(_ selected: [WorkspaceSession], isBatch: Bool) async {
+        guard !selected.isEmpty, !isDeletingSessions else { return }
+        isDeletingSessions = true
+        sessionDeletionProgress = WorkspaceSessionDeletionProgress()
+        defer { isDeletingSessions = false }
+        let snapshot = sessions
+        // 先发布“准备删除”，让界面有机会响应点击，再整理会话关系；不人为延长删除时间。
+        await Task.yield()
         let tree = WorkspaceSessionTree(sessions: snapshot)
+        let selectedKeys = Set(selected.map(WorkspaceSessionTree.key))
         // 父会话的删除包含后代；同时勾选父子时只向服务提交最高层的候选。
-        let toDelete = selected.filter { session in
-            !tree.ancestors(of: session).contains { selectedIDs.contains($0.id) }
+        let toDelete = isBatch ? selected.filter { session in
+            !tree.ancestors(of: session).contains { selectedKeys.contains(WorkspaceSessionTree.key($0)) }
+        } : selected
+        guard !toDelete.isEmpty else {
+            sessionDeletionProgress = nil
+            return
         }
+        sessionDeletionProgress?.totalCount = toDelete.count
+        sessionDeletionProgress?.includesDescendants = toDelete.contains { !tree.descendants(of: $0).isEmpty }
+        sessionDeletionProgress?.phase = .deleting
         var removedKeys = Set<String>()
         var result = WorkspaceOperationResult()
         for session in toDelete {
+            sessionDeletionProgress?.currentSessionTitle = session.title
+            sessionDeletionProgress?.currentAgentName = session.agent.displayName
             do {
                 if try await sessionService.deleteSession(session) {
-                    removedKeys.formUnion(deletionKeys(for: session, in: snapshot))
+                    removedKeys.formUnion(deletionKeys(for: session, in: tree))
                     result.succeededCount += 1
                 } else {
                     result.failures.append("\(session.title)：未找到可删除的会话")
@@ -225,16 +242,32 @@ public final class WorkspaceViewModel {
             } catch {
                 result.failures.append("\(session.title)：\(error.localizedDescription)")
             }
+            sessionDeletionProgress?.result = result
         }
+        sessionDeletionProgress?.phase = .refreshing
         await reconcileDeletedSessions(removedKeys)
-        if selectedSessionIDs.isEmpty { batchDeleteMode = false }
-        presentOperationResult(result, success: "已成功批量删除 \(result.succeededCount) 个会话")
-        await analyzeStorage()
+        if isBatch, selectedSessionIDs.isEmpty { batchDeleteMode = false }
+        if !removedKeys.isEmpty { scheduleStorageAnalysis() }
+        if result.failures.isEmpty {
+            // 全部成功后自动关闭，继续沿用页面 Toast；无需用户为每次删除额外点一次确认。
+            sessionDeletionProgress = nil
+            showToast(isBatch ? "已成功批量删除 \(result.succeededCount) 个会话" : "已成功删除会话")
+        } else {
+            // 失败说明保留在同一个提示框内，避免关闭进度 Sheet 的同时再弹 Alert 发生竞争。
+            sessionDeletionProgress?.finishedAt = Date()
+            sessionDeletionProgress?.phase = .finished
+        }
     }
 
-    private func deletionKeys(for session: WorkspaceSession, in snapshot: [WorkspaceSession]) -> Set<String> {
+    func dismissSessionDeletionProgress() {
+        // 删除事务中不提供假取消；关闭结果面板不会终止正在提交的磁盘操作。
+        guard !isDeletingSessions else { return }
+        sessionDeletionProgress = nil
+    }
+
+    private func deletionKeys(for session: WorkspaceSession, in tree: WorkspaceSessionTree) -> Set<String> {
         var keys: Set<String> = [WorkspaceSessionTree.key(session)]
-        keys.formUnion(WorkspaceSessionTree(sessions: snapshot).descendants(of: session).map { WorkspaceSessionTree.key($0.session) })
+        keys.formUnion(tree.descendants(of: session).map { WorkspaceSessionTree.key($0.session) })
         return keys
     }
 
@@ -276,28 +309,26 @@ public final class WorkspaceViewModel {
         }
     }
 
-    // Filtered Sessions
-    public var filteredSessions: [WorkspaceSession] {
-        let source = sessions.filter { $0.agent == selectedAgentFilter }
-        let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
-        guard !query.isEmpty else { return source }
-        let matched = source.filter { session in
-            session.title.localizedLowercase.contains(query) ||
-                   session.projectName.localizedLowercase.contains(query) ||
-                   (session.projectDirectory?.localizedLowercase.contains(query) ?? false) ||
-                   (session.summary?.localizedLowercase.contains(query) ?? false) ||
-                   session.id.localizedLowercase.contains(query)
-        }
-        let tree = WorkspaceSessionTree(sessions: source)
-        var visibleIDs = Set(matched.map(\.id))
-        // 命中子任务时保留其祖先路径，否则搜索结果会因父行消失而无法访问。
-        for session in matched { visibleIDs.formUnion(tree.ancestors(of: session).map(\.id)) }
-        return source.filter { visibleIDs.contains($0.id) }
+    /// 每次读取都登记对三个输入的 Observation 依赖，即使命中缓存也不能提前绕过这些读取，
+    /// 否则 SwiftUI 后续渲染可能不再订阅会话删除、搜索或客户端切换。
+    private var sessionListSnapshot: WorkspaceSessionListSnapshot {
+        let source = sessions
+        let agent = selectedAgentFilter
+        let query = sessionSearchText
+        if let sessionListCache { return sessionListCache }
+        let snapshot = WorkspaceSessionListSnapshot(sessions: source, agent: agent, searchText: query)
+        sessionListCache = snapshot
+        return snapshot
     }
 
-    /// 仅展示主根会话，子任务 (subagent) 会话在左侧以折叠树的形式挂载在主会话下
+    public var filteredSessions: [WorkspaceSession] { sessionListSnapshot.filteredSessions }
+
+    /// 左侧入口只展示主会话：显式子任务和带父关系的记录都不能成为主行。
+    /// 通用会话树的 roots 会为孤立节点和损坏环提供遍历入口，适用于完整数据检查，
+    /// 不能用作这里的产品分类；guardian 等无父 ID 的辅助会话仍保留在 sessions 中。
+    /// 有可用主会话的子任务继续通过原有展开控件展示，项目归组只依据主会话目录。
     public var rootFilteredSessions: [WorkspaceSession] {
-        WorkspaceSessionTree(sessions: filteredSessions).roots
+        sessionListSnapshot.roots
     }
 
     public func isSubagentExpanded(_ parentID: String) -> Bool {
@@ -318,17 +349,12 @@ public final class WorkspaceViewModel {
 
     /// 原有折叠控件展开后展示全部层级，行样式复用既有子任务行。
     public func descendantRows(for parent: WorkspaceSession) -> [(session: WorkspaceSession, depth: Int)] {
-        WorkspaceSessionTree(sessions: filteredSessions).descendants(of: parent)
+        sessionListSnapshot.tree.descendants(of: parent)
     }
 
     // Grouped Sessions by Project (仅对主会话按项目归组)
     public var projectGroups: [(id: String, projectName: String, directory: String?, sessions: [WorkspaceSession])] {
-        let dictionary = Dictionary(grouping: rootFilteredSessions) { session in
-            session.projectDirectory ?? "unknown:\(session.projectName)"
-        }
-        return dictionary.map { (identity, items) in
-            (id: identity, projectName: items.first?.projectName ?? "Unknown", directory: items.first?.projectDirectory, sessions: items)
-        }.sorted { $0.projectName.localizedCaseInsensitiveCompare($1.projectName) == .orderedAscending }
+        sessionListSnapshot.projectGroups
     }
 
     // MARK: - Skills Actions
@@ -589,13 +615,12 @@ public final class WorkspaceViewModel {
     }
 
     public var filteredInstalledSkills: [WorkspaceSkill] {
-        if skillSearchText.isEmpty { return installedSkills }
-        let query = skillSearchText.localizedLowercase
-        return installedSkills.filter {
-            $0.name.localizedLowercase.contains(query) ||
-            $0.description.localizedLowercase.contains(query) ||
-            $0.directory.localizedLowercase.contains(query)
-        }
+        installedSkillGroups.flatMap(\.skills)
+    }
+
+    /// 统一搜索与仓库归组的派生入口；分组和数量在列表渲染前计算，子行不重复扫描全部技能。
+    var installedSkillGroups: [WorkspaceSkillRepositoryGroup] {
+        WorkspaceSkillRepositoryGroup.groups(in: installedSkills, matching: skillSearchText)
     }
 
     public var filteredDiscoverableSkills: [DiscoverableSkill] {
@@ -618,13 +643,30 @@ public final class WorkspaceViewModel {
     // MARK: - Storage Actions
 
     public func analyzeStorage() async {
+        guard !Task.isCancelled else { return }
+        scheduleStorageAnalysis()
+        await storageAnalysisTask?.value
+    }
+
+    /// 删除成功后立即释放交互状态，容量扫描在独立任务中完成。
+    /// 扫描过程中再删除会话，只标记版本变化，等当前扫描结束后补一次最新扫描；
+    /// 旧报告不发布，连续删除也不会堆叠多个全客户端扫描任务。
+    private func scheduleStorageAnalysis() {
         storageRevision += 1
-        let revision = storageRevision
+        guard storageAnalysisTask == nil else { return }
         isAnalyzingStorage = true
-        defer { if revision == storageRevision { isAnalyzingStorage = false } }
-        let report = await storageService.analyzeStorage()
-        guard revision == storageRevision, !Task.isCancelled else { return }
-        storageReport = report
+        let service = storageService
+        storageAnalysisTask = Task { [weak self] in
+            while let self {
+                let revision = self.storageRevision
+                let report = await service.analyzeStorage()
+                guard revision == self.storageRevision else { continue }
+                self.storageReport = report
+                self.isAnalyzingStorage = false
+                self.storageAnalysisTask = nil
+                return
+            }
+        }
     }
 
     public func clearAllCaches() async {

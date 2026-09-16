@@ -258,10 +258,10 @@ cc-switch 从 `db41d701879592b8eca938cbe5c5ac28dd732b9f` 对比新提交，优�
 
 ```bash
 # 构建。
-xcodebuild -project Quotio.xcodeproj -scheme Quotio -configuration Debug -destination 'platform=macOS' build
+xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus -configuration Debug -destination 'platform=macOS' build
 
 # 串行完整单元测试，便于避免并行调度对依赖状态测试的干扰。
-xcodebuild -project Quotio.xcodeproj -scheme Quotio -configuration Debug -destination 'platform=macOS' -parallel-testing-enabled NO test
+xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus -configuration Debug -destination 'platform=macOS' -parallel-testing-enabled NO test
 
 # 构建并启动新应用；该脚本会停止当前正在运行的Quotio实例。
 ./scripts/build_and_run.sh --verify

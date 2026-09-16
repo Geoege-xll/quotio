@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.02] - 2026-09-16
+
+- **会话管理与删除进度**：新增会话与子任务删除进度弹窗（`WorkspaceSessionDeletionProgressSheet`），提供实时操作状态、耗时统计与任务计数，避免重复操作与状态竞争。
+- **技能管理与仓库源分组**：已纳管技能列表按 GitHub 来源仓库分组折叠展示，并提供来源仓库地址快捷跳转入口。
+- **窗口与界面尺寸微调**：调整主窗口默认与最小尺寸为 960x600，进一步优化紧凑型屏幕与高分屏下的适配呈现。
+- **国际化文案与模型完善**：完善多语言本地化文案（`Localizable.xcstrings`）及智能体会话关系拓扑模型。
+
 ## [1.0.01] - 2026-09-11
 
 - **智能体与技能管理**：在“技能管理”页面标题区加入胶囊分段组件（Segmented Control），实现“已纳管技能”与“从 GitHub 发现”的无缝切换。

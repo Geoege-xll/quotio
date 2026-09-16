@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 验证真实应用服务之间的维护屏障；只注入临时账本和模拟队列，不访问用户代理。
 @MainActor

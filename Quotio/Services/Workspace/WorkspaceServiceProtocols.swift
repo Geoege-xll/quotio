@@ -2,7 +2,8 @@ import Foundation
 
 /// 页面依赖操作契约，不直接绑定全局服务；测试可注入临时目录实现或可控异步替身，
 /// 从而验证请求乱序和删除失败，而不会初始化、迁移真实用户目录。
-public protocol WorkspaceSessionServicing: Sendable {
+/// 服务由各自的 actor 实现；显式声明协议不绑定 MainActor，避免默认隔离传递到服务和测试替身。
+public nonisolated protocol WorkspaceSessionServicing: Sendable {
     func scanAllSessions(agentFilter: WorkspaceAgent?) async -> [WorkspaceSession]
     func loadSessionMessages(session: WorkspaceSession) async throws -> [WorkspaceSessionMessage]
     func deleteSession(_ session: WorkspaceSession) async throws -> Bool
@@ -17,7 +18,8 @@ public extension WorkspaceSessionServicing {
     }
 }
 
-public protocol WorkspaceSkillServicing: Sendable {
+/// 技能操作通过异步契约跨 actor 调用，协议本身不要求在主线程执行。
+public nonisolated protocol WorkspaceSkillServicing: Sendable {
     func prepareStorage() async throws
     func loadRepos() async throws -> [SkillRepo]
     func saveRepos(_ repos: [SkillRepo]) async throws
@@ -33,7 +35,8 @@ public protocol WorkspaceSkillServicing: Sendable {
     func exportSkillsArchive(to destinationURL: URL) async throws
 }
 
-public protocol WorkspaceStorageServicing: Sendable {
+/// 存储服务保留自身 actor 的串行保护，不继承 UI 模块默认的 MainActor 隔离。
+public nonisolated protocol WorkspaceStorageServicing: Sendable {
     func analyzeStorage() async -> WorkspaceStorageReport
     func clearCachesReport(for agent: WorkspaceAgent?) async -> WorkspaceOperationResult
     func cleanOldSessionsReport(olderThanDays: Int) async -> WorkspaceOperationResult

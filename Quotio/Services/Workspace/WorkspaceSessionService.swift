@@ -10,11 +10,14 @@ import AppKit
 
 // MARK: - Provider Protocol
 
-public protocol AgentSessionProviderProtocol: Sendable {
+/// 客户端磁盘协议必须显式退出模块默认的 MainActor 隔离，否则非隔离 struct 的协议实现
+/// 仍会被推断为主线程方法，扫描、SQLite 等锁和删除文件都会阻塞界面。
+/// @concurrent 同时约束具体实现：即使从主线程直接调用 Provider，也要切换到通用执行器。
+public nonisolated protocol AgentSessionProviderProtocol: Sendable {
     var agent: WorkspaceAgent { get }
-    func scanSessions() async -> [WorkspaceSession]
-    func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage]
-    func deleteSession(_ session: WorkspaceSession) async throws -> Bool
+    @concurrent func scanSessions() async -> [WorkspaceSession]
+    @concurrent func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage]
+    @concurrent func deleteSession(_ session: WorkspaceSession) async throws -> Bool
 }
 
 // MARK: - WorkspaceSessionService (Facade & Coordinator)
@@ -82,6 +85,8 @@ public actor WorkspaceSessionService {
     public func deleteSession(_ session: WorkspaceSession) async throws -> Bool {
         guard let provider = providers[session.agent] else { return false }
         // 安全检查位于每个 Provider 共用的删除引擎中，直接调用 Provider 也不能绕过保护。
+        // actor 在等待并发 Provider 时允许重入，不能把 Facade 当作删除操作的全局串行锁。
+        // 当前页面写入由共享 ViewModel 的删除状态互斥；SQLite 写锁和回滚仍由事务引擎管理。
         return try await provider.deleteSession(session)
     }
 
@@ -121,6 +126,20 @@ public actor WorkspaceSessionService {
 // MARK: - Shared File & String Utilities
 
 nonisolated enum SessionIOUtils {
+    /// 按列探测旧版数据库能力，避免一个可选列缺失导致所有关系字段一起降级。
+    /// 表名只接受代码内的固定标识符，不能将会话元数据拼接成 SQL。
+    static func columns(in table: String, database: OpaquePointer?) -> Set<String> {
+        guard ["threads", "thread_spawn_edges", "conversation_summaries"].contains(table) else { return [] }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(statement) }
+        var names = Set<String>()
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let text = sqlite3_column_text(statement, 1) { names.insert(String(cString: text)) }
+        }
+        return names
+    }
+
     static func readHeadAndTailLines(path: String, headCount: Int, tailCount: Int) -> (head: [String], tail: [String])? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
@@ -138,6 +157,8 @@ nonisolated enum SessionIOUtils {
             var headParts = headData.split(separator: 10, omittingEmptySubsequences: false)
             if !headAtEnd && headData.last != 10 { headParts.removeLast() }
             let head = headParts.compactMap { String(data: Data($0), encoding: .utf8) }.filter { !$0.isEmpty }
+            // 关系补全只读取头部元数据，避免为数据库已登记的每条会话重复读取大段正文尾部。
+            if tailCount == 0 { return (Array(head.prefix(headCount)), []) }
             let offset = size > UInt64(limit) ? size - UInt64(limit) : 0
             try handle.seek(toOffset: offset)
             let tailData = try handle.readToEnd() ?? Data()
@@ -150,11 +171,12 @@ nonisolated enum SessionIOUtils {
     }
 
     static func parseDate(_ value: String) -> Date? {
+        let normalized = value.replacingOccurrences(of: " ", with: "T")
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) { return date }
+        if let date = formatter.date(from: normalized) { return date }
         formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        return formatter.date(from: normalized)
     }
 
     static func extractUUID(from string: String) -> String? {
@@ -182,11 +204,13 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         self.homeDir = homeDir
     }
 
+    @concurrent
     public func scanSessions() async -> [WorkspaceSession] {
         let projectsDir = (homeDir as NSString).appendingPathComponent(".claude/projects")
         guard fileManager.fileExists(atPath: projectsDir) else { return [] }
 
-        var sessions: [WorkspaceSession] = []
+        var accumulated = WorkspaceSessionAccumulator()
+        var flatSessions: [WorkspaceSession] = []
         let enumerator = fileManager.enumerator(atPath: projectsDir)
 
         while let file = enumerator?.nextObject() as? String {
@@ -195,16 +219,18 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
 
             if file.contains("/subagents/") {
                 if let subMeta = parseClaudeSubagentMeta(filePath: fullPath, relativePath: file) {
-                    sessions.append(subMeta)
+                    accumulated.append(subMeta)
                 }
             } else {
                 if let meta = parseClaudeSessionMeta(filePath: fullPath) {
-                    sessions.append(meta)
+                    flatSessions.append(meta)
                 }
             }
         }
 
-        return sessions
+        // 官方 subagents 路径比历史平铺副本提供更完整的身份，先入集合，合并时保留该正文路径。
+        flatSessions.forEach { accumulated.append($0) }
+        return accumulated.sessions
     }
 
     private func parseClaudeSubagentMeta(filePath: String, relativePath: String) -> WorkspaceSession? {
@@ -212,7 +238,7 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         guard parts.count >= 2 else { return nil }
 
         let parentDir = parts[0]
-        let parentUUID = SessionIOUtils.extractUUID(from: parentDir) ?? URL(fileURLWithPath: parentDir).lastPathComponent
+        let parentUUID = URL(fileURLWithPath: parentDir).lastPathComponent
         let subagentFile = URL(fileURLWithPath: filePath).deletingPathExtension().lastPathComponent
         let subagentID = subagentFile
 
@@ -284,8 +310,7 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
             fileSizeBytes: fileSize,
             messageCount: 0,
             resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .claude, id: subagentID, parentID: parentUUID),
-            parentSessionID: parentUUID,
-            isSubagent: true
+            relationship: WorkspaceSessionRelationshipAdapter.claude(metadata: [:], pathParentID: parentUUID)
         )
     }
 
@@ -298,6 +323,8 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         var cwd: String?
         var createdAt: Date?
         var firstUserPrompt: String?
+        var agentID: String?
+        var relationshipMetadata: [[String: Any]] = []
 
         for line in head {
             guard let data = line.data(using: .utf8),
@@ -306,6 +333,8 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
             if sessionID == nil, let sid = json["sessionId"] as? String {
                 sessionID = sid
             }
+            relationshipMetadata.append(json)
+            if agentID == nil { agentID = WorkspaceSessionRelationship.identifier(json["agentId"] as? String) }
             if cwd == nil, let dir = json["cwd"] as? String {
                 cwd = dir
             }
@@ -322,9 +351,7 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
                 }
             }
 
-            if sessionID != nil && cwd != nil && createdAt != nil && firstUserPrompt != nil {
-                break
-            }
+            // 继续检查有界头部中的关系字段，不能因标题已经齐全就跳过后续 sidechain 标记。
         }
 
         var lastActiveAt = createdAt ?? Date()
@@ -343,7 +370,13 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
             }
         }
 
-        let sid = sessionID ?? URL(fileURLWithPath: filePath).deletingPathExtension().lastPathComponent
+        let filenameID = URL(fileURLWithPath: filePath).deletingPathExtension().lastPathComponent
+        let hasSidechain = relationshipMetadata.contains { $0["isSidechain"] as? Bool == true }
+        // 平铺子代理文件也可能共享父 sessionId；采用与 subagents 目录一致的 agent-<id> 身份。
+        let sid = hasSidechain ? agentID.map { $0.hasPrefix("agent-") ? $0 : "agent-\($0)" } ?? filenameID : sessionID ?? filenameID
+        let relationship = relationshipMetadata.reduce(WorkspaceSessionRelationship(kind: .unknown)) {
+            $0.merging(WorkspaceSessionRelationshipAdapter.claude(metadata: $1))
+        }
         let attributes = (try? fileManager.attributesOfItem(atPath: filePath)) ?? [:]
         let fileSize = (attributes[.size] as? Int64) ?? 0
         let modDate = (attributes[.modificationDate] as? Date) ?? lastActiveAt
@@ -362,7 +395,8 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
             filePath: filePath,
             fileSizeBytes: fileSize,
             messageCount: 0,
-            resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .claude, id: sid)
+            resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .claude, id: sid, parentID: relationship.parentSessionID),
+            relationship: relationship
         )
     }
 
@@ -374,6 +408,7 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         return nil
     }
 
+    @concurrent
     public func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage] {
         try WorkspaceSessionPathPolicy(homeDirectory: homeDir, agent: .claude).validate(session.filePath)
         let content = try String(contentsOfFile: session.filePath, encoding: .utf8)
@@ -412,6 +447,7 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         return ""
     }
 
+    @concurrent
     public func deleteSession(_ session: WorkspaceSession) async throws -> Bool {
         // 路径校验、完整级联计划和回滚策略由统一引擎负责，避免各客户端实现漂移。
         try WorkspaceSessionDeletionEngine.delete(session, expectedAgent: .claude, homeDirectory: homeDir)
@@ -429,6 +465,7 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
         self.homeDir = homeDir
     }
 
+    @concurrent
     public func scanSessions() async -> [WorkspaceSession] {
         let codexDir = (homeDir as NSString).appendingPathComponent(".codex")
         let state5Path = (codexDir as NSString).appendingPathComponent("state_5.sqlite")
@@ -452,24 +489,26 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
             }
         }
 
-        var sessions = databaseSessions
-        var seenIDs = Set(databaseSessions.map(\.id))
-        let knownPaths = Set(databaseSessions.map(\.filePath))
+        var accumulated = WorkspaceSessionAccumulator()
+        databaseSessions.forEach { accumulated.append($0) }
+        let knownPaths = Dictionary(databaseSessions.map { ($0.filePath, $0.id) }, uniquingKeysWith: { first, _ in first })
 
         for root in [sessionsDir, archivedDir] where fileManager.fileExists(atPath: root) {
             let enumerator = fileManager.enumerator(atPath: root)
             while let file = enumerator?.nextObject() as? String {
                 guard file.hasSuffix(".jsonl") else { continue }
                 let fullPath = (root as NSString).appendingPathComponent(file)
-                if knownPaths.contains(fullPath) { continue }
+                if let id = knownPaths[fullPath] {
+                    // SQLite 的展示字段优先，但不能覆盖 rollout 中更完整的关系证据。
+                    accumulated.mergeRelationship(readCodexRelationship(filePath: fullPath, expectedID: id), id: id, agent: .codex)
+                    continue
+                }
                 if let meta = parseCodexSessionMeta(filePath: fullPath, titles: titles) {
-                    guard !seenIDs.contains(meta.id) else { continue }
-                    seenIDs.insert(meta.id)
-                    sessions.append(meta)
+                    accumulated.append(meta)
                 }
             }
         }
-        return sessions
+        return accumulated.sessions
     }
 
     private func scanCodexSQLite(dbPath: String) -> [WorkspaceSession] {
@@ -480,22 +519,27 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
         }
         defer { sqlite3_close(db) }
 
+        let columns = SessionIOUtils.columns(in: "threads", database: db)
+        guard columns.contains("id") else { return [] }
+        let edgeColumns = SessionIOUtils.columns(in: "thread_spawn_edges", database: db)
+        let hasEdges = edgeColumns.isSuperset(of: ["parent_thread_id", "child_thread_id"])
+        func column(_ name: String) -> String { columns.contains(name) ? "t.\(name)" : "NULL" }
         let query = """
         SELECT
             t.id,
-            t.title,
-            t.first_user_message,
-            t.cwd,
-            t.rollout_path,
-            t.created_at,
-            t.updated_at,
-            e.parent_thread_id,
-            t.source,
-            t.agent_nickname,
-            t.agent_role
+            \(column("title")),
+            \(column("first_user_message")),
+            \(column("cwd")),
+            \(column("rollout_path")),
+            \(column("created_at")),
+            \(column("updated_at")),
+            \(hasEdges ? "e.parent_thread_id" : "NULL"),
+            \(column("source")),
+            \(column("agent_nickname")),
+            \(column("agent_role"))
         FROM threads t
-        LEFT JOIN thread_spawn_edges e ON t.id = e.child_thread_id
-        ORDER BY t.updated_at DESC;
+        \(hasEdges ? "LEFT JOIN thread_spawn_edges e ON t.id = e.child_thread_id" : "")
+        ORDER BY \(columns.contains("updated_at") ? "t.updated_at" : "t.id") DESC;
         """
 
         var stmt: OpaquePointer?
@@ -506,7 +550,8 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
         var seenIDs = Set<String>()
 
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let id = String(cString: sqlite3_column_text(stmt, 0))
+            guard let idText = sqlite3_column_text(stmt, 0) else { continue }
+            let id = String(cString: idText)
             guard !seenIDs.contains(id) else { continue }
             seenIDs.insert(id)
 
@@ -517,20 +562,19 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
             let createdAtSec = sqlite3_column_int64(stmt, 5)
             let updatedAtSec = sqlite3_column_int64(stmt, 6)
             var parentThreadID = sqlite3_column_text(stmt, 7).flatMap { String(cString: $0) }
+                .flatMap { $0.isEmpty ? nil : $0 }
             let source = sqlite3_column_text(stmt, 8).flatMap { String(cString: $0) }
             let agentNickname = sqlite3_column_text(stmt, 9).flatMap { String(cString: $0) }
             let agentRole = sqlite3_column_text(stmt, 10).flatMap { String(cString: $0) }
 
-            if (parentThreadID == nil || parentThreadID!.isEmpty), let src = source, src.contains("parent_thread_id") {
-                if let range = src.range(of: "\"parent_thread_id\"\\s*:\\s*\"([^\"]+)\"", options: .regularExpression) {
-                    let match = String(src[range])
-                    if let uuid = SessionIOUtils.extractUUID(from: match) {
-                        parentThreadID = uuid
-                    }
-                }
+            // 边表缺失或父 ID 为空时，沿用 JSONL 与删除检查共同使用的结构化来源解析，
+            // 避免把非 UUID 的有效父 ID 丢掉，导致原本能挂载的子会话变成孤立节点。
+            if parentThreadID == nil, let source {
+                parentThreadID = WorkspaceSessionDeletionEngine.parentThreadID(in: source)
             }
 
-            let isSubagent = parentThreadID != nil || (source?.contains("subagent") == true) || (agentNickname != nil && !agentNickname!.isEmpty)
+            let relationship = WorkspaceSessionRelationshipAdapter.codex(source: source, parentID: parentThreadID)
+            let isSubagent = relationship.isSubagent
             let createdDate = createdAtSec > 0 ? Date(timeIntervalSince1970: TimeInterval(createdAtSec)) : Date()
             let updatedDate = updatedAtSec > 0 ? Date(timeIntervalSince1970: TimeInterval(updatedAtSec)) : createdDate
             let projectName = cwd.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? "Unknown"
@@ -577,8 +621,7 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
                 fileSizeBytes: 0,
                 messageCount: 0,
                 resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .codex, id: id),
-                parentSessionID: parentThreadID,
-                isSubagent: isSubagent
+                relationship: relationship
             ))
         }
 
@@ -594,7 +637,7 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
         var cwd: String?
         var createdAt: Date?
         var firstPrompt: String?
-        var metadataParentID: String?
+        var relationship = WorkspaceSessionRelationship(kind: .unknown)
 
         for line in head {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -604,12 +647,11 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
 
             let itemType = json["type"] as? String
             let payload = json["payload"] as? [String: Any]
-            if itemType == "session_meta", let source = payload?["source"] {
-                if let text = source as? String {
-                    metadataParentID = WorkspaceSessionDeletionEngine.parentThreadID(in: text)
-                } else if JSONSerialization.isValidJSONObject(source), let data = try? JSONSerialization.data(withJSONObject: source), let text = String(data: data, encoding: .utf8) {
-                    metadataParentID = WorkspaceSessionDeletionEngine.parentThreadID(in: text)
-                }
+            if itemType == "session_meta" {
+                // guardian 等辅助会话只有 source.subagent，没有父 ID；身份与父关系必须分别读取。
+                // 与 SQLite 共用官方来源类型适配，不用昵称推断身份。
+                relationship = relationship.merging(WorkspaceSessionRelationshipAdapter.codex(
+                    source: payload?["source"]))
             }
 
             if itemType == "session_meta" || payload?["id"] != nil || payload?["session_id"] != nil {
@@ -674,21 +716,17 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
         }
 
         let filename = URL(fileURLWithPath: filePath).deletingPathExtension().lastPathComponent
-        var parentID: String? = metadataParentID
-        let parts = filename.components(separatedBy: "_")
         let sid: String
-        if parts.count > 1, let childUUID = SessionIOUtils.extractUUID(from: parts[1]) {
-            sid = childUUID
-            parentID = parentID ?? SessionIOUtils.extractUUID(from: parts[0])
-        } else if let id = sessionID, !id.isEmpty {
+        // source/边表才定义执行关系；带两个 UUID 的旧文件名也可能是普通 fork，不能据此猜父任务。
+        if let id = sessionID, !id.isEmpty {
             sid = id
-        } else if let uuidMatch = SessionIOUtils.extractUUID(from: filename) {
+        } else if let uuidMatch = SessionIOUtils.extractUUID(from: filename.components(separatedBy: "_").last ?? filename) {
             sid = uuidMatch
         } else {
             sid = filename
         }
 
-        let isSubagent = parentID != nil || parts.count > 1
+        let isSubagent = relationship.isSubagent
         let knownTitle = titles[sid]
         let projectName = cwd.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? "Unknown"
         let fallbackTitle = isSubagent ? "子任务 (\(sid.prefix(8)))" : "Codex Session (\(sid.prefix(8)))"
@@ -707,11 +745,26 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
             fileSizeBytes: fileSize,
             messageCount: 0,
             resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .codex, id: sid),
-            parentSessionID: parentID,
-            isSubagent: isSubagent
+            relationship: relationship
         )
     }
 
+    private func readCodexRelationship(filePath: String, expectedID: String) -> WorkspaceSessionRelationship {
+        guard let lines = SessionIOUtils.readHeadAndTailLines(path: filePath, headCount: 15, tailCount: 0)?.head else {
+            return .init(kind: .unknown)
+        }
+        return lines.reduce(WorkspaceSessionRelationship(kind: .unknown)) { relationship, line in
+            guard let data = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["type"] as? String == "session_meta", let payload = json["payload"] as? [String: Any] else { return relationship }
+            // 路径相同不保证记录相同；陈旧数据库指到另一份 rollout 时不能借用其父子关系。
+            guard payload["id"] as? String == expectedID else { return relationship }
+            return relationship.merging(WorkspaceSessionRelationshipAdapter.codex(
+                source: payload["source"]))
+        }
+    }
+
+    @concurrent
     public func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage] {
         try WorkspaceSessionPathPolicy(homeDirectory: homeDir, agent: .codex).validate(session.filePath)
         let content = try String(contentsOfFile: session.filePath, encoding: .utf8)
@@ -773,10 +826,10 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
         return messages
     }
 
+    @concurrent
     public func deleteSession(_ session: WorkspaceSession) async throws -> Bool {
-        let databasePath = URL(fileURLWithPath: homeDir).appendingPathComponent(".codex/state_5.sqlite").path
-        // 无数据库的旧客户端仍需按文件元数据追踪全部子孙，不能只删被点击的一条记录。
-        let related = fileManager.fileExists(atPath: databasePath) ? [] : await scanSessions()
+        // 数据库存在时仍可能漏登记文件子任务；删除使用与浏览相同的合并关系，再由事务复核。
+        let related = await scanSessions()
         return try WorkspaceSessionDeletionEngine.delete(session, expectedAgent: .codex, homeDirectory: homeDir, relatedSessions: related)
     }
 }
@@ -792,6 +845,7 @@ public nonisolated struct OpenCodeSessionProvider: AgentSessionProviderProtocol 
         self.homeDir = homeDir
     }
 
+    @concurrent
     public func scanSessions() async -> [WorkspaceSession] {
         let baseDir = (homeDir as NSString).appendingPathComponent(".local/share/opencode")
         let dbPath = (baseDir as NSString).appendingPathComponent("opencode.db")
@@ -899,6 +953,7 @@ public nonisolated struct OpenCodeSessionProvider: AgentSessionProviderProtocol 
         return sessions
     }
 
+    @concurrent
     public func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage] {
         if session.filePath.hasPrefix("sqlite:") {
             return loadOpenCodeSQLiteMessages(source: session.filePath)
@@ -973,6 +1028,7 @@ public nonisolated struct OpenCodeSessionProvider: AgentSessionProviderProtocol 
         return messages
     }
 
+    @concurrent
     public func deleteSession(_ session: WorkspaceSession) async throws -> Bool {
         // 路径校验、完整级联计划和回滚策略由统一引擎负责，避免各客户端实现漂移。
         let databasePath = URL(fileURLWithPath: homeDir).appendingPathComponent(".local/share/opencode/opencode.db").path
@@ -993,6 +1049,7 @@ public nonisolated struct PiSessionProvider: AgentSessionProviderProtocol {
         self.homeDir = homeDir
     }
 
+    @concurrent
     public func scanSessions() async -> [WorkspaceSession] {
         let roots = [
             (homeDir as NSString).appendingPathComponent(".pi/agent/sessions"),
@@ -1064,6 +1121,7 @@ public nonisolated struct PiSessionProvider: AgentSessionProviderProtocol {
         }.joined(separator: "\n")
     }
 
+    @concurrent
     public func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage] {
         try WorkspaceSessionPathPolicy(homeDirectory: homeDir, agent: .pi).validate(session.filePath)
         let content = try String(contentsOfFile: session.filePath, encoding: .utf8)
@@ -1084,6 +1142,7 @@ public nonisolated struct PiSessionProvider: AgentSessionProviderProtocol {
         }
     }
 
+    @concurrent
     public func deleteSession(_ session: WorkspaceSession) async throws -> Bool {
         // 路径校验、完整级联计划和回滚策略由统一引擎负责，避免各客户端实现漂移。
         let related = await scanSessions()
@@ -1102,76 +1161,94 @@ public nonisolated struct AGYSessionProvider: AgentSessionProviderProtocol {
         self.homeDir = homeDir
     }
 
+    @concurrent
     public func scanSessions() async -> [WorkspaceSession] {
-        var sessions: [WorkspaceSession] = []
-
-        // 1. Primary: SQLite database
-        let dbPath = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/conversation_summaries.db")
+        var accumulated = WorkspaceSessionAccumulator()
+        let base = URL(fileURLWithPath: homeDir).appendingPathComponent(".gemini/antigravity-cli")
+        let dbPath = base.appendingPathComponent("conversation_summaries.db").path
+        // 摘要库和旧 JSON 提供结构化身份与项目，优先于不含会话关系的 brain 正文。
         if fileManager.fileExists(atPath: dbPath) {
-            sessions.append(contentsOf: scanAGYSQLite(dbPath: dbPath))
+            scanAGYSQLite(dbPath: dbPath).forEach { accumulated.append($0) }
         }
-
-        // 2. Secondary: ~/.gemini/antigravity-cli/conversations/*.json
-        let convsDir = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/conversations")
-        if fileManager.fileExists(atPath: convsDir) {
-            let existingIds = Set(sessions.map { $0.id })
-            if let files = try? fileManager.contentsOfDirectory(atPath: convsDir) {
-                for file in files where file.hasSuffix(".json") {
-                    let sid = (file as NSString).deletingPathExtension
-                    if !existingIds.contains(sid) {
-                        let fullPath = (convsDir as NSString).appendingPathComponent(file)
-                        if let meta = parseAGYConversationJSON(filePath: fullPath, id: sid) {
-                            sessions.append(meta)
-                        }
-                    }
-                }
+        let convsDir = base.appendingPathComponent("conversations")
+        let files = ((try? fileManager.contentsOfDirectory(atPath: convsDir.path)) ?? []).sorted()
+        for file in files where file.hasSuffix(".json") {
+            let id = (file as NSString).deletingPathExtension
+            if let session = parseAGYConversationJSON(filePath: convsDir.appendingPathComponent(file).path, id: id) {
+                accumulated.append(session)
             }
         }
 
-        // 3. Fallback: Legacy ~/.gemini/tmp
+        let cache = readAGYMetadataCache(base: base)
+        let brainDir = base.appendingPathComponent("brain")
+        let brainIDs = (try? fileManager.contentsOfDirectory(atPath: brainDir.path)) ?? []
+        let databaseIDs = files.filter { $0.hasSuffix(".db") }.map { ($0 as NSString).deletingPathExtension }
+        // 缓存只能补充仍有实体文件的会话，不能让已删除会话仅凭陈旧缓存重新出现。
+        for id in Set(brainIDs + databaseIDs).sorted() {
+            guard !accumulated.contains(id: id, agent: .agy) else { continue }
+            let log = agyTranscriptPath(id: id)
+            let database = convsDir.appendingPathComponent("\(id).db").path
+            guard let path = log ?? (fileManager.fileExists(atPath: database) ? database : nil) else { continue }
+            if let summary = cache[id]?["summary"] as? [String: Any] {
+                accumulated.append(parseAGYConversationMetadata(summary, filePath: path, id: id))
+            } else if let log, let session = parseAGYBrainTranscript(filePath: log, id: id) {
+                accumulated.append(session)
+            } else if let session = parseAGYConversationDB(filePath: database, id: id) {
+                accumulated.append(session)
+            }
+        }
+
         let tmpDir = (homeDir as NSString).appendingPathComponent(".gemini/tmp")
         if fileManager.fileExists(atPath: tmpDir) {
-            let existingIds = Set(sessions.map { $0.id })
-            let legacy = scanLegacyGeminiTmp(tmpDir: tmpDir)
-            for leg in legacy where !existingIds.contains(leg.id) {
-                sessions.append(leg)
-            }
+            scanLegacyGeminiTmp(tmpDir: tmpDir).forEach { accumulated.append($0) }
         }
+        // is_internal 的官方实现含 /btw 和 battle fork，不能直接转换成 isSubagent。
+        for (id, metadata) in cache {
+            accumulated.mergeRelationship(WorkspaceSessionRelationshipAdapter.agy(metadata: metadata, hasSummary: false), id: id, agent: .agy)
+        }
+        return accumulated.sessions
+    }
 
-        return sessions
+    private func readAGYMetadataCache(base: URL) -> [String: [String: Any]] {
+        guard let data = try? Data(contentsOf: base.appendingPathComponent("cache/conversation_metadata.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return json["conversations"] as? [String: [String: Any]] ?? [:]
+    }
+
+    /// 正文来源选择与会话分类分离；优先完整日志，不能让有日志就等价于主会话。
+    private func agyTranscriptPath(id: String) -> String? {
+        let logs = URL(fileURLWithPath: homeDir).appendingPathComponent(".gemini/antigravity-cli/brain/\(id)/.system_generated/logs")
+        return ["transcript_full.jsonl", "transcript.jsonl"].map { logs.appendingPathComponent($0).path }
+            .first { fileManager.fileExists(atPath: $0) }
     }
 
     private func scanAGYSQLite(dbPath: String) -> [WorkspaceSession] {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+        // Antigravity CLI 使用 SQLite WAL 模式，优先以 READWRITE 打开以安全完成 WAL 索引恢复
+        if sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READWRITE, nil) != SQLITE_OK {
             sqlite3_close(db)
-            return []
+            guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+                sqlite3_close(db)
+                return []
+            }
         }
         defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 3000)
 
+        let columns = SessionIOUtils.columns(in: "conversation_summaries", database: db)
+        func column(_ name: String) -> String { columns.contains(name) ? name : "NULL" }
         let query = """
         SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris,
-               parent_conversation_id, nesting_depth, agent_name
-        FROM conversation_summaries
-        ORDER BY last_modified_time DESC
-        ;
-        """
-        let queryLegacy = """
-        SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris,
-               NULL, 0, NULL
+               \(column("parent_conversation_id")), \(column("nesting_depth")), \(column("agent_name"))
         FROM conversation_summaries
         ORDER BY last_modified_time DESC
         ;
         """
         var stmt: OpaquePointer?
-        if sqlite3_prepare_v2(db, query, -1, &stmt, nil) != SQLITE_OK {
-            guard sqlite3_prepare_v2(db, queryLegacy, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        }
+        guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(stmt) }
 
         var sessions: [WorkspaceSession] = []
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard let cidPtr = sqlite3_column_text(stmt, 0) else { continue }
@@ -1184,12 +1261,13 @@ public nonisolated struct AGYSessionProvider: AgentSessionProviderProtocol {
             let parentCID = sqlite3_column_text(stmt, 6).flatMap { String(cString: $0) }
             let depth = Int(sqlite3_column_int(stmt, 7))
             let agentName = sqlite3_column_text(stmt, 8).flatMap { String(cString: $0) }
-            let hasParent = (parentCID != nil && !parentCID!.isEmpty)
-            let isSubagent = hasParent || depth > 0
+            let relationship = WorkspaceSessionRelationshipAdapter.agy(metadata: [
+                "parent_conversation_id": parentCID ?? "", "nesting_depth": depth
+            ], hasSummary: true)
 
             let baseTitle = !rawTitle.isEmpty ? rawTitle : (!preview.isEmpty ? preview : "AGY Session (\(id.prefix(8)))")
             var finalTitle = baseTitle
-            if isSubagent {
+            if relationship.isSubagent {
                 if let name = agentName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
                     finalTitle = "[\(name)] \(baseTitle)"
                 } else {
@@ -1213,11 +1291,26 @@ public nonisolated struct AGYSessionProvider: AgentSessionProviderProtocol {
                 }
             }
 
-            let modDate = isoFormatter.date(from: timeStr) ?? SessionIOUtils.parseDate(timeStr) ?? Date()
+            let modDate = SessionIOUtils.parseDate(timeStr) ?? Date()
 
-            let brainTranscript = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/brain/\(id)/.system_generated/logs/transcript.jsonl")
+            let brainLogs = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/brain/\(id)/.system_generated/logs")
+            let brainTranscriptFull = (brainLogs as NSString).appendingPathComponent("transcript_full.jsonl")
+            let brainTranscript = (brainLogs as NSString).appendingPathComponent("transcript.jsonl")
+            let convDb = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/conversations/\(id).db")
             let convJson = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/conversations/\(id).json")
-            let filePath = fileManager.fileExists(atPath: brainTranscript) ? brainTranscript : (fileManager.fileExists(atPath: convJson) ? convJson : "sqlite:\(dbPath):\(id)")
+
+            let filePath: String
+            if fileManager.fileExists(atPath: brainTranscriptFull) {
+                filePath = brainTranscriptFull
+            } else if fileManager.fileExists(atPath: brainTranscript) {
+                filePath = brainTranscript
+            } else if fileManager.fileExists(atPath: convDb) {
+                filePath = convDb
+            } else if fileManager.fileExists(atPath: convJson) {
+                filePath = convJson
+            } else {
+                filePath = "sqlite:\(dbPath):\(id)"
+            }
 
             sessions.append(WorkspaceSession(
                 id: id,
@@ -1232,28 +1325,124 @@ public nonisolated struct AGYSessionProvider: AgentSessionProviderProtocol {
                 fileSizeBytes: 0,
                 messageCount: stepCount > 0 ? stepCount : 0,
                 resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .agy, id: id),
-                parentSessionID: hasParent ? parentCID : nil,
-                isSubagent: isSubagent
+                relationship: relationship
             ))
         }
 
         return sessions
     }
 
+    private func parseAGYConversationDB(filePath: String, id: String) -> WorkspaceSession? {
+        guard fileManager.fileExists(atPath: filePath) else { return nil }
+        let attrs = (try? fileManager.attributesOfItem(atPath: filePath)) ?? [:]
+        let modDate = (attrs[.modificationDate] as? Date) ?? Date()
+        let fileSize = (attrs[.size] as? Int64) ?? 0
+
+        let brainLogs = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/brain/\(id)/.system_generated/logs")
+        let fullLog = (brainLogs as NSString).appendingPathComponent("transcript_full.jsonl")
+        let regularLog = (brainLogs as NSString).appendingPathComponent("transcript.jsonl")
+        let targetPath = fileManager.fileExists(atPath: fullLog) ? fullLog : (fileManager.fileExists(atPath: regularLog) ? regularLog : filePath)
+
+        return WorkspaceSession(
+            id: id,
+            agent: .agy,
+            title: "AGY Session (\(id.prefix(8)))",
+            summary: nil,
+            projectDirectory: nil,
+            projectName: "Workspace",
+            createdAt: modDate,
+            lastActiveAt: modDate,
+            filePath: targetPath,
+            fileSizeBytes: fileSize,
+            messageCount: 0,
+            resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .agy, id: id),
+            relationship: .init(kind: .unknown)
+        )
+    }
+
+    private func parseAGYBrainTranscript(filePath: String, id: String) -> WorkspaceSession? {
+        guard let handle = FileHandle(forReadingAtPath: filePath) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 8192), !data.isEmpty,
+              let chunk = String(data: data, encoding: .utf8) else { return nil }
+
+        var title: String?
+        var date: Date?
+        var projectDir: String?
+
+        for line in chunk.components(separatedBy: .newlines) {
+            guard !line.isEmpty,
+                  let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else { continue }
+
+            if date == nil, let ts = json["created_at"] as? String {
+                date = SessionIOUtils.parseDate(ts)
+            }
+
+            let type = json["type"] as? String ?? ""
+            if type == "USER_INPUT" && title == nil {
+                let content = (json["content"] as? String ?? "")
+                    .replacingOccurrences(of: "<USER_REQUEST>", with: "")
+                    .replacingOccurrences(of: "</USER_REQUEST>", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !content.isEmpty {
+                    let firstLine = content.components(separatedBy: .newlines).first ?? ""
+                    title = String(firstLine.prefix(60)).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+
+            if projectDir == nil, let content = json["content"] as? String {
+                if let range = content.range(of: "file:///") {
+                    let sub = content[range.lowerBound...]
+                    if let end = sub.firstIndex(of: "\"") ?? sub.firstIndex(of: "\n") ?? sub.firstIndex(of: " ") {
+                        let uriStr = String(sub[..<end])
+                        if let url = URL(string: uriStr) {
+                            projectDir = url.path
+                        }
+                    }
+                }
+            }
+        }
+
+        let attrs = (try? fileManager.attributesOfItem(atPath: filePath)) ?? [:]
+        let modDate = date ?? (attrs[.modificationDate] as? Date) ?? Date()
+        let fileSize = (attrs[.size] as? Int64) ?? 0
+        let projectName = projectDir.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? "Workspace"
+
+        return WorkspaceSession(
+            id: id,
+            agent: .agy,
+            title: title ?? "AGY Session (\(id.prefix(8)))",
+            summary: nil,
+            projectDirectory: projectDir,
+            projectName: projectName,
+            createdAt: modDate,
+            lastActiveAt: modDate,
+            filePath: filePath,
+            fileSizeBytes: fileSize,
+            messageCount: 0,
+            resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .agy, id: id),
+            relationship: .init(kind: .unknown)
+        )
+    }
+
     private func parseAGYConversationJSON(filePath: String, id: String) -> WorkspaceSession? {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
 
-        let title = json["title"] as? String ?? json["name"] as? String ?? "AGY Session (\(id.prefix(8)))"
+        return parseAGYConversationMetadata(json, filePath: filePath, id: id)
+    }
+
+    /// 旧 JSON 与 1.2.x 缓存 summary 的字段命名不同，集中做展示字段适配，避免从正文提取项目路径。
+    private func parseAGYConversationMetadata(_ json: [String: Any], filePath: String, id: String) -> WorkspaceSession {
+        let title = json["title"] as? String ?? json["Title"] as? String ?? json["name"] as? String ?? "AGY Session (\(id.prefix(8)))"
+        let uri = (json["WorkspaceURIs"] as? [String])?.first
         let projectDir = json["project_dir"] as? String ?? json["cwd"] as? String
+            ?? uri.map { $0.hasPrefix("file://") ? URL(string: $0)?.path ?? $0 : $0 }
         let projectName = projectDir.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? "Workspace"
-        let parentCID = json["parent_conversation_id"] as? String ?? json["parent_id"] as? String
-        let depth = json["nesting_depth"] as? Int ?? 0
-        let hasParent = parentCID != nil && !parentCID!.isEmpty
-        let isSubagent = hasParent || depth > 0
 
         let attrs = (try? fileManager.attributesOfItem(atPath: filePath)) ?? [:]
-        let modDate = (attrs[.modificationDate] as? Date) ?? Date()
+        let modDate = (json["UpdatedAt"] as? String).flatMap(SessionIOUtils.parseDate) ?? (attrs[.modificationDate] as? Date) ?? Date()
         let fileSize = (attrs[.size] as? Int64) ?? 0
 
         return WorkspaceSession(
@@ -1265,12 +1454,13 @@ public nonisolated struct AGYSessionProvider: AgentSessionProviderProtocol {
             projectName: projectName,
             createdAt: modDate,
             lastActiveAt: modDate,
-            filePath: filePath,
+            filePath: agyTranscriptPath(id: id) ?? filePath,
             fileSizeBytes: fileSize,
             messageCount: 0,
             resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .agy, id: id),
-            parentSessionID: hasParent ? parentCID : nil,
-            isSubagent: isSubagent
+            // 合法 JSON 不等于已识别的摘要；空字典或未来格式保留 unknown，等待明确身份元数据。
+            relationship: WorkspaceSessionRelationshipAdapter.agy(metadata: json,
+                hasSummary: json["title"] is String || json["Title"] is String || json["name"] is String)
         )
     }
 
@@ -1309,12 +1499,21 @@ public nonisolated struct AGYSessionProvider: AgentSessionProviderProtocol {
         return sessions
     }
 
+    @concurrent
     public func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage] {
+        let brainLogs = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/brain/\(session.id)/.system_generated/logs")
+        let fullPath = (brainLogs as NSString).appendingPathComponent("transcript_full.jsonl")
+        let regularPath = (brainLogs as NSString).appendingPathComponent("transcript.jsonl")
+
         let transcriptPath: String
-        if session.filePath.hasSuffix("transcript.jsonl") && fileManager.fileExists(atPath: session.filePath) {
+        if session.filePath.hasSuffix(".jsonl") && fileManager.fileExists(atPath: session.filePath) {
             transcriptPath = session.filePath
+        } else if fileManager.fileExists(atPath: fullPath) {
+            transcriptPath = fullPath
+        } else if fileManager.fileExists(atPath: regularPath) {
+            transcriptPath = regularPath
         } else {
-            transcriptPath = (homeDir as NSString).appendingPathComponent(".gemini/antigravity-cli/brain/\(session.id)/.system_generated/logs/transcript.jsonl")
+            transcriptPath = regularPath
         }
 
         guard fileManager.fileExists(atPath: transcriptPath),
@@ -1342,11 +1541,11 @@ public nonisolated struct AGYSessionProvider: AgentSessionProviderProtocol {
         return messages
     }
 
+
+    @concurrent
     public func deleteSession(_ session: WorkspaceSession) async throws -> Bool {
         // 路径校验、完整级联计划和回滚策略由统一引擎负责，避免各客户端实现漂移。
-        let databasePath = URL(fileURLWithPath: homeDir).appendingPathComponent(".gemini/antigravity-cli/conversation_summaries.db").path
-        // 无数据库的旧客户端仍需按文件元数据追踪全部子孙，不能只删被点击的一条记录。
-        let related = fileManager.fileExists(atPath: databasePath) ? [] : await scanSessions()
+        let related = await scanSessions()
         return try WorkspaceSessionDeletionEngine.delete(session, expectedAgent: .agy, homeDirectory: homeDir, relatedSessions: related)
     }
 }

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 只构造模型日汇总，验证可视扇区没有丢数据；不创建 SwiftUI 或访问用户账本。
 final class UsageStatisticsDistributionTests: XCTestCase {

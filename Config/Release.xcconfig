@@ -8,7 +8,8 @@
 // Production settings (DO NOT override these locally)
 #include "Updates.xcconfig"
 PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus
-PRODUCT_NAME = Quotio
+// 直接生成 QuotioPlus.app，归档、签名和封装均使用 Target 对应的原生名称。
+PRODUCT_NAME = $(TARGET_NAME)
 INFOPLIST_KEY_CFBundleDisplayName = QuotioPlus
 ENABLE_HARDENED_RUNTIME = YES
 POSTHOG_PROJECT_TOKEN =

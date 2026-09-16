@@ -204,7 +204,7 @@ struct QuotioApp: App {
                 EmptyView()
             } else {
                 ContentView(clientUsage: clientUsage, callAnalytics: callAnalytics)
-                    .frame(minWidth: 980, minHeight: 620)
+                    .frame(minWidth: 960, minHeight: 600)
                     .id(languageManager.currentLanguage) // Force re-render on language change
                     .environment(viewModel)
                     .environment(logsViewModel)
@@ -286,7 +286,7 @@ struct QuotioApp: App {
                     }
             }
         }
-        .defaultSize(width: 1040, height: 700)
+        .defaultSize(width: 960, height: 600)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) { }
@@ -581,11 +581,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         window.styleMask.insert(.fullSizeContentView)
-        window.minSize = NSSize(width: 980, height: 620)
-        if window.frame.width < 980 || window.frame.height < 620 {
+        window.minSize = NSSize(width: 960, height: 600)
+        if window.frame.width < 960 || window.frame.height < 600 {
             var frame = window.frame
-            frame.size.width = max(frame.size.width, 1040)
-            frame.size.height = max(frame.size.height, 680)
+            frame.size.width = max(frame.size.width, 960)
+            frame.size.height = max(frame.size.height, 600)
             window.setFrame(frame, display: true)
         }
     }

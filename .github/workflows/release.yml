@@ -86,16 +86,16 @@ jobs:
           [[ "$(sw_vers -productVersion)" == 15.* ]]
           sw_vers -productVersion
           mkdir -p build
-          xcodebuild -project Quotio.xcodeproj -scheme Quotio -configuration Debug \
+          xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus -configuration Debug \
             -destination 'platform=macOS,arch=arm64' -derivedDataPath build/CompatibilityDerivedData \
             -resultBundlePath build/CompatibilityTests.xcresult -parallel-testing-enabled NO \
-            -only-testing:QuotioTests/CPAUsageDetailLayoutTests \
-            -only-testing:QuotioTests/CPAUsageTablePageTests \
-            -only-testing:QuotioTests/CPAUsageHistoricalDetailTests \
-            -only-testing:QuotioTests/CPAUsageDashboardTests \
-            -only-testing:QuotioTests/AppUpdatesTests \
-            -only-testing:QuotioTests/UsageStatisticsChartRenderingTests \
-            -only-testing:QuotioTests/UsageTrendPlotDataTests \
+            -only-testing:QuotioPlusTests/CPAUsageDetailLayoutTests \
+            -only-testing:QuotioPlusTests/CPAUsageTablePageTests \
+            -only-testing:QuotioPlusTests/CPAUsageHistoricalDetailTests \
+            -only-testing:QuotioPlusTests/CPAUsageDashboardTests \
+            -only-testing:QuotioPlusTests/AppUpdatesTests \
+            -only-testing:QuotioPlusTests/UsageStatisticsChartRenderingTests \
+            -only-testing:QuotioPlusTests/UsageTrendPlotDataTests \
             -test-timeouts-enabled YES -default-test-execution-time-allowance 60 \
             -maximum-test-execution-time-allowance 60 CODE_SIGNING_ALLOWED=NO test \
             2>&1 | tee build/compatibility-test.log

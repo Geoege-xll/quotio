@@ -79,7 +79,7 @@ nonisolated struct WorkspaceSessionPathPolicy {
         }
         if !allowDirectory {
             let name = candidate.lastPathComponent
-            let validExtension = agent == .opencode ? name.hasSuffix(".json") : name.hasSuffix(".jsonl") || (agent == .agy && name.hasSuffix(".json")) || (agent == .claude && name.hasSuffix(".meta.json"))
+            let validExtension = agent == .opencode ? name.hasSuffix(".json") : name.hasSuffix(".jsonl") || (agent == .agy && (name.hasSuffix(".json") || name.hasSuffix(".db"))) || (agent == .claude && name.hasSuffix(".meta.json"))
             guard validExtension else { throw WorkspaceSessionOperationError.unsafePath(path) }
         }
     }

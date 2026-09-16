@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 回归样例只使用构造的公开字段，不读取真实账号、令牌或线上额度。
 final class AntigravityQuotaTests: XCTestCase {

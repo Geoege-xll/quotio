@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 使用隔离的安装目录和匿名会话覆盖本机问题；测试不运行用户的 Pi、不读取凭据、不写真实统计库。
 final class PiCompatibilityTests: XCTestCase {

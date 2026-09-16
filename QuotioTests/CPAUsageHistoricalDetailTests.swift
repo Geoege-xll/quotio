@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 只构造旧日汇总和真实请求，验证两类数据保持身份边界，以及价格估算的可知范围。
 final class CPAUsageHistoricalDetailTests: XCTestCase {

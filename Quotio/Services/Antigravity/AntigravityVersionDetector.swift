@@ -36,13 +36,17 @@ nonisolated enum AntigravityVersionDetector {
     /// Known locations for Antigravity.app on macOS
     private static let appSearchPaths: [String] = [
         "/Applications/Antigravity.app",
+        "/Applications/Antigravity IDE.app",
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Applications/Antigravity.app").path
+            .appendingPathComponent("Applications/Antigravity.app").path,
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications/Antigravity IDE.app").path
     ]
     
     /// Bundle identifiers for Antigravity IDE
     private static let bundleIdentifiers = [
         "com.google.antigravity",
+        "com.google.antigravity.ide",
         "com.todesktop.230313mzl4w4u92"
     ]
     

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Quotio
+@testable import QuotioPlus
 
 /// 通过受控慢来源覆盖真实Engine→ViewModel刷新链路；只使用临时账本，不读取用户会话。
 @MainActor
