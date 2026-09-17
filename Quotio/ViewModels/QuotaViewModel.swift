@@ -26,10 +26,34 @@ final class QuotaViewModel {
     @ObservationIgnored private let grokFetcher = GrokQuotaFetcher()
     @ObservationIgnored private let openRouterFetcher = OpenRouterQuotaFetcher()
     @ObservationIgnored private let ampFetcher = AmpQuotaFetcher()
-    @ObservationIgnored private let directAuthService = DirectAuthFileService()
-    @ObservationIgnored private let monitorCoordinator = MonitorRefreshCoordinator()
+    @ObservationIgnored private let directAuthService: DirectAuthFileService
+    @ObservationIgnored private let monitorCoordinator: MonitorRefreshCoordinator
     @ObservationIgnored private let notificationManager = NotificationManager.shared
     @ObservationIgnored private let modeManager = OperatingModeManager.shared
+    /// 每个异步刷新在第一次挂起前取得上下文，结果提交前检查账号与运行模式两个世代。
+    /// 账号变动使整批旧结果作废，下一次刷新仍可正常读取用户重新添加的同名账号。
+    private struct RefreshContext {
+        let revision: UInt64
+        let modeRevision: UInt64
+        var mutationAccountID: String? = nil
+    }
+    private func refreshContext() -> RefreshContext {
+        RefreshContext(revision: monitorCoordinator.revision.current, modeRevision: modeManager.revision)
+    }
+    private func canCommit(_ context: RefreshContext) -> Bool {
+        !Task.isCancelled && context.revision == monitorCoordinator.revision.current
+            && context.modeRevision == modeManager.revision
+    }
+    @discardableResult private func beginAccountMutation(accountID: String? = nil) -> RefreshContext {
+        monitorCoordinator.revision.advance(accountID: accountID)
+        var context = refreshContext()
+        context.mutationAccountID = accountID
+        return context
+    }
+    private func canApplyMutation(_ context: RefreshContext) -> Bool {
+        guard let accountID = context.mutationAccountID else { return canCommit(context) }
+        return monitorCoordinator.revision.isCurrent(context.revision, accountID: accountID)
+    }
     @ObservationIgnored private let refreshSettings = RefreshSettingsManager.shared
     @ObservationIgnored private let warmupSettings = WarmupSettingsManager.shared
     @ObservationIgnored private let warmupService = WarmupService()
@@ -289,7 +313,10 @@ final class QuotaViewModel {
         notifyQuotaDataChanged()
     }
 
-    init() {
+    init(monitorCoordinator: MonitorRefreshCoordinator = MonitorRefreshCoordinator(),
+         directAuthService: DirectAuthFileService = DirectAuthFileService()) {
+        self.monitorCoordinator = monitorCoordinator
+        self.directAuthService = directAuthService
         self.proxyManager = CLIProxyManager.shared
         observeUsageLifecycle()
         Task { await usageMonitor.restore() }
@@ -429,20 +456,24 @@ final class QuotaViewModel {
     
     /// Initialize for Quota-Only Mode (no proxy)
     private func initializeQuotaOnlyMode() async {
+        let context = refreshContext()
         if let existingClient = _apiClient {
             await existingClient.invalidate()
             _apiClient = nil
         }
         let bootstrap = await monitorCoordinator.bootstrap()
+        guard canCommit(context) else { return }
         monitorAccounts = bootstrap.accounts
         monitorIssues = bootstrap.issues
         providerQuotas = bootstrap.quotas
 
         // Keep legacy files available only as a compatibility source.
         await loadDirectAuthFiles()
+        guard canCommit(context) else { return }
         
         // Fetch quotas directly
         await refreshQuotasDirectly()
+        guard canCommit(context) else { return }
         
         // Start auto-refresh for quota-only mode
         startQuotaOnlyAutoRefresh()
@@ -452,44 +483,35 @@ final class QuotaViewModel {
     
     /// Load auth files directly from filesystem
     func loadDirectAuthFiles() async {
-        directAuthFiles = await directAuthService.scanAllAuthFiles()
-        if modeManager.isMonitorMode {
-            monitorAccounts = await monitorCoordinator.discoverAccounts(merging: providerQuotas)
-        }
+        let context = refreshContext()
+        let files = await directAuthService.scanAllAuthFiles()
+        let accounts = modeManager.isMonitorMode
+            ? await discoverMonitorAccounts(merging: providerQuotas) : monitorAccounts
+        guard canCommit(context) else { return }
+        directAuthFiles = files
+        monitorAccounts = accounts
     }
 
     func setMonitorAccountDisabled(_ disabled: Bool, accountID: String) async {
-        await monitorCoordinator.setDisabled(disabled, accountID: accountID)
-        if disabled, let account = monitorAccounts.first(where: { $0.id == accountID }) {
-            providerQuotas[account.provider]?.removeValue(forKey: account.accountKey)
-            await monitorCoordinator.finish(quotas: providerQuotas)
-        }
-        monitorAccounts = await monitorCoordinator.discoverAccounts(merging: providerQuotas)
-        syncMenuBarSelection()
+        let context = beginAccountMutation(accountID: accountID)
+        let account = monitorAccounts.first { $0.id == accountID }
+        if disabled, let account { removeQuotaEntry(provider: account.provider, accountKey: account.accountKey) }
+        await monitorCoordinator.setDisabled(disabled, accountID: accountID, revision: context.revision)
+        guard canApplyMutation(context) else { return }
+        await finishScopedRefresh(provider: account?.provider ?? .codex, context: refreshContext())
     }
 
     func deleteMonitorAccount(accountID: String) async {
         guard let account = monitorAccounts.first(where: { $0.id == accountID }), account.canDelete else { return }
-        await monitorCoordinator.deleteOwnedAccount(accountID: accountID)
+        let context = beginAccountMutation(accountID: accountID)
         removeQuotaEntry(provider: account.provider, accountKey: account.accountKey)
-
-        // Drop the entry from the persisted Monitor snapshot directly. Rewriting the
-        // whole snapshot from `providerQuotas` below is only correct while Monitor mode
-        // is active, so the targeted removal is what makes the deletion stick in every
-        // mode (issue #213).
-        await monitorCoordinator.forgetSnapshotAccount(
-            provider: account.provider,
-            accountKey: account.accountKey
-        )
-        // Re-read the state after the suspension: a concurrent refresh may have written
-        // the account back into `providerQuotas` while this task was suspended.
-        removeQuotaEntry(provider: account.provider, accountKey: account.accountKey)
-
-        if modeManager.isMonitorMode {
-            await monitorCoordinator.finish(quotas: providerQuotas)
-            monitorAccounts = await monitorCoordinator.discoverAccounts(merging: providerQuotas)
-        }
-        syncMenuBarSelection()
+        monitorAccounts.removeAll { $0.id == accountID }
+        await monitorCoordinator.deleteOwnedAccount(accountID: accountID, revision: context.revision)
+        guard canApplyMutation(context) else { return }
+        await monitorCoordinator.forgetSnapshotAccount(provider: account.provider, accountKey: account.accountKey,
+                                                       revision: context.revision, mutationAccountID: accountID)
+        guard canApplyMutation(context) else { return }
+        await finishScopedRefresh(provider: account.provider, context: refreshContext())
     }
 
     /// Delete an account imported from a local IDE (Cursor, Trae) via "Scan for IDEs".
@@ -508,19 +530,13 @@ final class QuotaViewModel {
     /// that mode's quota data, which must not overwrite the Monitor snapshot.
     func deleteAutoDetectedAccount(provider: AIProvider, accountKey: String) async {
         guard provider.isImportedFromLocalIDE else { return }
+        let accountID = MonitorAccount.make(provider: provider, accountKey: accountKey, source: .localIDE).id
+        let context = beginAccountMutation(accountID: accountID)
         removeQuotaEntry(provider: provider, accountKey: accountKey)
-
-        await monitorCoordinator.forgetSnapshotAccount(provider: provider, accountKey: accountKey)
-        // Re-read the state after the suspension rather than trusting the pre-await
-        // snapshot: a concurrent refresh may have re-added the account meanwhile.
-        removeQuotaEntry(provider: provider, accountKey: accountKey)
-
-        if modeManager.isMonitorMode {
-            await monitorCoordinator.finish(quotas: providerQuotas)
-            monitorAccounts = await monitorCoordinator.discoverAccounts(merging: providerQuotas)
-        }
-        syncMenuBarSelection()
-        notifyQuotaDataChanged()
+        monitorAccounts.removeAll { $0.provider == provider && $0.accountKey == accountKey }
+        await monitorCoordinator.forgetSnapshotAccount(provider: provider, accountKey: accountKey, revision: context.revision, mutationAccountID: accountID)
+        guard canApplyMutation(context) else { return }
+        await finishScopedRefresh(provider: provider, context: refreshContext())
     }
 
     /// Remove one account's quota entry from the in-memory map and, for IDE-imported
@@ -532,8 +548,11 @@ final class QuotaViewModel {
     /// - Returns: `true` when an entry was actually removed.
     @discardableResult
     private func removeQuotaEntry(provider: AIProvider, accountKey: String) -> Bool {
-        guard var quotas = providerQuotas[provider],
-              quotas.removeValue(forKey: accountKey) != nil else { return false }
+        // 订阅和账号错误可独立于 quota 存在，删除时必须一起清理。
+        subscriptionInfos[provider]?.removeValue(forKey: accountKey)
+        monitorAccountIssues.removeValue(forKey: QuotaAccountID(provider: provider, accountKey: accountKey))
+        var quotas = providerQuotas[provider] ?? [:]
+        let removed = quotas.removeValue(forKey: accountKey) != nil
         if quotas.isEmpty {
             providerQuotas.removeValue(forKey: provider)
         } else {
@@ -544,7 +563,7 @@ final class QuotaViewModel {
             // the deleted account does not resurrect on the next launch (issue #213).
             savePersistedIDEQuotas()
         }
-        return true
+        return removed
     }
 
     func saveOpenRouterAccount(label: String, apiKey: String, existingAccountID: String? = nil) async throws {
@@ -581,6 +600,8 @@ final class QuotaViewModel {
         existingAccountID: String?
     ) async throws {
         let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mutationID = existingAccountID ?? MonitorAccount.make(provider: provider, accountKey: trimmedLabel, source: .quotioKeychain).id
+        let context = beginAccountMutation(accountID: mutationID)
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedLabel.isEmpty, !trimmedKey.isEmpty else { throw MonitorRuntimeError.invalidCredential }
         guard provider != .amp || trimmedLabel.caseInsensitiveCompare(AmpQuotaFetcher.localAccountKey) != .orderedSame else {
@@ -606,6 +627,7 @@ final class QuotaViewModel {
                 isDisabled: existing.isDisabled
             )
             _ = await MonitorCredentialVault.shared.credential(for: existing.id)
+            guard canCommit(context) else { return }
             if existing.accountKey != trimmedLabel {
                 providerQuotas[provider]?.removeValue(forKey: existing.accountKey)
             }
@@ -633,13 +655,16 @@ final class QuotaViewModel {
             ),
             metadata: account
         )
-        monitorAccounts = await monitorCoordinator.discoverAccounts(merging: providerQuotas)
+        let accounts = await discoverMonitorAccounts(merging: providerQuotas)
+        guard canCommit(context) else { return }
+        monitorAccounts = accounts
         await refreshQuotasDirectly(force: true)
     }
     
     /// Refresh quotas directly without proxy (for Quota-Only Mode)
     /// Note: Cursor and Trae are NOT auto-refreshed - user must use "Scan for IDEs" (issue #29)
     func refreshQuotasDirectly(force: Bool = false) async {
+        let context = refreshContext()
         let providers: Set<AIProvider> = [
             .codex, .claude, .copilot, .kiro, .glm, .clinePass, .warp,
             .antigravity, .factoryDroid, .devin, .grok, .openRouter, .amp,
@@ -691,13 +716,19 @@ final class QuotaViewModel {
             discoveredAccountKeys[.amp]?.contains($0.key) == true
         } ?? [:]
 
+        let codexGroups = await codexFetcher.monitorCredentialGroups()
+        let codexPrevious = CodexMonitorGroup.reconcile(previous[.codex] ?? [:], groups: codexGroups)
+        let codexKeys = codexGroups.contains { $0.sources.contains { !$0.isReadable } }
+            ? nil : Set(codexGroups.filter { !$0.account.isDisabled }.map { $0.account.accountKey })
+        guard canCommit(context) else { return }
         async let codex = coordinator.refresh(
             provider: .codex,
             force: force,
-            previous: previous[.codex] ?? [:],
-            credentialAvailability: credentialAvailability[.codex] ?? .unknown
+            previous: codexPrevious,
+            credentialAvailability: credentialAvailability[.codex] ?? .unknown,
+            credentialAccountKeys: codexKeys
         ) {
-            await codexFetcher.fetchAsProviderQuota()
+            await codexFetcher.fetchMonitorQuotas()
         }
         async let claude = coordinator.refresh(
             provider: .claude,
@@ -745,7 +776,8 @@ final class QuotaViewModel {
             provider: .factoryDroid,
             force: force,
             previous: factoryDroidPrevious,
-            credentialAvailability: credentialAvailability[.factoryDroid] ?? .unknown
+            credentialAvailability: credentialAvailability[.factoryDroid] ?? .unknown,
+            credentialAccountKeys: discoveredAccountKeys[.factoryDroid] ?? []
         ) {
             await factoryDroidQuotaFetcher.fetchAllQuotas()
         }
@@ -753,7 +785,8 @@ final class QuotaViewModel {
             provider: .devin,
             force: force,
             previous: devinPrevious,
-            credentialAvailability: credentialAvailability[.devin] ?? .unknown
+            credentialAvailability: credentialAvailability[.devin] ?? .unknown,
+            credentialAccountKeys: discoveredAccountKeys[.devin] ?? []
         ) {
             await devinQuotaFetcher.fetchAsProviderQuota()
         }
@@ -761,7 +794,8 @@ final class QuotaViewModel {
             provider: .grok,
             force: force,
             previous: grokPrevious,
-            credentialAvailability: credentialAvailability[.grok] ?? .unknown
+            credentialAvailability: credentialAvailability[.grok] ?? .unknown,
+            credentialAccountKeys: discoveredAccountKeys[.grok] ?? []
         ) {
             await grokQuotaFetcher.fetchAllQuotas()
         }
@@ -769,7 +803,8 @@ final class QuotaViewModel {
             provider: .openRouter,
             force: force,
             previous: openRouterPrevious,
-            credentialAvailability: credentialAvailability[.openRouter] ?? .unknown
+            credentialAvailability: credentialAvailability[.openRouter] ?? .unknown,
+            credentialAccountKeys: discoveredAccountKeys[.openRouter] ?? []
         ) {
             await openRouterQuotaFetcher.fetchAllQuotas()
         }
@@ -777,7 +812,8 @@ final class QuotaViewModel {
             provider: .amp,
             force: force,
             previous: ampPrevious,
-            credentialAvailability: credentialAvailability[.amp] ?? .unknown
+            credentialAvailability: credentialAvailability[.amp] ?? .unknown,
+            credentialAccountKeys: discoveredAccountKeys[.amp] ?? []
         ) {
             await ampQuotaFetcher.fetchAllQuotas()
         }
@@ -792,33 +828,35 @@ final class QuotaViewModel {
             fetchedAntigravityData.quotas
         }
 
-        providerQuotas[.codex] = await codexFetcher.reconcileLegacyAliases(in: await codex)
-        providerQuotas[.claude] = await claude
-        providerQuotas[.copilot] = await copilotQuotaFetcher.reconcileLegacyAliases(in: await copilot)
-        providerQuotas[.kiro] = await kiro
-        providerQuotas[.glm] = await glm
-        providerQuotas[.clinePass] = await clinePass
-        providerQuotas[.warp] = await warp
-        providerQuotas[.antigravity] = antigravity
-        subscriptionInfos[.antigravity, default: [:]].merge(fetchedAntigravityData.subscriptions) {
-            _, fresh in fresh
-        }
-        providerQuotas[.factoryDroid] = await factoryDroid
-        providerQuotas[.devin] = await devin
-        providerQuotas[.grok] = await grok
-        providerQuotas[.openRouter] = await openRouter
-        providerQuotas[.amp] = await amp
-        providerQuotas = providerQuotas.filter { !$0.value.isEmpty }
-
-        // Refresh (not re-import) already-imported Cursor/Trae accounts before the
-        // snapshot is persisted, so the menu bar matches the Providers screen (#163).
-        await refreshImportedIDEQuotas()
-
-        monitorAccounts = await coordinator.discoverAccounts(merging: providerQuotas)
+        var refreshed = previous
+        refreshed[.codex] = CodexMonitorGroup.reconcile(await codex, groups: await codexFetcher.monitorCredentialGroups())
+        refreshed[.claude] = await claude
+        refreshed[.copilot] = await copilotQuotaFetcher.reconcileLegacyAliases(in: await copilot)
+        refreshed[.kiro] = await kiro
+        refreshed[.glm] = await glm
+        refreshed[.clinePass] = await clinePass
+        refreshed[.warp] = await warp
+        refreshed[.antigravity] = antigravity
+        refreshed[.factoryDroid] = await factoryDroid
+        refreshed[.devin] = await devin
+        refreshed[.grok] = await grok
+        refreshed[.openRouter] = await openRouter
+        refreshed[.amp] = await amp
+        let accounts = await discoverMonitorAccounts(merging: refreshed)
+        let issues = await coordinator.currentIssues()
+        guard canCommit(context) else { return }
+        // 从这里到全部内存状态发布不再挂起，删除不可能插入半批结果之间。
+        providerQuotas = refreshed.filter { !$0.value.isEmpty }
+        subscriptionInfos[.antigravity, default: [:]].merge(fetchedAntigravityData.subscriptions) { _, fresh in fresh }
+        subscriptionInfos[.antigravity] = subscriptionInfos[.antigravity]?.filter { antigravity[$0.key] != nil }
+        monitorAccounts = accounts
+        monitorIssues = issues
         removeDisabledMonitorQuotas()
-        monitorIssues = await coordinator.currentIssues()
-        await coordinator.finish(quotas: providerQuotas)
-        
+        await refreshImportedIDEQuotas()
+        guard canCommit(context) else { return }
+        await coordinator.finish(quotas: providerQuotas, revision: context.revision)
+        guard canCommit(context) else { return }
+
         checkQuotaNotifications()
         pruneMenuBarItems()
         autoSelectMenuBarItems()
@@ -865,7 +903,7 @@ final class QuotaViewModel {
 
     private func removeDisabledMonitorQuotas() {
         for account in monitorAccounts where account.isDisabled {
-            providerQuotas[account.provider]?.removeValue(forKey: account.accountKey)
+            removeQuotaEntry(provider: account.provider, accountKey: account.accountKey)
         }
         removeHiddenPlaceholderQuotas()
     }
@@ -892,9 +930,11 @@ final class QuotaViewModel {
     
     /// Refresh Claude Code quota using CLI
     private func refreshClaudeCodeQuotasInternal() async {
+        let context = refreshContext()
         if await refreshCPAQuotas(provider: .claude) { return }
         // 用户主动刷新必须获取新值，不能继续命中五分钟的直连缓存。
         let quotas = await claudeCodeFetcher.fetchAsProviderQuota(forceRefresh: true)
+        guard canCommit(context) else { return }
         if quotas.isEmpty {
             // Only remove if no other source has Claude data
             if providerQuotas[.claude]?.isEmpty ?? true {
@@ -915,7 +955,9 @@ final class QuotaViewModel {
     
     /// Refresh Cursor quota using browser cookies
     private func refreshCursorQuotasInternal() async {
+        let context = refreshContext()
         let quotas = await cursorFetcher.fetchAsProviderQuota()
+        guard canCommit(context) else { return }
         if quotas.isEmpty {
             // No Cursor auth found - remove from providerQuotas
             providerQuotas.removeValue(forKey: .cursor)
@@ -926,10 +968,12 @@ final class QuotaViewModel {
     
     /// Refresh Codex quota using CLI auth file (~/.codex/auth.json)
     private func refreshCodexCLIQuotasInternal() async {
+        let context = refreshContext()
         guard modeManager.isMonitorMode else { return }
         if let existing = providerQuotas[.codex], !existing.isEmpty { return }
 
-        let quotas = await codexCLIFetcher.fetchAsProviderQuota()
+        let quotas = await codexCLIFetcher.fetchMonitorQuotas()
+        guard canCommit(context) else { return }
         if !quotas.isEmpty {
             providerQuotas[.codex] = quotas
         }
@@ -937,7 +981,9 @@ final class QuotaViewModel {
     
     /// Refresh GLM quota using API keys from CustomProviderService
     private func refreshGlmQuotasInternal() async {
+        let context = refreshContext()
         let quotas = await glmFetcher.fetchAllQuotas()
+        guard canCommit(context) else { return }
         if !quotas.isEmpty {
             providerQuotas[.glm] = quotas
         } else {
@@ -947,7 +993,9 @@ final class QuotaViewModel {
 
     /// Refresh ClinePass quota using API keys from CustomProviderService
     private func refreshClinePassQuotasInternal() async {
+        let context = refreshContext()
         let quotas = await clinePassFetcher.fetchAllQuotas()
+        guard canCommit(context) else { return }
         if !quotas.isEmpty {
             providerQuotas[.clinePass] = quotas
         } else {
@@ -957,6 +1005,7 @@ final class QuotaViewModel {
     
     /// Refresh Warp quota using API keys from WarpService
     private func refreshWarpQuotasInternal() async {
+        let context = refreshContext()
         let warpTokens = await MainActor.run {
             WarpService.shared.tokens.filter { $0.isEnabled }
         }
@@ -972,6 +1021,7 @@ final class QuotaViewModel {
             }
         }
         
+        guard canCommit(context) else { return }
         if !results.isEmpty {
             providerQuotas[.warp] = results
         } else {
@@ -981,7 +1031,9 @@ final class QuotaViewModel {
     
     /// Refresh Trae quota using SQLite database
     private func refreshTraeQuotasInternal() async {
+        let context = refreshContext()
         let quotas = await traeFetcher.fetchAsProviderQuota()
+        guard canCommit(context) else { return }
         if quotas.isEmpty {
             providerQuotas.removeValue(forKey: .trae)
         } else {
@@ -991,7 +1043,9 @@ final class QuotaViewModel {
     
     /// Refresh Kiro quota using IDE JSON tokens
     private func refreshKiroQuotasInternal() async {
+        let context = refreshContext()
         let rawQuotas = await kiroFetcher.fetchAllQuotas()
+        guard canCommit(context) else { return }
         
         var remappedQuotas: [String: ProviderQuotaData] = [:]
         
@@ -1213,15 +1267,10 @@ final class QuotaViewModel {
             }
             updateWarmupStatus(for: target) { status in
                 status.nextRun = warmupNextRun[target]
-                status.lastError = nil
             }
         }
 
-        for target in targets where !dueTargets.contains(target) {
-            updateWarmupStatus(for: target) { status in
-                status.lastError = nil
-            }
-        }
+        // 上游 0d37cdb：更新调度时间不能清除最近一次失败；只在下次实际执行预热时重置错误。
     }
 
     private func warmupAccount(provider: AIProvider, accountKey: String) async {
@@ -1758,9 +1807,11 @@ final class QuotaViewModel {
     }
 
     private func refreshAntigravityQuotasInternal() async {
+        let context = refreshContext()
         if await refreshCPAQuotas(provider: .antigravity) { return }
         // Fetch both quotas and subscriptions in one call (avoids duplicate API calls)
         let (quotas, subscriptions) = await antigravityFetcher.fetchAllAntigravityData()
+        guard canCommit(context) else { return }
         
         providerQuotas[.antigravity] = quotas
         
@@ -1778,8 +1829,10 @@ final class QuotaViewModel {
     /// Refresh Antigravity quotas without re-detecting active account
     /// Used after switching accounts (active account already set by switch operation)
     private func refreshAntigravityQuotasWithoutDetect() async {
+        let context = refreshContext()
         if await refreshCPAQuotas(provider: .antigravity) { return }
         let (quotas, subscriptions) = await antigravityFetcher.fetchAllAntigravityData()
+        guard canCommit(context) else { return }
         
         providerQuotas[.antigravity] = quotas
         
@@ -1825,14 +1878,19 @@ final class QuotaViewModel {
     }
     
     private func refreshOpenAIQuotasInternal() async {
+        let context = refreshContext()
         if await refreshCPAQuotas(provider: .codex) { return }
         let quotas = await openAIFetcher.fetchAllCodexQuotas()
+        guard canCommit(context) else { return }
         providerQuotas[.codex] = quotas
     }
 
     private func refreshCodexQuotasInternal(includeCLIFallback: Bool) async {
+        let context = refreshContext()
         if modeManager.isMonitorMode {
-            providerQuotas[.codex] = await codexCLIFetcher.fetchAsProviderQuota()
+            let quotas = await codexCLIFetcher.fetchMonitorQuotas()
+            guard canCommit(context) else { return }
+            providerQuotas[.codex] = quotas
             return
         }
         await refreshOpenAIQuotasInternal()
@@ -1842,17 +1900,20 @@ final class QuotaViewModel {
     }
     
     private func refreshCopilotQuotasInternal() async {
+        let context = refreshContext()
         let quotas = await copilotFetcher.fetchAllCopilotQuotas()
+        guard canCommit(context) else { return }
         providerQuotas[.copilot] = quotas
     }
     
     func refreshQuota(for provider: AIProvider) async {
+        let context = refreshContext()
         guard beginScopedRefresh(provider: provider) else { return }
         defer { endScopedRefresh(provider: provider) }
 
         if modeManager.isMonitorMode {
             await refreshMonitorProvider(provider)
-            await finishScopedRefresh(provider: provider)
+            await finishScopedRefresh(provider: provider, context: context)
             return
         }
 
@@ -1882,31 +1943,42 @@ final class QuotaViewModel {
         case .clinePass:
             await refreshClinePassQuotasInternal()
         case .factoryDroid:
-            providerQuotas[provider] = await factoryDroidFetcher.fetchAllQuotas()
+            let quotas = await factoryDroidFetcher.fetchAllQuotas()
+            guard canCommit(context) else { return }
+            providerQuotas[provider] = quotas
         case .devin:
-            providerQuotas[provider] = await devinFetcher.fetchAsProviderQuota()
+            let quotas = await devinFetcher.fetchAsProviderQuota()
+            guard canCommit(context) else { return }
+            providerQuotas[provider] = quotas
         case .grok:
             // 代理模式按 CPA 的凭据索引查询，避免本机凭据与页面账号不一致。
             // 使用 break 保留分支后的刷新收尾逻辑；监控模式仍由原生获取器处理。
             if await refreshCPAQuotas(provider: .grok) { break }
-            providerQuotas[provider] = await grokFetcher.fetchAllQuotas()
+            let quotas = await grokFetcher.fetchAllQuotas()
+            guard canCommit(context) else { return }
+            providerQuotas[provider] = quotas
         case .openRouter:
-            providerQuotas[provider] = await openRouterFetcher.fetchAllQuotas()
+            let quotas = await openRouterFetcher.fetchAllQuotas()
+            guard canCommit(context) else { return }
+            providerQuotas[provider] = quotas
         case .amp:
-            providerQuotas[provider] = await ampFetcher.fetchAllQuotas()
+            let quotas = await ampFetcher.fetchAllQuotas()
+            guard canCommit(context) else { return }
+            providerQuotas[provider] = quotas
         default:
             return
         }
 
-        await finishScopedRefresh(provider: provider)
+        await finishScopedRefresh(provider: provider, context: context)
     }
 
     func refreshQuota(for account: QuotaAccountID) async {
+        let context = refreshContext()
         guard beginScopedRefresh(provider: account.provider, account: account) else { return }
         defer { endScopedRefresh(provider: account.provider, account: account) }
 
         if await refreshCPAQuotas(provider: account.provider, accountKey: account.accountKey) {
-            await finishScopedRefresh(provider: account.provider)
+            await finishScopedRefresh(provider: account.provider, context: context)
             return
         }
 
@@ -1919,7 +1991,9 @@ final class QuotaViewModel {
             quota = result.quota
             subscription = result.subscription
         case .codex:
-            quota = await codexCLIFetcher.fetchQuota(forAccountKey: account.accountKey)
+            quota = modeManager.isMonitorMode
+                ? await codexCLIFetcher.fetchMonitorQuota(forAccountKey: account.accountKey)
+                : await codexCLIFetcher.fetchQuota(forAccountKey: account.accountKey)
         case .copilot:
             quota = await copilotFetcher.fetchQuota(accountKey: account.accountKey)
         case .claude:
@@ -1972,6 +2046,7 @@ final class QuotaViewModel {
             return
         }
 
+        guard canCommit(context) else { return }
         guard let quota else {
             if modeManager.isMonitorMode {
                 monitorAccountIssues[account] = MonitorRefreshIssue(
@@ -1986,7 +2061,11 @@ final class QuotaViewModel {
             var quotas = providerQuotas[.codex, default: [:]]
             quotas.removeValue(forKey: account.accountKey)
             quotas.merge(fresh) { _, fresh in fresh }
-            providerQuotas[.codex] = await codexCLIFetcher.reconcileLegacyAliases(in: quotas)
+            let reconciled = modeManager.isMonitorMode
+                ? CodexMonitorGroup.reconcile(quotas, groups: await codexCLIFetcher.monitorCredentialGroups())
+                : await codexCLIFetcher.reconcileLegacyAliases(in: quotas)
+            guard canCommit(context) else { return }
+            providerQuotas[.codex] = reconciled
         } else {
             providerQuotas[account.provider, default: [:]][account.accountKey] = quota
         }
@@ -1994,7 +2073,7 @@ final class QuotaViewModel {
             subscriptionInfos[account.provider, default: [:]][account.accountKey] = subscription
         }
         monitorAccountIssues.removeValue(forKey: account)
-        await finishScopedRefresh(provider: account.provider)
+        await finishScopedRefresh(provider: account.provider, context: context)
     }
 
     func refreshQuotaForProvider(_ provider: AIProvider) async {
@@ -2005,11 +2084,13 @@ final class QuotaViewModel {
     /// 返回 true 表示本次已由 CPA 接管；失败保留旧值并标记过期，不能再用本机另一账号覆盖。
     /// 此方法只调用配额接口，绝不消费 /usage-queue 或改写客户端历史账本。
     private func refreshCPAQuotas(provider: AIProvider, accountKey: String? = nil) async -> Bool {
+        let context = refreshContext()
         guard !modeManager.isMonitorMode, proxyManager.proxyStatus.running,
               let apiClient, CPAQuotaFetcher.supports(provider) else { return false }
         let fetcher = CPAQuotaFetcher(client: apiClient)
         do {
             let currentFiles = try await apiClient.fetchAuthFiles()
+            guard canCommit(context) else { return true }
             // 列表与快照使用同一批 CPA 凭据，避免列表仍拿旧邮箱键而新结果已经改用凭据键。
             authFiles = currentFiles
             let providerFiles = currentFiles.filter { $0.providerType == provider && !$0.disabled }
@@ -2051,6 +2132,7 @@ final class QuotaViewModel {
                     group.addTask { (file.quotaLookupKey, try? await fetcher.fetch(file: file)) }
                 }
                 for await (key, quota) in group {
+                    guard canCommit(context) else { group.cancelAll(); return }
                     let id = QuotaAccountID(provider: provider, accountKey: key)
                     if var quota {
                         // 内部键只负责隔离凭据，界面继续显示可读邮箱或账号标签，不泄露认证信息。
@@ -2068,8 +2150,10 @@ final class QuotaViewModel {
                     }
                 }
             }
+            guard canCommit(context) else { return true }
             monitorIssues.removeValue(forKey: provider)
         } catch {
+            guard canCommit(context) else { return true }
             monitorIssues[provider] = MonitorRefreshIssue(message: "monitor.refresh.failed".localized(), occurredAt: Date())
         }
         return true
@@ -2101,13 +2185,23 @@ final class QuotaViewModel {
     }
 
     private func refreshMonitorProvider(_ provider: AIProvider) async {
+        let context = refreshContext()
         let coordinator = monitorCoordinator
-        let previous = providerQuotas[provider] ?? [:]
+        var previous = providerQuotas[provider] ?? [:]
+        var credentialKeys: Set<String>?
+        if provider == .codex {
+            let groups = await codexCLIFetcher.monitorCredentialGroups()
+            previous = CodexMonitorGroup.reconcile(previous, groups: groups)
+            if !groups.contains(where: { $0.sources.contains { !$0.isReadable } }) {
+                credentialKeys = Set(groups.filter { !$0.account.isDisabled }.map { $0.account.accountKey })
+            }
+        }
         let credentialProviders: Set<AIProvider> = [
             .codex, .claude, .copilot, .kiro, .antigravity,
             .factoryDroid, .devin, .grok, .openRouter, .amp,
         ]
         let discoveredProviders = Set(await coordinator.discoverAccounts().map(\.provider))
+        guard canCommit(context) else { return }
         let credentialAvailability: MonitorCredentialAvailability = credentialProviders.contains(provider)
             ? (discoveredProviders.contains(provider) ? .present : .missing)
             : .unknown
@@ -2122,6 +2216,7 @@ final class QuotaViewModel {
                 force: true,
                 previous: previous,
                 credentialAvailability: credentialAvailability,
+                credentialAccountKeys: credentialKeys,
                 operation: operation
             )
         }
@@ -2130,9 +2225,9 @@ final class QuotaViewModel {
         case .codex:
             let fetcher = codexCLIFetcher
             let refreshed = await coordinatedRefresh {
-                await fetcher.fetchAsProviderQuota()
+                await fetcher.fetchMonitorQuotas()
             }
-            fresh = await fetcher.reconcileLegacyAliases(in: refreshed)
+            fresh = CodexMonitorGroup.reconcile(refreshed, groups: await fetcher.monitorCredentialGroups())
         case .claude:
             let fetcher = claudeCodeFetcher
             fresh = await coordinatedRefresh {
@@ -2221,6 +2316,7 @@ final class QuotaViewModel {
             return
         }
 
+        guard canCommit(context) else { return }
         if fresh.isEmpty {
             providerQuotas.removeValue(forKey: provider)
         } else {
@@ -2228,23 +2324,37 @@ final class QuotaViewModel {
         }
         if provider == .antigravity {
             subscriptionInfos[provider, default: [:]].merge(freshSubscriptions) { _, fresh in fresh }
+            subscriptionInfos[provider] = subscriptionInfos[provider]?.filter { fresh[$0.key] != nil }
         }
     }
 
-    private func finishScopedRefresh(provider: AIProvider) async {
-        lastQuotaRefreshTime = Date()
+    /// 发现结果也受调用者的刷新世代保护；测试可在发现挂起时执行删除，验证列表不会回填。
+    private func discoverMonitorAccounts(merging quotas: [AIProvider: [String: ProviderQuotaData]]) async -> [MonitorAccount] {
+        #if DEBUG
+        if let hook = monitorDiscoveryHookForTesting { return await hook(quotas) }
+        #endif
+        return await monitorCoordinator.discoverAccounts(merging: quotas)
+    }
 
+    #if DEBUG
+    @ObservationIgnored var monitorDiscoveryHookForTesting: (@MainActor ([AIProvider: [String: ProviderQuotaData]]) async -> [MonitorAccount])?
+    #endif
+
+    private func finishScopedRefresh(provider: AIProvider, context: RefreshContext? = nil) async {
+        let context = context ?? refreshContext()
+        guard canCommit(context) else { return }
         if modeManager.isMonitorMode {
-            monitorAccounts = await monitorCoordinator.discoverAccounts(merging: providerQuotas)
+            let accounts = await discoverMonitorAccounts(merging: providerQuotas)
+            let issues = await monitorCoordinator.currentIssues()
+            guard canCommit(context) else { return }
+            monitorAccounts = accounts
+            monitorIssues = issues
             removeDisabledMonitorQuotas()
-            monitorIssues = await monitorCoordinator.currentIssues()
-            await monitorCoordinator.finish(quotas: providerQuotas)
+            await monitorCoordinator.finish(quotas: providerQuotas, revision: context.revision)
+            guard canCommit(context) else { return }
         }
-
-        if provider == .cursor || provider == .trae {
-            savePersistedIDEQuotas()
-        }
-
+        lastQuotaRefreshTime = Date()
+        if provider.isImportedFromLocalIDE { savePersistedIDEQuotas() }
         checkQuotaNotifications()
         pruneMenuBarItems()
         autoSelectMenuBarItems()
@@ -2325,6 +2435,7 @@ final class QuotaViewModel {
     ///    keys that still exist at write time, so an account removed during the fetch
     ///    stays removed instead of being resurrected from the pre-await snapshot.
     private func refreshImportedIDEQuotas(for provider: AIProvider) async {
+        let context = refreshContext()
         // Nothing imported for this provider: respect the explicit-scan consent model
         // (issue #29) and do not pull anything in. No await between this read and the
         // slot acquisition below, so the check cannot go stale.
@@ -2335,6 +2446,8 @@ final class QuotaViewModel {
         defer { endBatchRefresh(providers: [provider]) }
 
         let fetched = await fetchImportedIDEQuotas(for: provider)
+        // 上游 9954e49：取消可能发生在数据库读取挂起期间；恢复后不能发布或落盘旧任务结果。
+        guard canCommit(context) else { return }
 
         // Re-read after the suspension point: the account may have been deleted, or the
         // whole provider removed, while the fetch was in flight.
@@ -2416,6 +2529,7 @@ final class QuotaViewModel {
     }
 
     private func startMonitorOAuth(for provider: AIProvider) async {
+        beginAccountMutation()
         oauthState = OAuthState(provider: provider, status: .waiting)
         if provider == .claude {
             do {
@@ -2451,7 +2565,8 @@ final class QuotaViewModel {
         defer { NotificationCenter.default.removeObserver(observer) }
 
         do {
-            _ = try await MonitorOAuthCoordinator.shared.login(provider: provider)
+            let account = try await MonitorOAuthCoordinator.shared.login(provider: provider)
+            beginAccountMutation(accountID: account.id)
             oauthState = OAuthState(provider: provider, status: .success)
             await refreshQuotasDirectly(force: true)
         } catch is CancellationError {
@@ -2462,10 +2577,12 @@ final class QuotaViewModel {
     }
 
     func completeMonitorOAuthCode(_ code: String, provider: AIProvider) async {
+        beginAccountMutation()
         guard modeManager.isMonitorMode, provider == .claude else { return }
         oauthState = OAuthState(provider: provider, status: .waiting)
         do {
-            _ = try await MonitorOAuthCoordinator.shared.completeClaudeLogin(code: code)
+            let account = try await MonitorOAuthCoordinator.shared.completeClaudeLogin(code: code)
+            beginAccountMutation(accountID: account.id)
             oauthState = OAuthState(provider: provider, status: .success)
             await refreshQuotasDirectly(force: true)
         } catch {
@@ -2998,7 +3115,9 @@ final class QuotaViewModel {
     /// Scan IDEs with explicit user consent - addresses issue #29
     /// Only scans what the user has opted into
     func scanIDEsWithConsent(options: IDEScanOptions) async {
+        var context = beginAccountMutation()
         ideScanSettings.setScanningState(true)
+        defer { ideScanSettings.setScanningState(false) }
         
         var cursorFound = false
         var cursorEmail: String?
@@ -3009,9 +3128,14 @@ final class QuotaViewModel {
         // Scan Cursor if opted in
         if options.scanCursor {
             let quotas = await cursorFetcher.fetchAsProviderQuota()
+            guard canCommit(context) else { return }
             if !quotas.isEmpty {
                 cursorFound = true
                 cursorEmail = quotas.keys.first
+                for key in quotas.keys {
+                    let id = MonitorAccount.make(provider: .cursor, accountKey: key, source: .localIDE).id
+                    context = beginAccountMutation(accountID: id)
+                }
                 providerQuotas[.cursor] = quotas
             } else {
                 // Clear stale data when not found (consistent with refreshCursorQuotasInternal)
@@ -3022,9 +3146,14 @@ final class QuotaViewModel {
         // Scan Trae if opted in
         if options.scanTrae {
             let quotas = await traeFetcher.fetchAsProviderQuota()
+            guard canCommit(context) else { return }
             if !quotas.isEmpty {
                 traeFound = true
                 traeEmail = quotas.keys.first
+                for key in quotas.keys {
+                    let id = MonitorAccount.make(provider: .trae, accountKey: key, source: .localIDE).id
+                    context = beginAccountMutation(accountID: id)
+                }
                 providerQuotas[.trae] = quotas
             } else {
                 // Clear stale data when not found (consistent with refreshTraeQuotasInternal)
@@ -3042,6 +3171,7 @@ final class QuotaViewModel {
             }
         }
         
+        guard canCommit(context) else { return }
         let result = IDEScanResult(
             cursorFound: cursorFound,
             cursorEmail: cursorEmail,
@@ -3058,7 +3188,9 @@ final class QuotaViewModel {
         savePersistedIDEQuotas()
 
         if modeManager.isMonitorMode {
-            monitorAccounts = await monitorCoordinator.discoverAccounts(merging: providerQuotas)
+            let accounts = await discoverMonitorAccounts(merging: providerQuotas)
+            guard canCommit(context) else { return }
+            monitorAccounts = accounts
             removeDisabledMonitorQuotas()
         }
 

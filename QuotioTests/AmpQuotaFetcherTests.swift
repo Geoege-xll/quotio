@@ -19,6 +19,38 @@ final class AmpQuotaFetcherTests: XCTestCase {
         super.tearDown()
     }
 
+    /// 新版金额格式同时保留金额进度、小时比例、余额以及未知的精确重置时间。
+    func testAmountBasedSubscriptionKeepsPreciseQuotaAndBalances() throws {
+        let text = """
+        Signed in as person@example.com (example)
+        Amp Free: 75% remaining today (resets daily)
+        Amp Megawatt Subscription: agent usage $12 of $20 remaining (60%), orb usage 500.5h of 750h a1.small orb hours remaining (67%) - period 2026-01-01 to 2026-02-01, resets upon renewal in 13 days
+        Individual credits: $12.50 remaining
+        Workspace Example: $0 remaining
+        """
+        let quota = try XCTUnwrap(AmpQuotaParser.parse(displayText: text))
+        let agent = try XCTUnwrap(quota.models.first { $0.name == "amp-agent-usage" })
+        let orb = try XCTUnwrap(quota.models.first { $0.name == "amp-orb-usage" })
+        XCTAssertEqual(quota.planType, "Megawatt")
+        XCTAssertEqual(quota.models.count, 5)
+        XCTAssertEqual(agent.percentage, 60)
+        XCTAssertEqual(agent.presentation, .progress(used: 8, limit: 20, unit: .usd))
+        XCTAssertEqual(orb.percentage, 500.5 / 750 * 100, accuracy: 0.0001)
+        XCTAssertEqual(agent.resetTime, "")
+        XCTAssertEqual(orb.resetTime, "")
+        XCTAssertEqual(quota.models.first { $0.name.hasPrefix("amp-workspace-") }?.presentation,
+                       .amount(value: 0, unit: .usd, semantics: .balance))
+    }
+
+    /// 零分母、超限剩余量及非有限数值均不能制造有效订阅配额。
+    func testAmountBasedSubscriptionRejectsInvalidLimits() {
+        for (remaining, limit, hours) in [("12", "0", "500"), ("21", "20", "500"),
+                                           ("12", "20", "751"), (String(repeating: "9", count: 400), "20", "500")] {
+            let text = "Amp Megawatt Subscription: agent usage $\(remaining) of $\(limit) remaining (60%), orb usage \(hours)h of 750h"
+            XCTAssertNil(AmpQuotaParser.parse(displayText: text))
+        }
+    }
+
     func testRequestContainsOnlyExplicitBearerJSONAndNoCookies() throws {
         let request = AmpQuotaFetcher.request(apiKey: "synthetic-token")
         XCTAssertEqual(request.url?.absoluteString, "https://ampcode.com/api/internal?userDisplayBalanceInfo")

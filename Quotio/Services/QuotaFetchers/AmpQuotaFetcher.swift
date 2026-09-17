@@ -81,6 +81,24 @@ nonisolated enum AmpQuotaParser {
 
         var plan = identity.flatMap { $0[1].isEmpty ? nil : $0[1] }
         if let subscription = captures(
+            #"(?im)^\s*Amp\s+([^:\r\n]+?)\s+Subscription:\s*agent usage\s+\$([\d,]+(?:\.\d+)?)\s+of\s+\$([\d,]+(?:\.\d+)?)\s+remaining\s+\([\d.]+%\),\s*orb usage\s+([\d,]+(?:\.\d+)?)h\s+of\s+([\d,]+(?:\.\d+)?)h\b"#,
+            in: text
+        ), let agentRemaining = dollars(subscription[1]), let agentLimit = dollars(subscription[2]),
+           let orbRemaining = dollars(subscription[3]), let orbLimit = dollars(subscription[4]),
+           [agentRemaining, agentLimit, orbRemaining, orbLimit].allSatisfy(\.isFinite),
+           agentLimit > 0, orbLimit > 0,
+           (0...agentLimit).contains(agentRemaining), (0...orbLimit).contains(orbRemaining) {
+            // 上游 a001010：新版订阅以金额和小时数给出剩余额度，比例应从原始数值计算，
+            // 避免接口显示的整数百分比造成精度损失；只有日期的账期不能推断精确重置时刻。
+            plan = subscription[0]
+            models.append(ModelQuota(
+                name: "amp-agent-usage", percentage: agentRemaining / agentLimit * 100, resetTime: "",
+                presentation: .progress(used: agentLimit - agentRemaining, limit: agentLimit, unit: .usd)
+            ))
+            models.append(ModelQuota(
+                name: "amp-orb-usage", percentage: orbRemaining / orbLimit * 100, resetTime: ""
+            ))
+        } else if let subscription = captures(
             #"(?im)^\s*Amp\s+([^:\r\n]+?)\s+Subscription:\s*([\d.]+)%\s+(?:other|agent)\s+usage\s+and\s+([\d.]+)%\s+orb\s+usage\s+remaining\b(?:\s*-\s*resets\s+upon\s+renewal\s+in\s+(\d+)\s+(minutes?|hours?|days?|weeks?|months?|years?))?"#,
             in: text
         ), let agent = validPercentage(subscription[1]),

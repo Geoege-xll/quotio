@@ -262,6 +262,8 @@ final class StatusBarManager: NSObject, NSMenuDelegate {
             nativeMenu.removeItem(item)
             menu.addItem(item)
         }
+        // 转移完项目后重新绑定，后续筛选更新当前打开的菜单。
+        builder.activateProviderFilter(in: menu)
     }
     
     // MARK: - Menu Actions

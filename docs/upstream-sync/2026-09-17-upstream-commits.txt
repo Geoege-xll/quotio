@@ -1,0 +1,271 @@
+上游范围：13fd478c5b69f361d078e3b3bfc7ec041dde850d..73c383e74ae783ae1a0cf63e9dcdca2601768688
+仅为比对清单，不代表逐项已移植。
+
+0641a16 test: characterize proxy and auth storage invariants
+670c224 test(credentials): protect monitor credential compare-and-swap
+9954e49 fix(quota): ignore cancelled IDE refresh results
+2014943 docs(architecture): record phase zero baseline
+33d38d4 build(architecture): add layered core modules
+85569f8 refactor(app): introduce composition root and runtime
+c8d3cd7 refactor(logs): migrate logs to layered architecture
+bf83583 test(monitor): isolate account discovery fixtures
+ba60594 test(monitor): stabilize refresh coalescing coverage
+3a1054c refactor(settings): migrate preferences to layered architecture
+721c158 refactor(proxy): migrate lifecycle to layered architecture
+5b3a672 refactor(accounts): migrate credentials and OAuth to layered architecture
+ccb1316 refactor(quota): migrate providers to layered architecture
+6054b09 refactor(agents): migrate CLI configuration to layered architecture
+c712a9b refactor(app): migrate tunnel and menu lifecycle
+9f79dea refactor(platform): migrate updates telemetry and notifications
+5c927db refactor(architecture): remove legacy source structure
+1ae4b13 docs(architecture): record Developer ID signing validation
+ea068fd fix(onboarding): pass selected mode through app runtime
+c886b56 docs(architecture): record current macOS acceptance evidence
+2c0cc1a refactor(menu): render from persisted snapshot state
+ae6a73f refactor(localization): isolate bundle state to main actor
+11b346e refactor(agents): move presentation text to UI layer
+b735b74 refactor(errors): keep presentation text out of core
+a756852 refactor(notifications): defer proxy failure copy to delivery
+eeb0804 refactor(agents): model OpenCode config issues semantically
+5fb4524 refactor(quota): move auth status rendering to presentation
+19b5d56 refactor(accounts): model Antigravity switch failures semantically
+9b28834 docs(architecture): align error handling guidance
+bb5d224 fix(credentials): preserve protected credential access
+e9f860d fix(runtime): await orphan cleanup before termination
+0987ad5 fix(localization): add missing Codex instructions
+7600235 fix(quota): preserve Kiro machine identity
+9a9b57b fix(refresh): restart polling when cadence changes
+8c0dfc1 fix(settings): reload quota sessions after proxy changes
+a91b039 test(runtime): run status callback test asynchronously
+bfa9e3d fix(localization): translate agent presentation messages
+3e4bcae fix(oauth): localize semantic CLI auth statuses
+96eb085 fix(antigravity): report machine identity sync failures
+ca58a85 fix(credentials): migrate legacy protected envelopes
+2bafa86 fix(codex): restore quota analytics sources
+fafa034 fix(codex): tolerate malformed optional limits
+e4f8244 fix(antigravity): refresh tokens with unknown expiry
+1a6b232 fix(runtime): await proxy cleanup after shutdown timeout
+807554a fix(credentials): delete legacy protected copies
+1176cc3 fix(tunnel): reset retry budget after recovery
+9a23c4d fix(codex): exclude disabled native accounts
+883878a fix(quota): harden refresh reconciliation
+0d37cdb fix(warmup): preserve failed run status
+f553f9d fix(proxy): retain replaced version during rollback
+4db5355 fix(warmup): reconfigure scheduler after model selection changes
+0566104 fix(quota): reconcile codex account aliases across quota views
+195acea fix(accounts): merge quota aliases while preserving source identity
+cdee9a8 docs: scope Quotio verification to the requested change
+a001010 fix(amp): parse amount-based subscription usage
+f0024ab feat(core): add quota domain and cancellable provider collection
+951026a feat(cli): add config selection and versioned usage output
+22c0a97 fix(core): reject inconsistent adapter quota values
+e4742d8 docs(cli): document contracts and offline validation results
+8a9ca20 docs(plan): outline first live provider milestone
+fc4f13f feat(codex): read quota through the local app server
+027b3ef feat(amp): preserve quota and balances from local usage
+9643580 feat(antigravity): read quota from the owned local service
+709a90d feat(factory): add scoped billing limits and identity checks
+381cf1b feat(antigravity): fetch quota directly from the Google API
+0e8fa31 feat(cli): expose installed providers and isolate diagnostic logs
+1a4ff6e test(providers): exercise HTTP and subprocess boundaries offline
+25e7ec8 fix(amp): reject malformed percentage tokens
+9b953be fix(antigravity): preserve projectless quota fallback
+b74ced2 test(antigravity): verify credential file read boundaries
+c1043da test(process): prove kill on drop without stdin closure
+6e6a3ad docs(providers): record contracts and bounded verification
+3b293af fix(codex): use concise session and weekly quota labels
+6d1a869 fix(codex): omit quota windows absent from the response
+4d2d90d docs(accounts): assess cookie-free provider onboarding
+9b16985 docs(accounts): prioritize Swift monitor onboarding paths
+c7fd15a feat(accounts): add transactional native Keychain vault
+8a25aca feat(amp): fetch usage directly with an API key
+11c743e feat(accounts): add managed API keys and standalone Codex login
+d9d5536 docs(accounts): document onboarding and verification results
+be5c74e feat(accounts): infer email and masked key labels
+178aac5 feat(codex): report local and saved accounts together
+3f746ab fix(accounts): bound noninteractive Keychain usage reads
+0762f4e docs(codex): explain account selection and Keychain access
+726d72c build(macos): sign CLI with a stable developer identity
+5e13fe7 docs(signing): record developer identity verification
+fbb65a9 build(macos): use public CLI identifier without team defaults
+26a0bb3 docs(security): record pre-public audit and license recommendation
+23a242c fix(security): patch time and bound retry-after parsing
+b594682 docs(license): publish the CLI under MIT
+f8a43cb chore(security): ignore local credentials and signing files
+07182d5 ci(security): scan secrets and locked dependency advisories
+a6bbbe6 ci(security): continuously audit GitHub Actions with zizmor
+df52e0c docs(security): record completed fixes and clean verification
+f9069be fix(amp): parse live API usage and render balances correctly
+d460da3 docs(amp): record live response fix and verification
+2a653b1 fix(amp): display source-provided reset descriptions
+80b7053 fix(antigravity): remove implicit credential directory lookup
+f6a5659 feat(antigravity): add native auth and local quota fallback
+3342830 feat(accounts): prompt for hidden api keys in terminals
+ac1b83b fix(amp): include local and all saved accounts in usage
+055e782 feat(report): represent consumption without a quota cap
+26ac79d feat(providers): add synthetic openrouter zai and minimax
+9f93ede feat(providers): add extensible provider registry
+069a805 feat(providers): add api key usage catalog
+9b93135 feat(providers): add native oauth usage catalog
+deb627f feat(doubao): add signed coding plan quota
+90234a5 feat(azure): add resource scoped oauth cost reporting
+c9a5dd9 docs(providers): document expanded credential routes
+cb12a1b chore(git): stop tracking local plans
+b066f2a feat(server): serve cached usage through a local rest api
+660f3c5 docs(server): document local api routes and snapshot behavior
+2ca9444 feat(cache): persist account-scoped usage snapshots safely
+fa2a27e feat(usage): share persistent cache across cli and rest
+3fb23eb fix(cache): bound identity checks and reject special files
+553087f feat(cache): resolve native login and cloud scope identities
+7d8cef8 docs(cache): explain freshness storage and identity limits
+3ea49e4 feat(settings): persist configuration with revisions and overrides
+4372049 feat(server): add managed settings refresh and remote access policy
+1e476dc feat(accounts): add shared account api and oauth sessions
+ac67a4f fix(accounts): complete session and mutation semantics
+3fd3dc5 fix(accounts): harden oauth session lifecycle
+0b56132 fix(accounts): retain active oauth processing
+4c0f3c1 fix(accounts): return committed account metadata
+bc953f9 feat(server): expose account management and codex auth sessions
+fd938c7 feat(api): publish the openapi management contract
+420377e test(accounts): cover exchange and vault failures
+6a3c059 fix(api): describe account form fields and operation results
+a6e19b4 fix(accounts): bound vault reads and mutation lock waits
+da8d6fc fix(server): separate running operations from retained results
+5317ffe fix(server): report the scheduler refresh deadline accurately
+7535b42 ci(rust): verify macos linux and the minimum rust version
+7e8348b feat(server): record safe lifecycle and operation events
+ad66cfb build(release): add distribution signing and dependency notices
+dc0fabb docs(validation): record backend hardening evidence and release gates
+9e2c6cb fix(ci): gate macos-only code and satisfy rust 1.98 clippy
+0cf3e1d feat(distribution): package github npm and homebrew artifacts
+5821627 ci(release): prepare drafts and publish npm and homebrew
+a6ecd41 ci(homebrew): publish with a repository-scoped deploy key
+b250562 ci(release): disable npm cache in the publishing job
+4dbefd9 fix(release): register the signing keychain search path
+f878cf8 feat(server): add authenticated native parent pipe bootstrap
+1fb00de fix(api): describe provider response envelopes accurately
+f8bf97d feat(accounts)!: persist successful mutation retry receipts
+b426ace feat(notifications): own delivery policy and persistent tracking
+7b1268c feat(agents): port safe file writes and configuration codecs
+48c7b0a refactor(scope): restrict native migration to quota and usage
+945a38b feat(openrouter): include credits and preserve partial endpoint failures
+2d3d9f6 feat(usage): add read-only OpenRouter credential queries
+bbb6bdc feat(accounts): add encrypted headless Linux vault
+ff669f6 feat(accounts): bind read-only ClinePass quota sources
+acdac08 fix(accounts): report uncertain vault commits accurately
+eb03df1 feat(usage): expose scoped reports and ClinePass metric semantics
+05d43c0 feat(amp): preserve native quota presentation semantics
+a2e0da0 fix(accounts): release scoped locks before descriptors close
+519a913 feat(accounts): register read-only amp native sources
+e42f399 feat(zai): preserve subscription and quota presentation metadata
+435c3a9 feat(zai): resolve read-only key groups within refresh budgets
+9b0e0dd feat(warp): preserve unlimited quota and scoped grant details
+78c21ad feat(accounts): persist quota selection for every account
+73e68af feat(cursor): preserve summary quota alongside period usage
+ea942df chore(release): bump quota migration candidate to 0.2.7
+936770b feat(cursor): register read-only native account sources
+b99167d feat(grok): expose plan and configured extra usage limits
+d9ed364 chore(release): bump quota candidate to 0.2.8
+a45f2f0 fix(quota): mark explicit limits and unlimited states as exact
+94b18e5 fix(cursor): read committed WAL through private snapshots
+26e5237 feat(grok): register read-only native account references
+99bb533 feat(grok): refresh explicitly owned tokens with durable replay fences
+8ce6332 feat(devin): add separate desktop quota adapter
+3fbf444 feat(migration): stage immutable PIV envelope assessment receipts
+65306b7 feat(codex): expose read-only reset credit inventory
+95bbf72 feat(codex): normalize profile analytics with scoped failures
+f74cd0f feat(codex): register read-only native account sources
+64d5dc9 fix(codex): bound supplemental requests to collector budget
+e55f6cc fix(codex): preserve known zero split-token buckets
+1b55db1 test(grok): prevent disabled native source local alias bypass
+2751e2a feat(accounts): add read-only Claude Code source references
+78d4413 feat(accounts): add explicit read-only Copilot source references
+c3aeb14 fix(zai): match Swift numeric periods and millisecond resets
+c6d0214 fix(antigravity): retain optional subscription plan metadata
+1a09469 fix(warp): send Swift client version header
+0a3cd09 fix(factory): preserve legacy billing status and stable metric IDs
+f7c0734 fix(amp): accept optional currency and flexible amount spacing
+606786e fix(kiro): prohibit borrowed refresh and stabilize machine identity
+dde0eb0 test(codex): separate protocol startup from deadline checks
+88feb7a fix(accounts): preserve Claude and Copilot source selection
+af63e48 feat(factory): fence owned WorkOS refresh before quota
+bb69ce5 feat(server): use port 6767 by default
+533fb75 feat(factory): register fixed read-only native credential sources
+f65821d fix(factory): retain retries for saved API key quota reads
+e805b01 feat(devin-desktop): register fixed borrowed native sources
+90751b9 fix(factory): fence refresh ownership across organizations
+8486fb6 fix(factory): validate OAuth organization before quota reads
+4641cf0 fix(auth): reject unsafe Devin native credential destinations
+1cc3e36 fix(factory): protect refresh reservations with vault format 5
+bad0fc3 chore(release): bump quota candidate to 0.2.9
+8100e68 feat(factory): enrich quota labels with bounded profile metadata
+436aa76 fix(antigravity): reserve quota time during subscription lookup
+18415e7 feat(auth): add managed Claude sessions and fenced refresh
+e4b6db1 feat(auth): add backend-owned Copilot device authorization
+99693fd fix(auth): allow terminal login to honor Copilot device expiry
+81846a7 test(auth): keep terminal deadline tests after binary implementation
+e5209d3 fix(auth): persist Claude exchange before quota collection
+06df585 feat(kiro): add explicit borrowed native source with result fences
+96a33cf feat(kiro): persist owned Social and IdC refresh with lineage fences
+505666e fix(oauth): preserve late Claude authorization completion
+85396df fix(oauth): back off retryable Copilot device polls
+04ac5bf feat(antigravity): separate borrowed sources from owned refresh
+964007c fix(accounts): retain refresh lineage after concurrent removal
+eaccaf5 fix(kiro): validate complete profile ARNs before owned intake
+d553b02 feat(migration): stage explicit Swift metadata and PIV ciphertext
+6803f13 fix(antigravity): validate native protobuf credential structure
+095ced2 fix(accounts): preserve independent Antigravity local selection
+9e876df test(accounts): verify Antigravity downgrade against format-7 reader
+3b90567 fix(migration): restrict mappings and recheck staged receipts
+52c5735 feat(migration): expose explicit offline mapping staging
+9b0e471 feat(accounts): add explicit native source discovery
+6492875 fix(oauth): recover session begins with idempotency keys
+645c8bd feat(antigravity): expose structured subscription metadata
+f27247f fix(discovery): bind custom references to selected provider
+14302e8 fix(api): return conflict for mismatched OAuth retry bodies
+e7d08cb fix(api): recover source retries before discovery lookup
+a38a224 chore(release): bump quota candidate to 0.2.10
+743049c feat(auth): isolate managed account vault namespaces
+d250f2d fix(auth): isolate vault data without replacing home
+997c296 fix(auth): bind isolated data dir to vault namespace
+9d58877 feat(codex): expose banked reset credit observations
+3c2649f chore: format Rust sources
+ad0e1c9 chore(release): bump quota candidate to 0.2.11
+0efa320 fix(accounts): serialize in-process vault locks
+b318d59 fix(cursor): recover orphaned WAL snapshots
+8163088 feat(copilot): add explicit gh hosts source
+7e25953 fix(server): allow account-scoped quota refresh
+d19408e docs(cursor): describe private WAL snapshots
+0c21777 fix(server): preserve isolated refresh vault
+af1aed2 fix(server): preserve scoped refresh snapshots
+57836f6 fix(cursor): recover snapshots by lock ownership
+0997465 fix(copilot): preserve tokenless GitHub host entries
+be01be2 fix(release): describe encrypted Linux vault
+0efca3e ci(security): gate releases on security checks
+bed90f2 fix(codex): enrich local usage reports
+8835e3a feat(codex): expose extra usage credits
+a705fb8 feat(cli)!: auto-detect available providers
+96607e0 refactor(repo): move macOS app under apps/macos
+d50a968 ci(repo): scope workflows to monorepo apps
+e0ee799 fix(cli): update rustls dependency
+bb92d6f fix(ci): baseline reviewed secret findings
+bae629a fix(ci): harden release checkout credentials
+1ff8e0a fix(cli): reuse macOS release credentials
+44f2a70 ci(cli): upgrade setup-node action
+8536d16 chore(cli): prepare 0.2.12 release
+2f83c44 fix(ci): verify Homebrew formula digest
+60fd4f4 fix(ci): route stable Homebrew releases
+4b1d63c fix(ci): preserve macOS latest release
+0c1b782 fix(ci): restore macOS latest release
+d70adc6 fix: keep Claude Code credentials read-only (#526)
+b84e32a feat: improve Card and Ring quota layouts (#527)
+80f0848 fix(ci): actually run the architecture check (#531)
+9b0997c docs(readme): restore product overview
+cdefc4e docs(readme): restore localized guides to root
+c29922a fix(claude): preserve credential ownership boundaries (#532)
+4b29810 chore: bump version to 0.31.1 [skip ci]
+2dbf807 revert: roll back release 0.31.1
+c8bf1e3 revert: roll back PR #527 quota layouts
+1d277c5 test(proxy): wait for published port state
+ec4a1f0 chore: bump version to 0.32.0 [skip ci]
+73c383e fix(menubar): filter providers without closing menu (#538)

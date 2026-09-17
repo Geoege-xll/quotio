@@ -117,6 +117,8 @@ final class OperatingModeManager {
     
     /// Current operating mode
     private(set) var currentMode: OperatingMode
+    /// 即使先离开再回到同一模式，旧请求也必须失效，不能只比较模式枚举值。
+    private(set) var revision: UInt64 = 0
     
     /// Whether onboarding has been completed
     private(set) var hasCompletedOnboarding: Bool
@@ -163,6 +165,7 @@ final class OperatingModeManager {
     
     /// Set current mode and persist
     func setMode(_ mode: OperatingMode) {
+        if currentMode != mode { revision += 1 }
         currentMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: "operatingMode")
     }

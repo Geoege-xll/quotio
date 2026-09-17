@@ -218,6 +218,39 @@ final class IDEQuotaRefreshReentrancyTests: XCTestCase {
         }
     }
 
+    /// 通过可控挂起验证取消后不覆盖既有配额，并释放刷新协调槽。
+    @MainActor
+    func testCancelledGlobalRefreshDoesNotApplyStaleIDEQuota() async {
+        await withPersistedIDEQuotasRestored {
+            let viewModel = QuotaViewModel()
+            let account = "user@example.com"
+            let stale = quota(10, lastUpdated: Date(timeIntervalSince1970: 1_000))
+            let fresh = quota(90, lastUpdated: Date(timeIntervalSince1970: 2_000))
+            viewModel.providerQuotas = [.cursor: [account: stale]]
+
+            let gate = IDEFetchGate()
+            let suspendedInFetch = expectation(description: "IDE fetch suspended")
+            viewModel.ideQuotaFetchHookForTesting = { provider in
+                guard provider == .cursor else { return [:] }
+                suspendedInFetch.fulfill()
+                await gate.wait()
+                return [account: fresh]
+            }
+
+            let refresh = Task { await viewModel.refreshImportedIDEQuotas() }
+            await fulfillment(of: [suspendedInFetch], timeout: 5)
+            refresh.cancel()
+            gate.open()
+            await refresh.value
+
+            XCTAssertEqual(
+                viewModel.providerQuotas[.cursor]?[account]?.lastUpdated,
+                stale.lastUpdated,
+                "取消后的刷新不得发布挂起期间返回的配额"
+            )
+        }
+    }
+
     /// The IDE refresh holds the provider's refresh-coordination slot for the *whole*
     /// fetch/write, so a scoped refresh cannot start midway through it and be clobbered.
     /// `isRefreshBlocked(for:)` reads the same set `beginScopedRefresh` inserts into, so

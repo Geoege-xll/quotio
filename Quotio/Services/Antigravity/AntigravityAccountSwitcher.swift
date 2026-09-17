@@ -202,8 +202,8 @@ final class AntigravityAccountSwitcher {
 
             // Step 5: Inject token (version-aware)
             let expiry: Int64
-            if let expired = authFile.expired,
-               let expiryDate = ISO8601DateFormatter().date(from: expired) {
+            // 与过期检测保持一致，不能把包含小数秒的真实时间替换为推测的一小时。
+            if let expiryDate = authFile.expiryDate {
                 expiry = Int64(expiryDate.timeIntervalSince1970)
             } else {
                 expiry = Int64(Date().timeIntervalSince1970) + 3600

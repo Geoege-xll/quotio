@@ -378,6 +378,9 @@ nonisolated struct ProviderQuotaData: Codable, Sendable {
     var tokenExpiresAt: Date?  // For Kiro: token expiry time
     var analytics: QuotaAnalytics?
     var accountDisplayName: String?
+    /// 监控额度携带查询时的稳定账号身份，防止后续异步归并把同邮箱换号前的额度归给新账号。
+    /// 仅记录账号标识，不包含令牌；可选字段兼容已有快照，也允许旧文件名变化后迁移缓存。
+    var monitorAccountIdentity: String? = nil
     /// CPA 配额响应携带同一账号查询出的订阅信息，供发布层同步订阅卡片；旧快照缺失时保持 nil。
     var subscriptionInfo: SubscriptionInfo?
 
@@ -560,22 +563,19 @@ nonisolated struct AntigravityAuthFile: Codable, Sendable {
         case proxyUrl = "proxy_url"
     }
 
-    nonisolated var isExpired: Bool {
-        guard let expired = expired else { return true }
+    /// 判定过期与切换账号写入数据库共用同一解析结果，保留 ISO8601 小数秒。
+    nonisolated var expiryDate: Date? {
+        guard let expired else { return nil }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        if let expiryDate = formatter.date(from: expired) {
-            return Date() > expiryDate
-        }
-
-        let fallbackFormatter = ISO8601DateFormatter()
-        if let expiryDate = fallbackFormatter.date(from: expired) {
-            return Date() > expiryDate
-        }
-
-        return true
+        return formatter.date(from: expired) ?? ISO8601DateFormatter().date(from: expired)
     }
+
+    nonisolated var isExpired: Bool {
+        guard let expiryDate else { return true }
+        return Date() > expiryDate
+    }
+
 }
 
 // MARK: - Fetcher
@@ -931,9 +931,10 @@ actor AntigravityQuotaFetcher {
                 if credential.expiresAt.map({ $0.timeIntervalSinceNow < 300 }) ?? false,
                    let refresh = credential.refreshToken,
                    let (access, expiresIn) = try? await refreshAccessTokenWithExpiry(refreshToken: refresh) {
+                    let originalCredential = credential
                     credential.accessToken = access
                     credential.expiresAt = Date().addingTimeInterval(TimeInterval(expiresIn))
-                    try? await MonitorCredentialVault.shared.save(credential, metadata: account)
+                    try? await MonitorCredentialVault.shared.saveRefreshed(credential, replacing: originalCredential, accountID: account.id)
                 }
                 do {
                     var quota = try await fetchQuota(accessToken: credential.accessToken)
@@ -942,9 +943,10 @@ actor AntigravityQuotaFetcher {
                        let refresh = latest.refreshToken,
                        let (access, expiresIn) = try? await refreshAccessTokenWithExpiry(refreshToken: refresh) {
                         credential = latest
+                        let originalCredential = credential
                         credential.accessToken = access
                         credential.expiresAt = Date().addingTimeInterval(TimeInterval(expiresIn))
-                        try? await MonitorCredentialVault.shared.save(credential, metadata: account)
+                        try? await MonitorCredentialVault.shared.saveRefreshed(credential, replacing: originalCredential, accountID: account.id)
                         quota = try await fetchQuota(accessToken: access)
                     }
                     quotaResults[account.accountKey] = quota
@@ -956,9 +958,10 @@ actor AntigravityQuotaFetcher {
                        let refresh = latest.refreshToken,
                        let (access, expiresIn) = try? await refreshAccessTokenWithExpiry(refreshToken: refresh) {
                         credential = latest
+                        let originalCredential = credential
                         credential.accessToken = access
                         credential.expiresAt = Date().addingTimeInterval(TimeInterval(expiresIn))
-                        try? await MonitorCredentialVault.shared.save(credential, metadata: account)
+                        try? await MonitorCredentialVault.shared.saveRefreshed(credential, replacing: originalCredential, accountID: account.id)
                         quotaResults[account.accountKey] = try? await fetchQuota(accessToken: access)
                         if let subscription = subscriptionCache[access] {
                             subscriptionResults[account.accountKey] = subscription
@@ -1032,9 +1035,10 @@ actor AntigravityQuotaFetcher {
             if credential.expiresAt.map({ $0.timeIntervalSinceNow < 300 }) ?? false,
                let refresh = credential.refreshToken,
                let (access, expiresIn) = try? await refreshAccessTokenWithExpiry(refreshToken: refresh) {
+                let originalCredential = credential
                 credential.accessToken = access
                 credential.expiresAt = Date().addingTimeInterval(TimeInterval(expiresIn))
-                try? await MonitorCredentialVault.shared.save(credential, metadata: account)
+                try? await MonitorCredentialVault.shared.saveRefreshed(credential, replacing: originalCredential, accountID: account.id)
             }
             var quota: ProviderQuotaData?
             do {
@@ -1051,9 +1055,10 @@ actor AntigravityQuotaFetcher {
                let (access, expiresIn) = try? await refreshAccessTokenWithExpiry(refreshToken: refresh) {
                 didRetryCredential = true
                 credential = latest
+                let originalCredential = credential
                 credential.accessToken = access
                 credential.expiresAt = Date().addingTimeInterval(TimeInterval(expiresIn))
-                try? await MonitorCredentialVault.shared.save(credential, metadata: account)
+                try? await MonitorCredentialVault.shared.saveRefreshed(credential, replacing: originalCredential, accountID: account.id)
                 quota = try? await fetchQuota(accessToken: access)
             }
             if quota == nil, !didRetryCredential,
@@ -1061,9 +1066,10 @@ actor AntigravityQuotaFetcher {
                let refresh = latest.refreshToken,
                let (access, expiresIn) = try? await refreshAccessTokenWithExpiry(refreshToken: refresh) {
                 credential = latest
+                let originalCredential = credential
                 credential.accessToken = access
                 credential.expiresAt = Date().addingTimeInterval(TimeInterval(expiresIn))
-                try? await MonitorCredentialVault.shared.save(credential, metadata: account)
+                try? await MonitorCredentialVault.shared.saveRefreshed(credential, replacing: originalCredential, accountID: account.id)
                 quota = try? await fetchQuota(accessToken: access)
             }
             return (quota, subscriptionCache[credential.accessToken])

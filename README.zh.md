@@ -4,11 +4,11 @@
 
 [English](README.md) · **简体中文**
 
-**QuotioPlus 1.0.0** 是基于 [Trong Nguyen（@nguyenphutrong）](https://github.com/nguyenphutrong) 的开源项目 [Quotio](https://github.com/nguyenphutrong/quotio) 进行二次开发的原生 macOS 应用，用于管理 AI 账号、代理服务、客户端配置、配额和使用统计。
+**QuotioPlus 1.0.03** 是基于 [Trong Nguyen（@nguyenphutrong）](https://github.com/nguyenphutrong) 的开源项目 [Quotio](https://github.com/nguyenphutrong/quotio) 进行二次开发的原生 macOS 应用，用于管理 AI 账号、代理服务、客户端配置、配额和使用统计。
 
 > **来源声明与致谢**：本项目是在原作者代码基础上的独立二次开发版本。感谢 Trong Nguyen 和 Quotio 的所有贡献者开放源码、持续维护，为本项目提供了基础。我们保留原项目的版权声明与 MIT 许可证；QuotioPlus 的版本、更新和问题反馈由本仓库独立维护。
 
-[下载 1.0.0](https://github.com/Geoege-xll/quotio/releases/tag/v1.0.0) · [发行说明](docs/releases/1.0.0.md) · [反馈问题](https://github.com/Geoege-xll/quotio/issues) · [原作者项目](https://github.com/nguyenphutrong/quotio)
+[下载 1.0.03](https://github.com/Geoege-xll/quotio/releases/tag/v1.0.03) · [发行说明](docs/releases/1.0.03.md) · [反馈问题](https://github.com/Geoege-xll/quotio/issues) · [原作者项目](https://github.com/nguyenphutrong/quotio)
 
 ## 项目截图
 
@@ -40,7 +40,7 @@
 
 ## 安装
 
-要求 **macOS 15 或更新版本，以及 Apple Silicon Mac（M1 或更新芯片）**。从本仓库的 [Releases](https://github.com/Geoege-xll/quotio/releases) 下载 `Quotio-1.0.0.dmg` 或 ZIP，应用显示名称为 **QuotioPlus**，发布构建仅包含 arm64，不再支持 Intel Mac。
+要求 **macOS 15 或更新版本，以及 Apple Silicon Mac（M1 或更新芯片）**。从本仓库的 [Releases](https://github.com/Geoege-xll/quotio/releases) 下载 `QuotioPlus-1.0.03.dmg` 或 ZIP，应用显示名称为 **QuotioPlus**，发布构建仅包含 arm64，不再支持 Intel Mac。
 
 每个发行版会注明是否经过 Developer ID 签名及 Apple 公证。未配置发布证书时，安装包使用临时签名，macOS 可能要求额外确认。自动安装更新仅在本项目的 Sparkle 签名配置完整时启用；其他构建通过本仓库发布页手动更新。
 

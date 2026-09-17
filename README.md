@@ -4,11 +4,11 @@
 
 **English** · [简体中文](README.zh.md)
 
-**QuotioPlus 1.0.0** is a native macOS app for managing AI accounts, proxy services, CLI agent configuration, quotas, and usage analytics. It is independently developed from [Quotio](https://github.com/nguyenphutrong/quotio), created by [Trong Nguyen (@nguyenphutrong)](https://github.com/nguyenphutrong).
+**QuotioPlus 1.0.03** is a native macOS app for managing AI accounts, proxy services, CLI agent configuration, quotas, and usage analytics. It is independently developed from [Quotio](https://github.com/nguyenphutrong/quotio), created by [Trong Nguyen (@nguyenphutrong)](https://github.com/nguyenphutrong).
 
 > **Origin and acknowledgments:** This project is a derivative of the original author's code. Thank you to Trong Nguyen and all Quotio contributors for building and sharing the foundation that makes QuotioPlus possible. We retain the original copyright notices and MIT license. QuotioPlus releases, updates, and issue tracking are maintained independently in this repository.
 
-[Download 1.0.0](https://github.com/Geoege-xll/quotio/releases/tag/v1.0.0) · [Release notes](docs/releases/1.0.0.md) · [Report an issue](https://github.com/Geoege-xll/quotio/issues) · [Original project](https://github.com/nguyenphutrong/quotio)
+[Download 1.0.03](https://github.com/Geoege-xll/quotio/releases/tag/v1.0.03) · [Release notes](docs/releases/1.0.03.md) · [Report an issue](https://github.com/Geoege-xll/quotio/issues) · [Original project](https://github.com/nguyenphutrong/quotio)
 
 ## Screenshots
 
@@ -40,7 +40,7 @@ Client Token usage, CPA gateway requests, and tool calls measure different thing
 
 ## Installation
 
-Requires **macOS 15 or later and an Apple Silicon Mac (M1 or later)**. Download `Quotio-1.0.0.dmg` or the ZIP from this repository's [Releases](https://github.com/Geoege-xll/quotio/releases). The app's display name is **QuotioPlus**. Release builds contain arm64 only; Intel Macs are no longer supported.
+Requires **macOS 15 or later and an Apple Silicon Mac (M1 or later)**. Download `QuotioPlus-1.0.03.dmg` or the ZIP from this repository's [Releases](https://github.com/Geoege-xll/quotio/releases). The app's display name is **QuotioPlus**. Release builds contain arm64 only; Intel Macs are no longer supported.
 
 Each release states whether it has Developer ID signing and Apple notarization. Builds made without distribution credentials use ad-hoc signing and may require additional confirmation from macOS. Automatic update installation is enabled only when this project's Sparkle signing configuration is complete; other builds provide manual updates through this repository's release page.
 

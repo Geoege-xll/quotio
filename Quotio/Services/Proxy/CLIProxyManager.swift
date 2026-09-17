@@ -1788,17 +1788,13 @@ extension CLIProxyManager {
             throw ProxyUpgradeError.rollbackFailed("No previous version to rollback to")
         }
         
+        let replacedVersion = currentVersion
         managerState = .rollingBack
         
         // Stop current proxy
         let wasRunning = proxyStatus.running
         if wasRunning {
             stop()
-        }
-        
-        // Delete the problematic current version if different from previous
-        if let current = currentVersion, current != previousVersion {
-            try? storageManager.deleteVersion(current)
         }
         
         // Set previous as current
@@ -1812,6 +1808,12 @@ extension CLIProxyManager {
         
         managerState = proxyStatus.running ? .active : .idle
         
+        // 上游 f553f9d：旧版本成功激活并恢复运行后才能清理被替换版本。
+        // setCurrentVersion 或 start 抛错时保留原二进制，使用户仍可恢复原版本。
+        if let replacedVersion, replacedVersion != previousVersion {
+            try? storageManager.deleteVersion(replacedVersion)
+        }
+
         NotificationManager.shared.notifyRollback(toVersion: previousVersion)
     }
     

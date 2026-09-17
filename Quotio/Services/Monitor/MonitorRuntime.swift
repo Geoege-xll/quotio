@@ -111,10 +111,11 @@ nonisolated protocol MonitorCredentialStore: Sendable {
     func credential(for accountID: String) async -> MonitorOAuthCredential?
     func reloadLatest(accountID: String) async -> MonitorOAuthCredential?
     func save(_ credential: MonitorOAuthCredential, metadata: MonitorAccount) async throws
+    func saveRefreshed(_ credential: MonitorOAuthCredential, replacing expected: MonitorOAuthCredential, accountID: String) async throws
     func delete(accountID: String) async
 }
 
-nonisolated struct MonitorOAuthCredential: Codable, Sendable {
+nonisolated struct MonitorOAuthCredential: Codable, Sendable, Equatable {
     var accessToken: String
     var refreshToken: String?
     var idToken: String?
@@ -123,14 +124,37 @@ nonisolated struct MonitorOAuthCredential: Codable, Sendable {
     var extra: [String: String]
 }
 
+extension MonitorCredentialStore {
+    /// 不支持原子替换的存储拒绝刷新写回；不能用有挂起点的“先读后写”假装 CAS。
+    /// 生产保险库在同一 actor 内完成校验与替换，测试空存储也不会意外创建凭据。
+    func saveRefreshed(_ credential: MonitorOAuthCredential, replacing expected: MonitorOAuthCredential, accountID: String) async throws {
+        throw MonitorRuntimeError.credentialWriteFailed
+    }
+}
+
 actor MonitorCredentialVault: MonitorCredentialStore {
     static let shared = MonitorCredentialVault()
 
     private let metadata: MonitorMetadataStore
     private var loadedGenerations: [String: String] = [:]
+    /// 同步后端使读取和 CAS 处于同一个 actor 临界段；测试可替换为内存，不触碰真实钥匙串。
+    nonisolated struct Backend: Sendable {
+        let read: @Sendable (String) -> Data?
+        let save: @Sendable (Data, String) -> Bool
+        let compareAndSwap: @Sendable (Data, String, String) -> Bool
+        let delete: @Sendable (String) -> Void
+        static let live = Backend(
+            read: { KeychainHelper.getMonitorCredential(account: $0) },
+            save: { KeychainHelper.saveMonitorCredential($0, account: $1) },
+            compareAndSwap: { KeychainHelper.compareAndSwapMonitorCredential($0, account: $1, expectedFingerprint: $2) },
+            delete: { KeychainHelper.deleteMonitorCredential(account: $0) }
+        )
+    }
+    private let backend: Backend
 
-    init(metadata: MonitorMetadataStore = .shared) {
+    init(metadata: MonitorMetadataStore = .shared, backend: Backend = .live) {
         self.metadata = metadata
+        self.backend = backend
     }
 
     func accounts() async -> [MonitorAccount] {
@@ -138,7 +162,7 @@ actor MonitorCredentialVault: MonitorCredentialStore {
     }
 
     func credential(for accountID: String) -> MonitorOAuthCredential? {
-        guard let data = KeychainHelper.getMonitorCredential(account: accountID) else { return nil }
+        guard let data = backend.read(accountID) else { return nil }
         loadedGenerations[accountID] = MonitorIdentity.fingerprint(data.base64EncodedString())
         return try? JSONDecoder().decode(MonitorOAuthCredential.self, from: data)
     }
@@ -151,13 +175,9 @@ actor MonitorCredentialVault: MonitorCredentialStore {
         let data = try JSONEncoder().encode(credential)
         let saved: Bool
         if let expected = loadedGenerations[account.id] {
-            saved = KeychainHelper.compareAndSwapMonitorCredential(
-                data,
-                account: account.id,
-                expectedFingerprint: expected
-            )
+            saved = backend.compareAndSwap(data, account.id, expected)
         } else {
-            saved = KeychainHelper.saveMonitorCredential(data, account: account.id)
+            saved = backend.save(data, account.id)
         }
         guard saved else {
             throw MonitorRuntimeError.credentialWriteFailed
@@ -167,9 +187,57 @@ actor MonitorCredentialVault: MonitorCredentialStore {
     }
 
     func delete(accountID: String) async {
-        KeychainHelper.deleteMonitorCredential(account: accountID)
+        backend.delete(accountID)
         loadedGenerations.removeValue(forKey: accountID)
         try? await metadata.deleteAccount(accountID)
+    }
+
+    /// 用户删除按账号排序，另一账号的变更不会取消本次删除；同账号较新的重加仍可使其失效。
+    func delete(accountID: String, revision: UInt64, state: MonitorStateRevision) async {
+        state.withCurrent(revision, accountID: accountID) {
+            backend.delete(accountID)
+            loadedGenerations.removeValue(forKey: accountID)
+        }
+        try? await metadata.deleteAccount(accountID, revision: revision, state: state)
+    }
+
+    /// 刷新只能替换仍存在且没有被重授权的原凭据，不能走主动添加账号的新增路径。
+    /// 检查、CAS 和世代更新之间没有挂起点；不重写账号元数据，避免删除期间再次创建账号行。
+    func saveRefreshed(_ credential: MonitorOAuthCredential, replacing expected: MonitorOAuthCredential, accountID: String) async throws {
+        guard let currentData = backend.read(accountID),
+              let current = try? JSONDecoder().decode(MonitorOAuthCredential.self, from: currentData),
+              current == expected else { throw MonitorRuntimeError.credentialWriteFailed }
+        let data = try JSONEncoder().encode(credential)
+        guard backend.compareAndSwap(
+            data, accountID, MonitorIdentity.fingerprint(currentData.base64EncodedString())
+        ) else { throw MonitorRuntimeError.credentialWriteFailed }
+        loadedGenerations[accountID] = MonitorIdentity.fingerprint(data.base64EncodedString())
+    }
+}
+
+/// 删除、禁用、重加与模式切换共用同步世代。MainActor 在首次挂起前即可使所有旧任务失效。
+/// 锁同时保护磁盘提交边界，保证“检查仍有效”和实际写入之间不会插入删除操作。
+nonisolated final class MonitorStateRevision: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    private var accountVersions: [String: UInt64] = [:]
+    var current: UInt64 { lock.withLock { value } }
+    /// 全局世代使旧刷新失效；账号世代只排列同一账号的用户命令，避免连续操作不同账号丢失。
+    @discardableResult func advance(accountID: String? = nil) -> UInt64 {
+        lock.withLock {
+            value += 1
+            if let accountID { accountVersions[accountID] = value }
+            return value
+        }
+    }
+    func isCurrent(_ expected: UInt64, accountID: String) -> Bool {
+        lock.withLock { (accountVersions[accountID] ?? 0) <= expected }
+    }
+    func withCurrent(_ expected: UInt64, accountID: String? = nil, _ operation: () -> Void) {
+        lock.withLock {
+            let valid = accountID.map { (accountVersions[$0] ?? 0) <= expected } ?? (value == expected)
+            if valid { operation() }
+        }
     }
 }
 
@@ -198,7 +266,17 @@ actor MonitorMetadataStore {
         try save(payload)
     }
 
-    func deleteAccount(_ accountID: String) throws {
+    func deleteAccount(_ accountID: String, revision: UInt64? = nil, state: MonitorStateRevision? = nil) throws {
+        if let revision, let state {
+            var failure: Error?
+            state.withCurrent(revision, accountID: accountID) {
+                do { try removeAccount(accountID) } catch { failure = error }
+            }
+            if let failure { throw failure }
+        } else { try removeAccount(accountID) }
+    }
+
+    private func removeAccount(_ accountID: String) throws {
         var payload = load()
         payload.accounts.removeAll { $0.id == accountID }
         payload.disabledAccountIDs.remove(accountID)
@@ -206,9 +284,26 @@ actor MonitorMetadataStore {
     }
 
     func setDisabled(_ disabled: Bool, accountID: String) throws {
+        try setDisabled(disabled, accountIDs: [accountID])
+    }
+
+    /// 多来源账号的禁用标记一次落盘；快速禁用再启用时，过期操作不能覆盖较新的选择。
+    func setDisabled(_ disabled: Bool, accountIDs: Set<String>, revision: UInt64? = nil, state: MonitorStateRevision? = nil, mutationAccountID: String? = nil) throws {
+        if let revision, let state {
+            var failure: Error?
+            state.withCurrent(revision, accountID: mutationAccountID) {
+                do { try updateDisabled(disabled, accountIDs: accountIDs) } catch { failure = error }
+            }
+            if let failure { throw failure }
+        } else {
+            try updateDisabled(disabled, accountIDs: accountIDs)
+        }
+    }
+
+    private func updateDisabled(_ disabled: Bool, accountIDs: Set<String>) throws {
         var payload = load()
-        if disabled { payload.disabledAccountIDs.insert(accountID) }
-        else { payload.disabledAccountIDs.remove(accountID) }
+        if disabled { payload.disabledAccountIDs.formUnion(accountIDs) }
+        else { payload.disabledAccountIDs.subtract(accountIDs) }
         try save(payload)
     }
 
@@ -272,7 +367,15 @@ actor MonitorSnapshotStore {
         }
     }
 
-    func store(_ quotas: [AIProvider: [String: ProviderQuotaData]]) {
+    func store(_ quotas: [AIProvider: [String: ProviderQuotaData]], revision: UInt64? = nil, state: MonitorStateRevision? = nil) {
+        if let revision, let state {
+            state.withCurrent(revision) { write(quotas) }
+        } else {
+            write(quotas)
+        }
+    }
+
+    private func write(_ quotas: [AIProvider: [String: ProviderQuotaData]]) {
         let encoded = quotas.reduce(into: [String: [String: ProviderQuotaData]]()) {
             $0[$1.key.rawValue] = $1.value
         }
@@ -294,7 +397,16 @@ actor MonitorSnapshotStore {
     ///
     /// - Returns: `true` when an entry was found and the file was rewritten.
     @discardableResult
-    func removeAccount(provider: AIProvider, accountKey: String) -> Bool {
+    func removeAccount(provider: AIProvider, accountKey: String, revision: UInt64? = nil, state: MonitorStateRevision? = nil, mutationAccountID: String? = nil) -> Bool {
+        if let revision, let state {
+            var removed = false
+            state.withCurrent(revision, accountID: mutationAccountID) { removed = removeAccountFromDisk(provider: provider, accountKey: accountKey) }
+            return removed
+        }
+        return removeAccountFromDisk(provider: provider, accountKey: accountKey)
+    }
+
+    private func removeAccountFromDisk(provider: AIProvider, accountKey: String) -> Bool {
         var quotas = load()
         guard var accountQuotas = quotas[provider] else { return false }
 
@@ -315,7 +427,7 @@ actor MonitorSnapshotStore {
         } else {
             quotas[provider] = accountQuotas
         }
-        store(quotas)
+        write(quotas)
         return true
     }
 }
@@ -324,15 +436,18 @@ actor MonitorAccountDiscovery {
     private let vault: MonitorCredentialStore
     private let directAuthService: DirectAuthFileService
     private let metadata: MonitorMetadataStore
+    private let codexFetcher: CodexCLIQuotaFetcher
 
     init(
         vault: MonitorCredentialStore = MonitorCredentialVault.shared,
         directAuthService: DirectAuthFileService = DirectAuthFileService(),
-        metadata: MonitorMetadataStore = .shared
+        metadata: MonitorMetadataStore = .shared,
+        codexFetcher: CodexCLIQuotaFetcher? = nil
     ) {
         self.vault = vault
         self.directAuthService = directAuthService
         self.metadata = metadata
+        self.codexFetcher = codexFetcher ?? CodexCLIQuotaFetcher(vault: vault, metadata: metadata)
     }
 
     func discover() async -> [MonitorAccount] {
@@ -343,6 +458,9 @@ actor MonitorAccountDiscovery {
         candidates.append(contentsOf: discoverNativeKeychains(codexAliases: codexAliases))
         let legacy = legacyFiles.map(MonitorAccount.makeLegacy)
         candidates.append(contentsOf: legacy)
+        // Codex 统一按实际凭据 account ID 归并，并保留源 ID、删除权限和所有来源的禁用状态。
+        candidates.removeAll { $0.provider == .codex }
+        candidates.append(contentsOf: await codexFetcher.monitorCredentialGroups().map(\.account))
 
         let disabled = await metadata.disabledAccountIDs()
         return Self.selectPreferred(candidates, disabledIDs: disabled)
@@ -354,7 +472,7 @@ actor MonitorAccountDiscovery {
     ) -> [MonitorAccount] {
         var selected: [String: MonitorAccount] = [:]
         for var account in candidates {
-            account.isDisabled = disabledIDs.contains(account.id)
+            account.isDisabled = account.isDisabled || disabledIDs.contains(account.id)
             let key = account.deduplicationKey
             if let existing = selected[key], existing.source.priority >= account.source.priority {
                 continue
@@ -431,8 +549,23 @@ actor MonitorAccountDiscovery {
         return result
     }
 
-    func setDisabled(_ disabled: Bool, accountID: String) async {
-        try? await metadata.setDisabled(disabled, accountID: accountID)
+    func setDisabled(_ disabled: Bool, accountID: String, revision: UInt64? = nil, state: MonitorStateRevision? = nil, mutationAccountID: String? = nil) async {
+        if let group = await codexFetcher.monitorCredentialGroups().first(where: { $0.account.id == accountID }) {
+            // 同一逻辑账号的禁用变更一次提交，重新启用也不会遗留隐藏来源的禁用标记。
+            // 新禁用只写稳定身份，不能留下会在邮箱消歧后误禁用另一账号的邮箱标记。
+            // 启用则同时清理旧版原始 ID，包括当前有歧义的邮箱，防止拓扑恢复后旧禁用回流。
+            var ids: Set<String> = [group.stableDisabledID]
+            if !disabled {
+                ids.formUnion(group.sources.map { $0.account.id })
+                // 来源从原生变为自有后主标识会变化，同时清理之前按 account ID 保存的稳定标记。
+                ids.formUnion(group.sources.map { CodexMonitorGroup.disabledID(for: $0.identity) })
+                ids.insert(group.account.id)
+                ids.insert(MonitorAccount.make(provider: .codex, accountKey: group.account.accountKey, source: group.account.source).id)
+            }
+            try? await metadata.setDisabled(disabled, accountIDs: ids, revision: revision, state: state, mutationAccountID: mutationAccountID ?? accountID)
+            return
+        }
+        try? await metadata.setDisabled(disabled, accountIDs: [accountID], revision: revision, state: state, mutationAccountID: mutationAccountID ?? accountID)
     }
 
     func disabledAccountIDs() async -> Set<String> {
@@ -588,11 +721,22 @@ actor MonitorAccountDiscovery {
 }
 
 actor MonitorRefreshCoordinator {
+    nonisolated let revision = MonitorStateRevision()
     private let discovery: MonitorAccountDiscovery
     private let snapshots: MonitorSnapshotStore
-    private var inFlight: [AIProvider: Task<[String: ProviderQuotaData], Never>] = [:]
+    private struct Flight {
+        let id: UUID
+        let revision: UInt64
+        let task: Task<[String: ProviderQuotaData], Never>
+    }
+    private var inFlight: [AIProvider: Flight] = [:]
     private var retryAfter: [AIProvider: Date] = [:]
     private(set) var issues: [AIProvider: MonitorRefreshIssue] = [:]
+    #if DEBUG
+    /// 在等待网络结果前触发，测试用它确定多个等待者都已经进入同一轮刷新。
+    private var waiterHookForTesting: (@Sendable () -> Void)?
+    func setWaiterHookForTesting(_ hook: (@Sendable () -> Void)?) { waiterHookForTesting = hook }
+    #endif
 
     /// Generic account keys that represent the same underlying login as a more
     /// specific, higher-priority credential for the same provider (e.g. a
@@ -716,19 +860,30 @@ actor MonitorRefreshCoordinator {
         force: Bool,
         previous: [String: ProviderQuotaData],
         credentialAvailability: MonitorCredentialAvailability = .unknown,
+        credentialAccountKeys: Set<String>? = nil,
         operation: @escaping @Sendable () async -> [String: ProviderQuotaData]
     ) async -> [String: ProviderQuotaData] {
+        let generation = revision.current
+        // nil 表示无法完整枚举身份；空集合表示确认无可用凭据，不能把请求失败误当成删除。
+        let previous = previous.filter { credentialAccountKeys?.contains($0.key) ?? true }
         if !force, let retry = retryAfter[provider], retry > Date() {
             return previous
         }
-        if let task = inFlight[provider] {
-            return await task.value
+        let flight: Flight
+        if let existing = inFlight[provider], existing.revision == generation {
+            flight = existing
+        } else {
+            flight = Flight(id: UUID(), revision: generation, task: Task { await operation() })
+            inFlight[provider] = flight
         }
-
-        let task = Task { await operation() }
-        inFlight[provider] = task
-        let fresh = await task.value
-        inFlight[provider] = nil
+        #if DEBUG
+        waiterHookForTesting?()
+        #endif
+        let fetched = await flight.task.value
+        // 所有等待者执行相同的世代检查，旧任务也不能清除后来启动的新任务登记。
+        guard revision.current == generation, !Task.isCancelled else { return [:] }
+        if inFlight[provider]?.id == flight.id { inFlight[provider] = nil }
+        let fresh = fetched.filter { credentialAccountKeys?.contains($0.key) ?? true }
 
         if fresh.isEmpty, credentialAvailability == .missing {
             issues.removeValue(forKey: provider)
@@ -748,7 +903,7 @@ actor MonitorRefreshCoordinator {
         if !fresh.isEmpty {
             var merged = previous
             merged.merge(fresh) { _, new in new }
-            if fresh.count < previous.count {
+            if !(credentialAccountKeys ?? Set(previous.keys)).subtracting(fresh.keys).isEmpty {
                 issues[provider] = MonitorRefreshIssue(
                     message: "monitor.refresh.partial".localizedStatic(),
                     occurredAt: Date()
@@ -766,8 +921,10 @@ actor MonitorRefreshCoordinator {
         return fresh
     }
 
-    func finish(quotas: [AIProvider: [String: ProviderQuotaData]]) async {
-        await snapshots.store(quotas)
+    func finish(quotas: [AIProvider: [String: ProviderQuotaData]], revision expected: UInt64? = nil) async {
+        // 调用方在捕获 quotas 的同一个同步段捕获世代；不能等存储 actor 收到调用才生成版本。
+        let expected = expected ?? revision.current
+        await snapshots.store(quotas, revision: expected, state: revision)
     }
 
     /// Forget every Monitor-owned trace of a single account: its persisted snapshot
@@ -779,9 +936,7 @@ actor MonitorRefreshCoordinator {
     /// Trae has to run in every mode: the account row is shown outside Monitor mode, but
     /// `bootstrap()` reads the snapshot back when Monitor mode is entered, which would
     /// otherwise resurrect the deleted account (issue #213).
-    func forgetSnapshotAccount(provider: AIProvider, accountKey: String) async {
-        await snapshots.removeAccount(provider: provider, accountKey: accountKey)
-
+    func forgetSnapshotAccount(provider: AIProvider, accountKey: String, revision expected: UInt64? = nil, mutationAccountID: String? = nil) async {
         // `MonitorAccount.make` derives the id from provider + normalized account key, so
         // this resolves the same id the Monitor row used when it was disabled.
         let accountID = MonitorAccount.make(
@@ -789,20 +944,25 @@ actor MonitorRefreshCoordinator {
             accountKey: accountKey,
             source: .localIDE
         ).id
-        guard await discovery.disabledAccountIDs().contains(accountID) else { return }
-        await discovery.setDisabled(false, accountID: accountID)
+        let mutationID = mutationAccountID ?? accountID
+        let generation = expected ?? revision.advance(accountID: mutationID)
+        await snapshots.removeAccount(provider: provider, accountKey: accountKey, revision: generation, state: revision, mutationAccountID: mutationID)
+        guard await discovery.disabledAccountIDs().contains(accountID), revision.isCurrent(generation, accountID: mutationID) else { return }
+        await discovery.setDisabled(false, accountID: accountID, revision: generation, state: revision, mutationAccountID: mutationID)
     }
 
     func currentIssues() -> [AIProvider: MonitorRefreshIssue] {
         issues
     }
 
-    func setDisabled(_ disabled: Bool, accountID: String) async {
-        await discovery.setDisabled(disabled, accountID: accountID)
+    func setDisabled(_ disabled: Bool, accountID: String, revision expected: UInt64? = nil) async {
+        let generation = expected ?? revision.advance(accountID: accountID)
+        await discovery.setDisabled(disabled, accountID: accountID, revision: generation, state: revision)
     }
 
-    func deleteOwnedAccount(accountID: String) async {
-        await MonitorCredentialVault.shared.delete(accountID: accountID)
+    func deleteOwnedAccount(accountID: String, revision expected: UInt64? = nil) async {
+        let generation = expected ?? revision.advance(accountID: accountID)
+        await MonitorCredentialVault.shared.delete(accountID: accountID, revision: generation, state: revision)
     }
 }
 

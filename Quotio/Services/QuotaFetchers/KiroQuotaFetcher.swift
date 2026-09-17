@@ -81,6 +81,20 @@ actor KiroQuotaFetcher {
         "https://q.\(region).amazonaws.com/getUsageLimits"
     }
 
+    /// 上游 883878a：region 参与携带凭据的 URL 主机拼接，仅允许 AWS 区域标识字符。
+    /// 拒绝点、斜线、@ 和空片段，避免损坏的凭据元数据改变请求目标。
+    nonisolated static func validatedRegion(_ value: String) -> String? {
+        let region = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = region.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count >= 3, parts[0].count == 2,
+              parts[0].utf8.allSatisfy({ $0 >= 97 && $0 <= 122 }),
+              parts.dropFirst().dropLast().allSatisfy({ part in
+                  !part.isEmpty && part.utf8.allSatisfy { ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) }
+              }), let suffix = parts.last, !suffix.isEmpty,
+              suffix.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) else { return nil }
+        return region
+    }
+
     /// Extract region from profileArn (format: arn:aws:codewhisperer:{region}:...)
     private func extractRegionFromProfileArn(_ profileArn: String?) -> String? {
         guard let arn = profileArn, !arn.isEmpty else { return nil }
@@ -89,7 +103,7 @@ actor KiroQuotaFetcher {
               parts[0] == "arn",
               parts[2] == "codewhisperer",
               parts[3].contains("-") else { return nil }
-        return String(parts[3])
+        return Self.validatedRegion(String(parts[3]))
     }
 
     // Kiro IDE version for User-Agent — keep in sync with Kiro releases
@@ -209,7 +223,7 @@ actor KiroQuotaFetcher {
                 guard await refreshOwnedCredential(&credential, account: account) else { return nil }
             }
             var tokenData = ownedTokenData(credential)
-            let region = credential.extra["region"] ?? defaultRegion
+            guard let region = Self.validatedRegion(credential.extra["region"] ?? defaultRegion) else { return nil }
             var response = await fetchUsageAPI(
                 token: credential.accessToken,
                 tokenExpiresAt: credential.expiresAt,
@@ -257,10 +271,11 @@ actor KiroQuotaFetcher {
         _ credential: inout MonitorOAuthCredential,
         account: MonitorAccount
     ) async -> Bool {
+        let originalCredential = credential
         guard let refreshToken = credential.refreshToken,
               let clientID = credential.extra["clientId"],
               let clientSecret = credential.extra["clientSecret"] else { return false }
-        let region = credential.extra["region"] ?? defaultRegion
+        guard let region = Self.validatedRegion(credential.extra["region"] ?? defaultRegion) else { return false }
         guard let url = URL(string: idcTokenEndpoint(region: region)) else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -279,7 +294,7 @@ actor KiroQuotaFetcher {
         credential.refreshToken = token.refreshToken ?? refreshToken
         credential.expiresAt = Date().addingTimeInterval(TimeInterval(token.expiresIn))
         do {
-            try await MonitorCredentialVault.shared.save(credential, metadata: account)
+            try await MonitorCredentialVault.shared.saveRefreshed(credential, replacing: originalCredential, accountID: account.id)
             return true
         } catch {
             return false
@@ -489,7 +504,8 @@ actor KiroQuotaFetcher {
     }
 
     private func fetchUsageAPI(token: String, tokenExpiresAt: Date?, profileArn: String?, region: String, tokenData: AuthTokenData) async -> UsageAPIResult {
-        guard var components = URLComponents(string: usageEndpoint(region: region)) else {
+        guard let region = Self.validatedRegion(region),
+              var components = URLComponents(string: usageEndpoint(region: region)) else {
             return UsageAPIResult(statusCode: 0, quotaData: ProviderQuotaData(
                 models: [ModelQuota(name: "Error", percentage: 0, resetTime: "Invalid URL")],
                 lastUpdated: Date(), isForbidden: false, planType: "Error", tokenExpiresAt: tokenExpiresAt
@@ -604,6 +620,7 @@ actor KiroQuotaFetcher {
     }
 
     private func refreshSocialTokenWithExpiry(refreshToken: String, region: String, filePath: String) async -> (String, Date?)? {
+        guard let region = Self.validatedRegion(region) else { return nil }
         let endpoint = socialTokenEndpoint(region: region)
         guard let url = URL(string: endpoint) else {
             return nil
@@ -661,7 +678,7 @@ actor KiroQuotaFetcher {
         }
         
         // Use region from token data, fallback to us-east-1
-        let region = tokenData.extras?["region"] ?? defaultRegion
+        guard let region = Self.validatedRegion(tokenData.extras?["region"] ?? defaultRegion) else { return nil }
         let endpoint = idcTokenEndpoint(region: region)
         
         guard let url = URL(string: endpoint) else {

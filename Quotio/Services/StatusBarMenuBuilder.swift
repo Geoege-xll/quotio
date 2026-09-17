@@ -13,6 +13,68 @@
 import AppKit
 import SwiftUI
 
+// 上游 73c383e：保持菜单项身份稳定，使提供商筛选不会关闭菜单。
+@MainActor
+@Observable
+final class StatusBarProviderFilterController {
+    enum Scope {
+        case provider(AIProvider)
+        case allProvidersOnly
+    }
+
+    var selectedProvider: AIProvider?
+
+    @ObservationIgnored private weak var menu: NSMenu?
+    @ObservationIgnored private var scopes: [ObjectIdentifier: Scope] = [:]
+    @ObservationIgnored private let onSelectionChanged: (AIProvider?) -> Void
+
+    init(
+        selectedProvider: AIProvider?,
+        onSelectionChanged: @escaping (AIProvider?) -> Void
+    ) {
+        self.selectedProvider = selectedProvider
+        self.onSelectionChanged = onSelectionChanged
+    }
+
+    /// 预先登记菜单项的筛选范围，切换提供商时只修改可见性，保留 AppKit 跟踪状态。
+    func register(_ item: NSMenuItem, scope: Scope) {
+        scopes[ObjectIdentifier(item)] = scope
+        item.isHidden = !isVisible(scope)
+    }
+
+    /// 菜单构建后会把项目搬到状态栏的实际菜单，必须重新绑定最终容器。
+    func activate(in menu: NSMenu) {
+        self.menu = menu
+        applySelection()
+    }
+
+    func select(_ provider: AIProvider?) {
+        guard selectedProvider != provider else { return }
+        selectedProvider = provider
+        applySelection()
+        onSelectionChanged(provider)
+    }
+
+    /// 不删除或重建 NSMenuItem，避免 SwiftUI 按钮点击过程中菜单被 AppKit 关闭。
+    private func applySelection() {
+        guard let menu else { return }
+        for item in menu.items {
+            guard let scope = scopes[ObjectIdentifier(item)] else { continue }
+            item.isHidden = !isVisible(scope)
+        }
+        menu.update()
+    }
+
+    private func isVisible(_ scope: Scope) -> Bool {
+        switch scope {
+        case .provider(let provider):
+            selectedProvider == nil || selectedProvider == provider
+        case .allProvidersOnly:
+            selectedProvider == nil
+        }
+    }
+}
+
 // MARK: - Status Bar Menu Builder
 
 @MainActor
@@ -21,6 +83,7 @@ final class StatusBarMenuBuilder {
     private let viewModel: QuotaViewModel
     private let modeManager = OperatingModeManager.shared
     private let menuWidth: CGFloat = 360
+    private var providerFilterController: StatusBarProviderFilterController?
     private let agentDetectionService = AgentDetectionService()
     
     // Cached agent statuses for filtering
@@ -39,6 +102,7 @@ final class StatusBarMenuBuilder {
     
     func buildMenu() -> NSMenu {
         let menu = makeMenu()
+        providerFilterController = nil
 
         // 1. Header
         menu.addItem(buildHeaderItem())
@@ -53,42 +117,41 @@ final class StatusBarMenuBuilder {
         // 3. Provider picker and account groups
         let providers = providersWithData
         if !providers.isEmpty {
-            let pickerView = MenuProviderPickerView(
-                providers: providers,
-                onProviderChanged: {
-                    StatusBarManager.shared.rebuildMenuInPlace()
+            let controller = StatusBarProviderFilterController(
+                selectedProvider: selectedProvider(from: providers),
+                onSelectionChanged: { provider in
+                    UserDefaults.standard.set(provider?.rawValue ?? "", forKey: "menuBarSelectedProvider")
                 }
             )
+            providerFilterController = controller
+            let pickerView = MenuProviderPickerView(providers: providers, controller: controller)
             menu.addItem(viewItem(for: pickerView))
             menu.addItem(NSMenuItem.separator())
 
-            let visibleProviders = visibleProviders(from: providers)
-            let showsProviderHeaders = selectedProvider(from: providers) == nil
-            for (index, provider) in visibleProviders.enumerated() {
+            // 所有提供商的卡片只构建一次；组标题和分隔线仅在“全部”筛选下显示。
+            for (index, provider) in providers.enumerated() {
+                let header = viewItem(for: MenuProviderSectionHeader(provider: provider))
+                controller.register(header, scope: .allProvidersOnly)
+                menu.addItem(header)
                 let accounts = accountsForProvider(provider)
-
-                if showsProviderHeaders {
-                    let headerView = MenuProviderSectionHeader(provider: provider)
-                    menu.addItem(viewItem(for: headerView))
-                }
-
                 if accounts.isEmpty {
-                    menu.addItem(buildEmptyStateItem())
+                    let empty = buildEmptyStateItem()
+                    controller.register(empty, scope: .provider(provider))
+                    menu.addItem(empty)
                 } else {
                     for account in accounts {
-                        let cardItem = buildAccountCardItem(
-                            accountKey: account.accountKey,
-                            email: account.email,
-                            data: account.data,
-                            provider: provider
+                        let item = buildAccountCardItem(
+                            accountKey: account.accountKey, email: account.email,
+                            data: account.data, provider: provider
                         )
-                        menu.addItem(cardItem)
+                        controller.register(item, scope: .provider(provider))
+                        menu.addItem(item)
                     }
                 }
-
-                // Separator between provider groups (not after the last one)
-                if index < visibleProviders.count - 1 {
-                    menu.addItem(NSMenuItem.separator())
+                if index < providers.count - 1 {
+                    let separator = NSMenuItem.separator()
+                    controller.register(separator, scope: .allProvidersOnly)
+                    menu.addItem(separator)
                 }
             }
 
@@ -103,7 +166,12 @@ final class StatusBarMenuBuilder {
             menu.addItem(item)
         }
         
+        activateProviderFilter(in: menu)
         return menu
+    }
+
+    func activateProviderFilter(in menu: NSMenu) {
+        providerFilterController?.activate(in: menu)
     }
     
     // MARK: - Data Helpers
@@ -211,13 +279,6 @@ final class StatusBarMenuBuilder {
             return nil
         }
         return provider
-    }
-
-    private func visibleProviders(from providers: [AIProvider]) -> [AIProvider] {
-        guard let provider = selectedProvider(from: providers) else {
-            return providers
-        }
-        return [provider]
     }
 
     private func accountsForProvider(
@@ -532,35 +593,22 @@ private struct MenuProviderSectionHeader: View {
 // MARK: - Provider Picker View (separate from accounts list)
 
 private struct MenuProviderPickerView: View {
-    @AppStorage("menuBarSelectedProvider") private var selectedProviderRaw: String = ""
-    
     let providers: [AIProvider]
-    let onProviderChanged: () -> Void
-    
-    private var selectedProvider: AIProvider? {
-        if !selectedProviderRaw.isEmpty,
-           let provider = AIProvider(rawValue: selectedProviderRaw),
-           providers.contains(provider) {
-            return provider
-        }
-        return nil
-    }
+    let controller: StatusBarProviderFilterController
     
     var body: some View {
         // Wrap providers in a flexible layout
         FlowLayout(spacing: 6) {
-            AllProviderFilterButton(isSelected: selectedProvider == nil) {
-                selectedProviderRaw = ""
-                onProviderChanged()
+            AllProviderFilterButton(isSelected: controller.selectedProvider == nil) {
+                controller.select(nil)
             }
 
             ForEach(providers) { provider in
                 ProviderFilterButton(
                     provider: provider,
-                    isSelected: selectedProvider == provider
+                    isSelected: controller.selectedProvider == provider
                 ) {
-                    selectedProviderRaw = provider.rawValue
-                    onProviderChanged()
+                    controller.select(provider)
                 }
             }
         }
