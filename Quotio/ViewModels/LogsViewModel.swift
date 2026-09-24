@@ -19,6 +19,7 @@ final class LogsViewModel {
     private(set) var lastUpdated: Date?
     private(set) var revision = 0
     private(set) var usesLegacySnapshot = false
+    private(set) var isFileLoggingEnabled: Bool?
     var errorMessage: String?
 
     // CPA 的无时区日志使用服务本地时间。本页面用于本地代理，按本机时区解释。
@@ -42,12 +43,13 @@ final class LogsViewModel {
     var isConfigured: Bool { apiClient != nil }
 
     /// 服务地址或管理密钥改变时丢弃旧游标，旧请求返回后也不能污染新连接。
-    func configure(baseURL: String, authKey: String) {
+    /// 隔离测试可注入模拟管理客户端，生产调用始终为当前代理创建独立连接。
+    func configure(baseURL: String, authKey: String, client: ManagementAPIClient? = nil) {
         guard apiClient == nil || configuredURL != baseURL || configuredKey != authKey else { return }
         reset()
         configuredURL = baseURL
         configuredKey = authKey
-        apiClient = ManagementAPIClient(baseURL: baseURL, authKey: authKey)
+        apiClient = client ?? ManagementAPIClient(baseURL: baseURL, authKey: authKey)
     }
 
     func refreshLogs() async {
@@ -57,6 +59,16 @@ final class LogsViewModel {
         let requestedCursor = cursor
         defer { isRefreshing = false }
         do {
+            // 日志是否可读以代理的实时配置为准，不能使用与代理设置脱节的本地偏好。
+            // 上游在关闭文件日志时对 /logs 返回 400，因此必须先检查开关再读取。
+            let enabled = try await client.getLoggingToFile()
+            guard !Task.isCancelled, requestGeneration == generation else { return }
+            isFileLoggingEnabled = enabled
+            guard enabled else {
+                clearDisplayedLogsForDisabledFileLogging()
+                return
+            }
+
             let response = try await client.fetchLogs(cursor: requestedCursor, limit: retainedLineLimit)
             guard !Task.isCancelled, requestGeneration == generation else { return }
             let incoming = response.lines ?? []
@@ -81,6 +93,17 @@ final class LogsViewModel {
             cursor = next
             lastUpdated = Date()
             errorMessage = nil
+        } catch APIError.httpError(400) {
+            // 设置页可能恰好在状态检查与读取日志之间关闭文件日志；再次查询以区分
+            // 正常的“未开启”与其它真正的 400 请求错误，不向用户闪烁误导性的错误。
+            guard !Task.isCancelled, requestGeneration == generation else { return }
+            if (try? await client.getLoggingToFile()) == false {
+                guard !Task.isCancelled, requestGeneration == generation else { return }
+                isFileLoggingEnabled = false
+                clearDisplayedLogsForDisabledFileLogging()
+            } else {
+                errorMessage = APIError.httpError(400).localizedDescription
+            }
         } catch {
             guard !Task.isCancelled, requestGeneration == generation else { return }
             errorMessage = error.localizedDescription
@@ -88,7 +111,8 @@ final class LogsViewModel {
     }
 
     func clearLogs() async {
-        guard let client = apiClient, !isRefreshing, !isClearing else { return }
+        guard let client = apiClient, isFileLoggingEnabled == true,
+              !isRefreshing, !isClearing else { return }
         isClearing = true
         let requestGeneration = generation
         defer { isClearing = false }
@@ -116,7 +140,21 @@ final class LogsViewModel {
         lastUpdated = nil
         errorMessage = nil
         usesLegacySnapshot = false
+        isFileLoggingEnabled = nil
         revision += 1
+    }
+
+    /// 关闭文件日志时丢弃旧文件游标；重新开启后必须从新日志文件开始读取。
+    private func clearDisplayedLogsForDisabledFileLogging() {
+        if !rawLines.isEmpty || !logs.isEmpty {
+            rawLines.removeAll()
+            logs.removeAll()
+            revision += 1
+        }
+        cursor = nil
+        usesLegacySnapshot = false
+        lastUpdated = Date()
+        errorMessage = nil
     }
 
     /// 将没有新时间头的续行合并到同一事件，倒序展示时堆栈仍保持原始行序。

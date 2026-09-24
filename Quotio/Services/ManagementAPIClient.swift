@@ -11,6 +11,10 @@ actor ManagementAPIClient {
     private let session: URLSession
     private let sessionDelegate: SessionDelegate
     private let clientId: String
+    /// 停止代理后永久关闭当前客户端；新代理会创建新客户端，不能复用已失效的会话。
+    private var isInvalidated = false
+    /// 请求创建、登记和会话失效均由同一个 actor 串行管理，避免跨执行器创建任务时发生竞态。
+    private var pendingTasks: [UUID: URLSessionDataTask] = [:]
     
     /// Timeout configuration used for this client
     let timeoutConfig: TimeoutConfig
@@ -60,13 +64,14 @@ actor ManagementAPIClient {
     // MARK: - Initialization
     
     /// Initialize for local connection (localhost)
-    init(baseURL: String, authKey: String) {
+    init(baseURL: String, authKey: String, configuration: URLSessionConfiguration = .default) {
         self.baseURL = baseURL
         self.authKey = authKey
         self.clientId = String(UUID().uuidString.prefix(6))
         self.timeoutConfig = .local
         
-        let config = URLSessionConfiguration.default
+        // 复制配置以便隔离测试注入 URLProtocol，同时不修改调用方持有的配置对象。
+        let config = configuration.copy() as! URLSessionConfiguration
         config.timeoutIntervalForRequest = timeoutConfig.requestTimeout
         config.timeoutIntervalForResource = timeoutConfig.resourceTimeout
         config.httpMaximumConnectionsPerHost = 4
@@ -80,11 +85,59 @@ actor ManagementAPIClient {
     }
     
     func invalidate() {
+        guard !isInvalidated else { return }
+        isInvalidated = true
         Self.log("[\(clientId)] Session invalidating...")
         session.invalidateAndCancel()
     }
+
+    /// URLSession 在失效后创建任务会抛出 Objective-C 异常，Swift 的 do/catch 无法捕获。
+    /// 因此在 actor 内同步检查状态并创建 dataTask；不能先检查、再跨执行器调用 data(for:)。
+    /// 已创建的请求由 invalidateAndCancel 取消，调用方取消则只取消属于自己的请求。
+    private func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let id = UUID()
+        defer { pendingTasks[id] = nil }
+        do {
+            let result: (Data, URLResponse) = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    guard !isInvalidated, !Task.isCancelled else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    let task = session.dataTask(with: request) { data, response, error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else if let data, let response {
+                            continuation.resume(returning: (data, response))
+                        } else {
+                            continuation.resume(throwing: APIError.invalidResponse)
+                        }
+                    }
+                    pendingTasks[id] = task
+                    task.resume()
+                }
+            } onCancel: {
+                Task { await self.cancelRequest(id) }
+            }
+            // 完成回调与停止操作可能同时到达；已停止会话的结果不能继续写回界面。
+            try Task.checkCancellation()
+            guard !isInvalidated else { throw CancellationError() }
+            return result
+        } catch {
+            if isInvalidated || Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                throw CancellationError()
+            }
+            throw error
+        }
+    }
+
+    private func cancelRequest(_ id: UUID) {
+        pendingTasks[id]?.cancel()
+    }
     
     private func makeRequest(_ endpoint: String, method: String = "GET", body: Data? = nil, retryCount: Int = 0, contentType: String = "application/json") async throws -> Data {
+        try Task.checkCancellation()
+        guard !isInvalidated else { throw CancellationError() }
         let requestId = String(UUID().uuidString.prefix(6))
         let activeCount = Self.incrementActiveRequests()
         let startTime = Date()
@@ -114,7 +167,7 @@ actor ManagementAPIClient {
         }
         
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw APIError.invalidResponse
@@ -137,7 +190,8 @@ actor ManagementAPIClient {
                 Self.log("[\(clientId)][\(requestId)] RETRYING after \(backoffStr)s (attempt \(retryCount + 1)/\(timeoutConfig.maxRetries))...")
                 
                 // Exponential backoff delay
-                try? await Task.sleep(nanoseconds: UInt64(backoffSeconds * 1_000_000_000))
+                // 取消必须中断退避，不能吞掉 CancellationError 后重新创建网络请求。
+                try await Task.sleep(nanoseconds: UInt64(backoffSeconds * 1_000_000_000))
                 return try await makeRequest(endpoint, method: method, body: body, retryCount: retryCount + 1, contentType: contentType)
             }
             throw APIError.connectionError(error.localizedDescription)
@@ -213,7 +267,7 @@ actor ManagementAPIClient {
         var request = URLRequest(url: url)
         request.setValue("Bearer " + authKey, forHTTPHeaderField: "Authorization")
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await data(for: request)
         guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200...299).contains(response.statusCode) else { throw APIError.httpError(response.statusCode) }
         return try JSONDecoder().decode(UsageQueueBatch.self, from: data)
@@ -370,7 +424,7 @@ actor ManagementAPIClient {
         guard let url = components.url else { throw APIError.invalidURL }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await data(for: request)
         guard let response = response as? HTTPURLResponse, 200...299 ~= response.statusCode,
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = root["data"] as? [[String: Any]] else { throw APIError.invalidResponse }

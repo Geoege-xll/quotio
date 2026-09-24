@@ -319,9 +319,14 @@ final class StatusBarMenuBuilder {
     // MARK: - Network Info Item (Proxy + Tunnel combined)
 
     private func buildNetworkInfoItem() -> NSMenuItem {
+        let proxyManager = viewModel.proxyManager
         let networkView = MenuNetworkInfoView(
-            port: String(viewModel.proxyManager.port),
-            isProxyRunning: viewModel.proxyManager.proxyStatus.running,
+            // 原生菜单只创建一次承载视图；状态必须在 SwiftUI body 中读取，
+            // 才能订阅 Observable 的变化，而不是一直显示打开菜单时的布尔快照。
+            proxyState: {
+                MenuProxyState(port: proxyManager.port, isRunning: proxyManager.proxyStatus.running,
+                               isStarting: proxyManager.isStarting, isStopping: proxyManager.isStopping)
+            },
             onProxyToggle: { [weak viewModel] in
                 Task { await viewModel?.toggleProxy() }
             },
@@ -340,7 +345,7 @@ final class StatusBarMenuBuilder {
                 TunnelManager.shared.copyURLToClipboard()
             }
         )
-        return viewItem(for: networkView)
+        return viewItem(for: networkView, resizesToFitContent: true)
     }
 
     // MARK: - Account Card Item (with submenu for Antigravity)
@@ -456,19 +461,60 @@ final class StatusBarMenuBuilder {
         return menu
     }
     
-    private func viewItem<V: View>(for view: V, width: CGFloat? = nil) -> NSMenuItem {
+    private func viewItem<V: View>(for view: V, width: CGFloat? = nil, resizesToFitContent: Bool = false) -> NSMenuItem {
         let effectiveWidth = width ?? menuWidth
         let appearanceMode = AppearanceManager.shared.appearanceMode
         let rootView = view
             .frame(width: effectiveWidth)
             .environment(viewModel)
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = makeMenuItemHostingView(rootView: rootView, resizesToFitContent: resizesToFitContent)
         hostingView.appearance = appearanceMode.appKitAppearance
         hostingView.setFrameSize(hostingView.intrinsicContentSize)
         
         let item = NSMenuItem()
         item.view = hostingView
         return item
+    }
+}
+
+/// NSMenu 以实际 frame 布局，SwiftUI 内容变化不会自动调整菜单项高度。
+/// 仅动态内容启用测量，并在垂直方向采用理想尺寸，避免旧 frame 压缩新增的行。
+@MainActor
+func makeMenuItemHostingView<Content: View>(rootView: Content, resizesToFitContent: Bool = false) -> NSView {
+    guard resizesToFitContent else { return NSHostingView(rootView: rootView) }
+    let sizeBridge = MenuItemSizeBridge()
+    let measuredView = rootView
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            sizeBridge.scheduleResize(to: size)
+        }
+    let hostingView = NSHostingView(rootView: measuredView)
+    sizeBridge.hostingView = hostingView
+    return hostingView
+}
+
+@MainActor
+private final class MenuItemSizeBridge {
+    // SwiftUI 根视图持有此桥接对象；反向弱引用防止菜单关闭后承载视图无法释放。
+    weak var hostingView: NSView?
+    private var pendingSize: CGSize?
+
+    func scheduleResize(to size: CGSize) {
+        guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return }
+        let alreadyScheduled = pendingSize != nil
+        pendingSize = size
+        guard !alreadyScheduled else { return }
+        // 合并同轮布局通知，并延后修改 AppKit frame，避免在 SwiftUI 布局中递归更新。
+        // common modes 保证菜单展开、事件跟踪期间也能执行尺寸同步。
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let size = self.pendingSize
+                self.pendingSize = nil
+                guard let hostingView = self.hostingView, let size, hostingView.frame.size != size else { return }
+                hostingView.setFrameSize(size)
+            }
+        }
     }
 }
 
@@ -708,9 +754,24 @@ private struct ProviderIconMono: View {
 
 // MARK: - Network Info View (Proxy + Tunnel Combined)
 
-private struct MenuNetworkInfoView: View {
-    let port: String
-    let isProxyRunning: Bool
+/// 菜单代理行的只读呈现状态。通过读取闭包在 body 内取值，让运行中、启停中和端口
+/// 都跟随实际服务更新；闭包也允许用隔离状态验证菜单，不启动真实服务或访问钥匙串。
+struct MenuProxyState {
+    let port: UInt16
+    let isRunning: Bool
+    var isStarting = false
+    var isStopping = false
+
+    var isBusy: Bool { isStarting || isStopping }
+    var actionKey: String {
+        if isStopping { return "runtime.stopping" }
+        if isStarting { return "runtime.starting" }
+        return isRunning ? "action.stopProxy" : "action.startProxy"
+    }
+}
+
+struct MenuNetworkInfoView: View {
+    let proxyState: () -> MenuProxyState
     let onProxyToggle: () -> Void
     let onCopyProxyURL: () -> Void
     let onTunnelToggle: () -> Void
@@ -719,7 +780,6 @@ private struct MenuNetworkInfoView: View {
     private let tunnelManager = TunnelManager.shared
     private var tunnelStatus: CloudflareTunnelStatus { tunnelManager.tunnelState.status }
     private var tunnelURL: String? { tunnelManager.tunnelState.publicURL }
-    private var proxyURL: String { "http://127.0.0.1:" + port }
 
     @State private var didCopyProxy = false
     @State private var didCopyTunnel = false
@@ -730,6 +790,10 @@ private struct MenuNetworkInfoView: View {
     }
 
     var body: some View {
+        // 这里读取代理的可观察属性，使原 NSMenuItem 中的图标、提示和禁用状态原位更新。
+        let proxy = proxyState()
+        let isProxyRunning = proxy.isRunning
+        let proxyURL = "http://127.0.0.1:\(proxy.port)"
         VStack(spacing: 8) {
             // Proxy Row
             HStack(spacing: 8) {
@@ -747,6 +811,7 @@ private struct MenuNetworkInfoView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .accessibilityIdentifier("menubar.proxy.endpoint")
 
                     copyButton(
                         isCopied: didCopyProxy,
@@ -760,11 +825,19 @@ private struct MenuNetworkInfoView: View {
                 Spacer()
 
                 Button(action: onProxyToggle) {
-                    Image(systemName: isProxyRunning ? "stop.fill" : "play.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(isProxyRunning ? .red : .green)
+                    if proxy.isBusy {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: isProxyRunning ? "stop.fill" : "play.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(isProxyRunning ? .red : .green)
+                    }
                 }
                 .buttonStyle(.plain)
+                .disabled(proxy.isBusy)
+                .help(proxy.actionKey.localized())
+                .accessibilityLabel(proxy.actionKey.localized())
+                .accessibilityIdentifier("menubar.proxy.toggle")
             }
 
             // Tunnel Row (only show when proxy is running)

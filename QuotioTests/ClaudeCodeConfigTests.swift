@@ -535,6 +535,25 @@ final class ClaudeCodeConfigTests: XCTestCase {
         XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "provider/reasoning-model[1m]")
     }
 
+    @MainActor
+    func testSelectingSuffixedModelKeepsOneMillionThroughSaveAndReload() async throws {
+        let viewModel = AgentSetupViewModel()
+        viewModel.currentConfiguration = configuration()
+
+        // 模型目录中的后缀也可能是大写；选择器必须将它同步到独立的 1M 开关。
+        viewModel.updateModelSlot(.sonnet, model: "provider/coding-model[1M]")
+        let selected = try XCTUnwrap(viewModel.currentConfiguration)
+        XCTAssertEqual(selected.modelSlots[.sonnet], "provider/coding-model")
+        XCTAssertTrue(selected.usesClaude1MContext(for: .sonnet))
+
+        _ = try await generate(selected)
+        let env = try XCTUnwrap(readSettings()["env"] as? [String: String])
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_SONNET_MODEL"], "provider/coding-model[1m]")
+        let saved = await service.readConfiguration(agent: .claudeCode)
+        XCTAssertEqual(saved?.modelSlots[.sonnet], "provider/coding-model")
+        XCTAssertEqual(saved?.claudeModel1M[.sonnet], true)
+    }
+
     func testReadAdvancedSettingsFallsBackForInvalidValues() async throws {
         try FileManager.default.createDirectory(
             at: settingsURL.deletingLastPathComponent(),

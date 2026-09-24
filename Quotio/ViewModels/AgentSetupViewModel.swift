@@ -207,7 +207,17 @@ final class AgentSetupViewModel {
                 for: slot, modelID: previousModel) == nil {
             currentConfiguration?.claudeModelDisplayNames?.removeValue(forKey: slot)
         }
-        currentConfiguration?.modelSlots[slot] = model
+        if currentConfiguration?.agent == .claudeCode {
+            // 目录或手动选择可能直接给出 model[1m]；将后缀转成该槽的独立开关，
+            // 否则请求 ID 生成时会规范化掉后缀，造成界面选中 1M、实际却写入普通模型。
+            let selected = AgentConfiguration.normalizedClaudeModelID(model)
+            currentConfiguration?.modelSlots[slot] = selected.base
+            if selected.uses1M {
+                currentConfiguration?.claudeModel1M[slot] = true
+            }
+        } else {
+            currentConfiguration?.modelSlots[slot] = model
+        }
     }
 
     func updateModelDisplayName(_ slot: ModelSlot, name: String) {

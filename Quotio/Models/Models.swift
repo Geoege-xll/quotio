@@ -564,7 +564,8 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
     
     var statusColor: Color {
         switch status {
-        case "ready": return disabled ? .gray : .green
+        // 额度页沿用账号管理的语义，active 不能落入默认的灰色状态。
+        case "ready", "active": return disabled ? .gray : .green
         case "cooling": return .orange
         case "error": return .red
         default: return .gray
@@ -589,6 +590,23 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
         // Already a plain string
         return msg
     }
+
+    /// CPA 会把单个模型的 429 冷却也汇总为认证文件的 error 状态。
+    /// 只有同时确认 HTTP 429 与 QUOTA_EXHAUSTED，并取得上游明确给出的模型名时，
+    /// 才把通用 Error 改写为“模型额度冷却”；其他认证错误仍保留原始状态，避免误报。
+    var quotaCooldownModel: String? {
+        guard status == "error", let statusMessage,
+              let data = statusMessage.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = json["error"] as? [String: Any],
+              error["code"] as? Int == 429,
+              let details = error["details"] as? [[String: Any]],
+              let quotaDetail = details.first(where: { $0["reason"] as? String == "QUOTA_EXHAUSTED" }),
+              let metadata = quotaDetail["metadata"] as? [String: Any],
+              let model = metadata["model"] as? String,
+              !model.isEmpty else { return nil }
+        return model
+    }
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
@@ -598,6 +616,8 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
         hasher.combine(account)
         hasher.combine(disabled)
         hasher.combine(status)
+        // 错误状态不变但上游原因或重试时间变化时，SwiftUI 仍须重新绘制详情。
+        hasher.combine(statusMessage)
     }
 
     static func == (lhs: AuthFile, rhs: AuthFile) -> Bool {
@@ -607,7 +627,8 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
         lhs.email == rhs.email &&
         lhs.account == rhs.account &&
         lhs.disabled == rhs.disabled &&
-        lhs.status == rhs.status
+        lhs.status == rhs.status &&
+        lhs.statusMessage == rhs.statusMessage
     }
 }
 

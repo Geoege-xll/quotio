@@ -197,7 +197,8 @@ final class QuotaViewModel {
     
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var warmupTask: Task<Void, Never>?
-    @ObservationIgnored private var isStartingProxyFlow = false
+    @ObservationIgnored private let proxyStartFlow = ProxyStartFlow()
+    @ObservationIgnored private var proxyRecoveryTask: Task<Void, Never>?
     @ObservationIgnored private var lastLogTimestamp: Int?
     @ObservationIgnored private var isWarmupRunning = false
     @ObservationIgnored private var warmupRunningAccounts: Set<WarmupAccountKey> = []
@@ -248,11 +249,15 @@ final class QuotaViewModel {
     /// Sync local disabled state to backend after proxy starts
     private func syncDisabledStatesToBackend() async {
         guard let client = apiClient else { return }
+        let session = proxyManager.runtimeSessionID
 
         let localDisabled = loadDisabledAuthFiles()
         guard !localDisabled.isEmpty else { return }
 
         for name in localDisabled {
+            // 启停或换客户端后，旧初始化不能继续向新服务同步旧账号状态。
+            guard !Task.isCancelled, apiClient === client,
+                  proxyManager.runtimeSessionID == session, proxyManager.proxyStatus.running else { return }
             // Only sync if this auth file exists
             guard authFiles.contains(where: { $0.name == name }) else { continue }
 
@@ -1539,42 +1544,57 @@ final class QuotaViewModel {
     }
 
     func startProxy() async {
-        guard !isStartingProxyFlow else { return }
-        isStartingProxyFlow = true
+        await proxyStartFlow.run { [self] in
+            errorMessage = nil
+            do {
+                try await proxyManager.start()
+                try Task.checkCancellation()
+                guard proxyManager.proxyStatus.running else { return }
+                let session = proxyManager.runtimeSessionID
+                setupAPIClient()
+                startAutoRefresh()
+                restartWarmupScheduler()
 
-        defer {
-            isStartingProxyFlow = false
-        }
+                await refreshData()
+                try Task.checkCancellation()
+                guard proxyManager.runtimeSessionID == session, proxyManager.proxyStatus.running else { return }
 
-        do {
-            try await proxyManager.start()
-            setupAPIClient()
-            startAutoRefresh()
-            restartWarmupScheduler()
+                // Sync local disabled states to backend after data is loaded
+                await syncDisabledStatesToBackend()
+                try Task.checkCancellation()
+                guard proxyManager.runtimeSessionID == session, proxyManager.proxyStatus.running else { return }
+                await refreshData()
+                try Task.checkCancellation()
+                guard proxyManager.runtimeSessionID == session, proxyManager.proxyStatus.running else { return }
 
-            await refreshData()
+                await runWarmupCycle()
+                try Task.checkCancellation()
+                guard proxyManager.runtimeSessionID == session, proxyManager.proxyStatus.running else { return }
 
-            // Sync local disabled states to backend after data is loaded
-            await syncDisabledStatesToBackend()
-            await refreshData()
+                // Check for proxy upgrade (non-blocking, fire-and-forget)
+                Task {
+                    guard !Task.isCancelled, proxyManager.runtimeSessionID == session,
+                          proxyManager.proxyStatus.running else { return }
+                    await checkForProxyUpgrade()
+                }
 
-            await runWarmupCycle()
-
-            // Check for proxy upgrade (non-blocking, fire-and-forget)
-            Task {
-                await checkForProxyUpgrade()
+                let autoStartTunnel = UserDefaults.standard.bool(forKey: "autoStartTunnel")
+                if autoStartTunnel && tunnelManager.installation.isInstalled {
+                    await tunnelManager.startTunnel(port: proxyManager.port)
+                }
+            } catch is CancellationError {
+                // 停止服务属于正常操作，不显示启动错误，也不继续旧初始化。
+            } catch {
+                if !Task.isCancelled { errorMessage = error.localizedDescription }
             }
-
-            let autoStartTunnel = UserDefaults.standard.bool(forKey: "autoStartTunnel")
-            if autoStartTunnel && tunnelManager.installation.isInstalled {
-                await tunnelManager.startTunnel(port: proxyManager.port)
-            }
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
     
     func stopProxy() {
+        // 释放的是这一轮初始化，不能让慢请求、重试或预热阻止下一次启动。
+        proxyStartFlow.cancel()
+        proxyRecoveryTask?.cancel()
+        proxyRecoveryTask = nil
         refreshTask?.cancel()
         refreshTask = nil
 
@@ -1627,8 +1647,10 @@ final class QuotaViewModel {
             
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: intervalNs)
+                guard !Task.isCancelled else { break }
                 
                 await refreshData()
+                guard !Task.isCancelled else { break }
                 
                 if errorMessage != nil {
                     consecutiveFailures += 1
@@ -1651,19 +1673,18 @@ final class QuotaViewModel {
     
     /// Attempt to recover an unresponsive proxy
     private func attemptProxyRecovery() async {
-        // Check if process is still running
-        if proxyManager.proxyStatus.running {
-            // Proxy process is running but not responding - likely hung
-            // Stop and restart
-            refreshTask?.cancel()
-            refreshTask = nil
-
-            Log.quota("Attempting proxy recovery...")
-            await proxyManager.stopAndWait()
-            Log.quota("Proxy recovery stop completed, starting proxy")
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            await startProxy()
+        guard !Task.isCancelled, proxyManager.proxyStatus.running else { return }
+        Log.quota("Attempting proxy recovery...")
+        stopProxy()
+        let session = proxyManager.runtimeSessionID
+        // stopProxy 会取消当前轮询任务。恢复必须由独立任务执行，不能把轮询的取消
+        // 状态传给新启动；同时保留任务引用，让用户随后手动停止仍能取消自动恢复。
+        let recovery = Task { [weak self] in
+            guard let self, !Task.isCancelled, proxyManager.runtimeSessionID == session else { return }
+            await self.startProxy()
         }
+        proxyRecoveryTask = recovery
+        await recovery.value
     }
     
     @ObservationIgnored private var lastQuotaRefresh: Date?
@@ -1674,11 +1695,19 @@ final class QuotaViewModel {
     
     func refreshData(refreshQuotas: Bool = true) async {
         guard let client = apiClient else { return }
+        let session = proxyManager.runtimeSessionID
+        // 请求在挂起期间可能跨越一次停止/重启；只有当前客户端的结果能写回。
+        func isCurrentSession() -> Bool {
+            !Task.isCancelled && apiClient === client && proxyManager.proxyStatus.running
+                && proxyManager.runtimeSessionID == session
+        }
+        guard isCurrentSession() else { return }
         
         do {
             // Serialize requests to avoid connection contention (issue #37)
             // This reduces pressure on the connection pool
             let newAuthFiles = try await client.fetchAuthFiles()
+            guard isCurrentSession() else { return }
 
             // Only update timestamp if auth files actually changed (account added/removed)
             let oldNames = Set(self.authFiles.map { $0.name })
@@ -1690,7 +1719,9 @@ final class QuotaViewModel {
             self.authFiles = newAuthFiles
 
             // 用量队列由独立服务采集；配额刷新不能二次消费，也不因旧 /usage 的 404 隐藏数据。
-            self.apiKeys = try await client.fetchAPIKeys()
+            let newAPIKeys = try await client.fetchAPIKeys()
+            guard isCurrentSession() else { return }
+            self.apiKeys = newAPIKeys
             
             // Clear any previous error on success
             errorMessage = nil
@@ -1713,7 +1744,7 @@ final class QuotaViewModel {
                 }
             }
         } catch {
-            if !Task.isCancelled {
+            if isCurrentSession(), !(error is CancellationError) {
                 errorMessage = error.localizedDescription
             }
         }
@@ -2087,10 +2118,17 @@ final class QuotaViewModel {
         let context = refreshContext()
         guard !modeManager.isMonitorMode, proxyManager.proxyStatus.running,
               let apiClient, CPAQuotaFetcher.supports(provider) else { return false }
+        let session = proxyManager.runtimeSessionID
+        // 配额批量刷新可能由独立任务触发；账号/模式世代之外还必须校验代理会话，
+        // 避免停止后的取消错误把旧额度标为失败，或覆盖新服务的账号列表。
+        func canCommitSession() -> Bool {
+            canCommit(context) && !Task.isCancelled && self.apiClient === apiClient
+                && proxyManager.runtimeSessionID == session && proxyManager.proxyStatus.running
+        }
         let fetcher = CPAQuotaFetcher(client: apiClient)
         do {
             let currentFiles = try await apiClient.fetchAuthFiles()
-            guard canCommit(context) else { return true }
+            guard canCommitSession() else { return true }
             // 列表与快照使用同一批 CPA 凭据，避免列表仍拿旧邮箱键而新结果已经改用凭据键。
             authFiles = currentFiles
             let providerFiles = currentFiles.filter { $0.providerType == provider && !$0.disabled }
@@ -2132,7 +2170,7 @@ final class QuotaViewModel {
                     group.addTask { (file.quotaLookupKey, try? await fetcher.fetch(file: file)) }
                 }
                 for await (key, quota) in group {
-                    guard canCommit(context) else { group.cancelAll(); return }
+                    guard canCommitSession() else { group.cancelAll(); return }
                     let id = QuotaAccountID(provider: provider, accountKey: key)
                     if var quota {
                         // 内部键只负责隔离凭据，界面继续显示可读邮箱或账号标签，不泄露认证信息。
@@ -2150,10 +2188,10 @@ final class QuotaViewModel {
                     }
                 }
             }
-            guard canCommit(context) else { return true }
+            guard canCommitSession() else { return true }
             monitorIssues.removeValue(forKey: provider)
         } catch {
-            guard canCommit(context) else { return true }
+            guard canCommitSession(), !(error is CancellationError) else { return true }
             monitorIssues[provider] = MonitorRefreshIssue(message: "monitor.refresh.failed".localized(), occurredAt: Date())
         }
         return true

@@ -83,6 +83,8 @@ final class CLIProxyManager {
     private(set) var isStopping = false
     @ObservationIgnored private var stopTask: Task<Void, Never>?
     private(set) var isStarting = false
+    /// 停止可能发生在旧启动的端口清理期间；下一次启动要等旧流程真正退出。
+    @ObservationIgnored private var startupWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var isDownloading = false
     private(set) var isRegeneratingKey = false
     private(set) var downloadProgress: Double = 0
@@ -762,9 +764,14 @@ final class CLIProxyManager {
     }
     
     func start(resetCrashRecoveryState: Bool = true) async throws {
+        let requestedSession = runtimeSessionID
         // 等待真实端口清理结束，防止旧停止任务误杀新启动的进程。
         if let stopTask { await stopTask.value }
-        guard !isStarting else { return }
+        while isStarting {
+            await withCheckedContinuation { startupWaiters.append($0) }
+        }
+        try Task.checkCancellation()
+        guard requestedSession == runtimeSessionID else { throw CancellationError() }
         guard isBinaryInstalled else {
             throw ProxyError.binaryNotFound
         }
@@ -778,12 +785,20 @@ final class CLIProxyManager {
         
         isStarting = true
         runtimeSessionID = UUID()
+        let startingSession = runtimeSessionID
         lastError = nil
         
-        defer { isStarting = false }
+        defer {
+            isStarting = false
+            let waiters = startupWaiters
+            startupWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
         
         // Clean up any orphan processes from previous runs
         await cleanupOrphanProcesses()
+        try Task.checkCancellation()
+        guard runtimeSessionID == startingSession else { throw CancellationError() }
         
         syncSecretKeyInConfig()
         syncProxyURLInConfig()
@@ -867,6 +882,11 @@ final class CLIProxyManager {
             self.process = process
             
             try await Task.sleep(nanoseconds: 1_500_000_000)
+            // 停止会立即更换会话；旧启动恢复时不能把已停止的服务重新标为运行中。
+            try Task.checkCancellation()
+            guard runtimeSessionID == startingSession, self.process === process else {
+                throw CancellationError()
+            }
             
             guard process.isRunning else {
                 throw ProxyError.startupFailed
@@ -879,22 +899,34 @@ final class CLIProxyManager {
             startHealthMonitor()
             
         } catch {
-            lastError = error.localizedDescription
+            if error is CancellationError {
+                // 调用方取消启动但还未进入 stop 时，也要回收本轮已创建的进程。
+                if self.process === process {
+                    markExpectedTermination(process)
+                    if process.isRunning { process.terminate() }
+                    self.process = nil
+                    proxyStatus.running = false
+                }
+            } else if runtimeSessionID == startingSession {
+                lastError = error.localizedDescription
+            }
             throw error
         }
     }
     
     func stop() {
+        // 即便实际清理尚未结束，每次新的停止意图都必须取消自动恢复，并否决
+        // 正在等待 stopTask 的启动请求；仅底层进程清理需要去重。
+        cancelCrashRestart()
+        runtimeSessionID = UUID()
         guard !isStopping else { return }
         terminateAuthProcess()
         stopHealthMonitor()
-        cancelCrashRestart()
 
         let currentProcess = process
         let port = proxyStatus.port
         markExpectedTermination(currentProcess)
         isStopping = true
-        runtimeSessionID = UUID()
         process = nil
         proxyStatus.running = false
 
@@ -996,6 +1028,8 @@ final class CLIProxyManager {
             do {
                 try await self.start(resetCrashRecoveryState: false)
                 NSLog("[CLIProxyManager] Crash auto-restart successful")
+            } catch is CancellationError {
+                // 用户停止优先于自动恢复，取消不应生成新的重试任务。
             } catch {
                 self.lastError = "Auto-restart failed: \(error.localizedDescription)"
                 NSLog("[CLIProxyManager] Crash auto-restart failed: \(error)")
@@ -1020,16 +1054,14 @@ final class CLIProxyManager {
             break
         }
         
+        let session = runtimeSessionID
         let isHealthy = await compatibilityChecker.isHealthy(
             port: proxyStatus.port,
             managementKey: managementKey
         )
         
         // Re-check state after await - proxy may have been stopped or upgrade may have started
-        guard proxyStatus.running else {
-            healthCheckFailures = 0
-            return
-        }
+        guard !Task.isCancelled, runtimeSessionID == session, proxyStatus.running else { return }
         
         switch managerState {
         case .testing, .promoting, .rollingBack:
@@ -1051,15 +1083,9 @@ final class CLIProxyManager {
                 healthCheckFailures = 0
                 
                 stop()
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                
-                do {
-                    try await start()
-                    NSLog("[CLIProxyManager] Auto-restart successful")
-                } catch {
-                    NSLog("[CLIProxyManager] Auto-restart failed: \(error)")
-                    NotificationManager.shared.notifyProxyCrashed(exitCode: -1)
-                }
+                // stop 会取消正在执行的健康检查。交给独立、可被后续 stop 取消的
+                // 恢复任务处理，不能从已经取消的轮询任务直接重新启动。
+                scheduleCrashRestart(exitCode: -1)
             }
         }
     }

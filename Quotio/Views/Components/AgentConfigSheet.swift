@@ -748,7 +748,10 @@ private struct ClaudeAdvancedSettingsSection: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 44, alignment: .leading)
             }
+            // 两个数值项占用相同的右侧控制列，输入框与单位在各行保持同一位置。
+            .frame(width: 170, alignment: .trailing)
         }
+        .frame(maxWidth: .infinity)
     }
 
     private var autoCompactField: some View {
@@ -772,7 +775,7 @@ private struct ClaudeAdvancedSettingsSection: View {
                 .multilineTextAlignment(.trailing)
                 .font(.system(size: 12, design: .monospaced))
                 .modifier(AgentConfigNumericFieldStyle())
-                .frame(width: 74)
+                .frame(width: 120)
                 .accessibilityLabel("agents.claude.advanced.compaction".localized())
 
                 Text("%")
@@ -780,11 +783,13 @@ private struct ClaudeAdvancedSettingsSection: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 44, alignment: .leading)
             }
+            .frame(width: 170, alignment: .trailing)
         }
+        .frame(maxWidth: .infinity)
     }
 
     private var disableAutoCompactToggle: some View {
-        Toggle(isOn: disableAutoCompactBinding) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("agents.claude.advanced.disableAutoCompact".localized())
                     .font(.subheadline.weight(.medium))
@@ -792,10 +797,18 @@ private struct ClaudeAdvancedSettingsSection: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer(minLength: 8)
+
+            // 标签和开关分开布局，避免系统 Toggle 的固有宽度把开关挤到说明文字旁。
+            Toggle("agents.claude.advanced.disableAutoCompact".localized(), isOn: disableAutoCompactBinding)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .frame(width: 44, alignment: .trailing)
+                .accessibilityHint("agents.claude.advanced.disableAutoCompact.info".localized())
         }
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .accessibilityHint("agents.claude.advanced.disableAutoCompact.info".localized())
+        .frame(maxWidth: .infinity)
     }
 }
 

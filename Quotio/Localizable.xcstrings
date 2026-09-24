@@ -21695,6 +21695,64 @@
         }
       }
     },
+    "quota.modelCooldown" : {
+      "comment" : "上游单个模型额度耗尽时显示的代理账号状态",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model quota cooling down"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quota du modèle en attente"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hạn mức mô hình đang chờ khôi phục"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型额度冷却中"
+          }
+        }
+      }
+    },
+    "quota.modelCooldownFor" : {
+      "comment" : "显示进入额度冷却的上游模型；%@ 为模型标识",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Affected model: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modèle concerné : %@"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mô hình bị ảnh hưởng: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受影响模型：%@"
+          }
+        }
+      }
+    },
     "quota.reauthenticate" : {
       "comment" : "Button label shown when Claude Code token has expired and re-authentication is needed",
       "extractionState" : "stale",

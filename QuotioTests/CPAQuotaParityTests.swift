@@ -59,6 +59,32 @@ final class CPAQuotaParityTests: XCTestCase {
         XCTAssertEqual(metadata.plan, "team")
     }
 
+    /// CPA 对单模型额度耗尽返回账号级 error；页面只能在确认 429 与 QUOTA_EXHAUSTED
+    /// 后解释为模型冷却，且同为 error 的新状态消息也必须触发 SwiftUI 更新。
+    func testAuthFileDistinguishesModelQuotaCooldownFromGenericError() throws {
+        func authFile(statusMessage: String) throws -> AuthFile {
+            let json: [String: Any] = [
+                "name": "antigravity-test.json",
+                "provider": "antigravity",
+                "status": "error",
+                "status_message": statusMessage
+            ]
+            return try JSONDecoder().decode(AuthFile.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+
+        let cooldown = try authFile(statusMessage: #"{"error":{"code":429,"message":"Individual quota reached. Resets in 1h57m.","status":"RESOURCE_EXHAUSTED","details":[{"reason":"QUOTA_EXHAUSTED","metadata":{"model":"gemini-3.8-flash-high"}}]}}"#)
+        XCTAssertEqual(cooldown.quotaCooldownModel, "gemini-3.8-flash-high")
+        XCTAssertEqual(cooldown.humanReadableStatus, "Individual quota reached. Resets in 1h57m.")
+
+        let generic = try authFile(statusMessage: #"{"error":{"code":401,"message":"Authentication expired"}}"#)
+        XCTAssertNil(generic.quotaCooldownModel)
+        XCTAssertNotEqual(cooldown, generic)
+
+        // 同为 429 的普通速率限制不能被误写成模型额度耗尽。
+        let rateLimited = try authFile(statusMessage: #"{"error":{"code":429,"details":[{"reason":"RATE_LIMIT_EXCEEDED","metadata":{"model":"gemini-3.8-flash-high"}}]}}"#)
+        XCTAssertNil(rateLimited.quotaCooldownModel)
+    }
+
     func testCPAUsesExactAuthIndexProjectAndEndpointFallbackWithoutModelDirectory() async throws {
         let log = RequestLog()
         let fetcher = CPAQuotaFetcher(call: { request in

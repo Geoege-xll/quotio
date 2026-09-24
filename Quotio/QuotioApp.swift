@@ -661,7 +661,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct ContentView: View {
     @Environment(QuotaViewModel.self) private var viewModel
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("loggingToFile") private var loggingToFile = true
     @State private var modeManager = OperatingModeManager.shared
     // 这里只注入应用持有的统计状态，侧栏或语言切换不能重新构造引擎。
     let clientUsage: ClientUsageViewModel

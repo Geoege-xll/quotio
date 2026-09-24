@@ -271,13 +271,7 @@ struct ClaudeModelMappingView: View {
 
     // MARK: - Gateway Discovery Toggle
     private var gatewayDiscoveryToggle: some View {
-        Toggle(isOn: Binding(
-            get: { viewModel.currentConfiguration?.claudeGatewayModelDiscovery ?? false },
-            set: {
-                viewModel.updateClaudeGatewayModelDiscovery($0)
-                onOneMillionChange()
-            }
-        )) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("agents.modelMapping.gatewayModels".localized())
                     .font(.caption.weight(.medium))
@@ -286,10 +280,24 @@ struct ClaudeModelMappingView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Spacer(minLength: 8)
+
+            // 与下方高级设置使用同一右侧开关列，长说明不会改变控件的横向位置。
+            Toggle("agents.modelMapping.gatewayModels".localized(), isOn: Binding(
+                get: { viewModel.currentConfiguration?.claudeGatewayModelDiscovery ?? false },
+                set: {
+                    viewModel.updateClaudeGatewayModelDiscovery($0)
+                    onOneMillionChange()
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .frame(width: 44, alignment: .trailing)
+            .accessibilityHint("agents.modelMapping.gatewayModelsInfo".localized())
         }
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .accessibilityHint("agents.modelMapping.gatewayModelsInfo".localized())
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Alias Summaries

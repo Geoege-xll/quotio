@@ -15,12 +15,20 @@ struct QuotaScreen: View {
 
     // MARK: - Data Sources
 
+    /// 认证文件状态只属于正在运行的本地代理。停服或切到监控模式时，额度缓存仍可展示，
+    /// 但不能把上一次代理会话的 error 继续当成当前账号状态。
+    private var activeProxyAuthFiles: [AuthFile] {
+        guard modeManager.currentMode == .localProxy,
+              viewModel.proxyManager.proxyStatus.running else { return [] }
+        return viewModel.authFiles
+    }
+
     /// All providers with quota data (unified from proxy, direct, and monitor sources)
     private var availableProviders: [AIProvider] {
         var providers = Set<AIProvider>()
 
         // From proxy auth files
-        for file in viewModel.authFiles {
+        for file in activeProxyAuthFiles {
             if let provider = file.providerType {
                 providers.insert(provider)
             }
@@ -46,31 +54,24 @@ struct QuotaScreen: View {
 
     /// Get account count for a provider
     private func accountCount(for provider: AIProvider) -> Int {
-        var accounts = Set<String>()
+        let proxyKeys = Set(activeProxyAuthFiles
+            .filter { $0.providerType == provider }.map(\.quotaLookupKey))
+        let directKeys = Set(viewModel.directAuthFiles
+            .filter { $0.provider == provider }.map(\.filename))
+        let monitorKeys = Set(viewModel.monitorAccounts
+            .filter { $0.provider == provider }.map(\.id))
+        let quotaKeys = Set(viewModel.providerQuotas[provider]?.keys.map { $0 } ?? [])
 
-        // From auth files
-        for file in viewModel.authFiles where file.providerType == provider {
-            accounts.insert(file.quotaLookupKey)
-        }
-
-        // From direct auth files
-        for file in viewModel.directAuthFiles where file.provider == provider {
-            accounts.insert(file.filename)
-        }
-
-        // From monitor accounts
-        for account in viewModel.monitorAccounts where account.provider == provider {
-            accounts.insert(account.accountKey)
-        }
-
-        // From quota data
-        if let quotaAccounts = viewModel.providerQuotas[provider] {
-            for key in quotaAccounts.keys {
-                accounts.insert(key)
-            }
-        }
-
-        return accounts.count
+        // 同一凭据在认证文件、监控账号和额度缓存里可能使用不同键；按当前模式选一份
+        // 账号列表作为计数来源，不能合并这些键，否则两个账号会显示成四个。
+        return QuotaAccountCount.count(
+            mode: modeManager.currentMode,
+            proxyRunning: viewModel.proxyManager.proxyStatus.running,
+            proxyKeys: proxyKeys,
+            directKeys: directKeys,
+            monitorKeys: monitorKeys,
+            quotaKeys: quotaKeys
+        )
     }
 
     private func lowestQuotaPercent(for provider: AIProvider) -> Double? {
@@ -89,7 +90,7 @@ struct QuotaScreen: View {
 
     /// Check if we have any data to show
     private var hasAnyData: Bool {
-        !viewModel.authFiles.isEmpty ||
+        !activeProxyAuthFiles.isEmpty ||
         !viewModel.directAuthFiles.isEmpty ||
         !viewModel.monitorAccounts.isEmpty ||
         !viewModel.providerQuotas.isEmpty
@@ -212,7 +213,7 @@ struct QuotaScreen: View {
                 if let provider = selectedProvider ?? availableProviders.first {
                     ProviderQuotaView(
                         provider: provider,
-                        authFiles: viewModel.authFiles.filter { $0.providerType == provider },
+                        authFiles: activeProxyAuthFiles.filter { $0.providerType == provider },
                         quotaData: viewModel.providerQuotas[provider] ?? [:],
                         subscriptionInfos: viewModel.subscriptionInfos[provider] ?? [:],
                         isLoading: viewModel.refreshingProviders.contains(provider)
@@ -262,6 +263,32 @@ struct QuotaScreen: View {
             .padding(.vertical, 2)
         }
         .scrollClipDisabled()
+    }
+}
+
+/// 顶部提供商徽标的账号数只取当前模式的一份账号目录；缓存仅在目录尚未加载时兜底。
+/// 各目录的键空间不同，即使名称相似也不能直接求并集。
+nonisolated enum QuotaAccountCount {
+    static func count(
+        mode: OperatingMode,
+        proxyRunning: Bool,
+        proxyKeys: Set<String>,
+        directKeys: Set<String>,
+        monitorKeys: Set<String>,
+        quotaKeys: Set<String>
+    ) -> Int {
+        let activeKeys: Set<String>
+        switch mode {
+        case .monitor:
+            activeKeys = monitorKeys
+        case .localProxy:
+            activeKeys = proxyRunning ? proxyKeys : directKeys
+        }
+
+        if !activeKeys.isEmpty { return activeKeys.count }
+        if !quotaKeys.isEmpty { return quotaKeys.count }
+        // 切换模式时旧目录可能先于新目录到达；没有额度时仍显示实际已发现的账号。
+        return [proxyKeys, directKeys, monitorKeys].first { !$0.isEmpty }?.count ?? 0
     }
 }
 
@@ -647,14 +674,32 @@ private struct AccountQuotaCardV2: View {
             // 即使刷新失败后继续保留可用缓存，也明确展示失败原因和该缓存的更新时间。
             AccountQuotaFreshnessView(provider: provider, accountKey: account.key, data: account.quotaData)
 
+            // CPA 的模型级 429 也会把认证文件置为 error。即使旧额度仍可显示，
+            // 也必须把具体原因放在对应账号卡上，不能只留下一个红色 Error。
+            if let file = account.authFile,
+               let message = file.humanReadableStatus,
+               file.status == "error" || !hasQuotaData {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: file.status == "error" ? "exclamationmark.triangle.fill" : "info.circle")
+                    VStack(alignment: .leading, spacing: 3) {
+                        if let model = file.quotaCooldownModel {
+                            Text(String(format: "quota.modelCooldownFor".localized(), model))
+                                .fontWeight(.medium)
+                        }
+                        Text(message)
+                            .lineLimit(3)
+                            .help(message)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(file.status == "error" ? Color.orange : Color.secondary)
+                .accessibilityElement(children: .combine)
+            }
+
             if isLoading {
                 QuotaLoadingView()
             } else if hasQuotaData {
                 usageSection
-            } else if let message = account.authFile?.humanReadableStatus {
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
             }
         }
         .quotioCard(cornerRadius: QuotioTheme.Radius.lg, padding: 16)
@@ -690,9 +735,11 @@ private struct AccountQuotaCardV2: View {
                 }
 
                 if account.status != "ready" && account.status != "active" {
-                    Text(account.status.capitalized)
+                    Text(account.authFile?.quotaCooldownModel == nil
+                         ? account.status.capitalized
+                         : "quota.modelCooldown".localized())
                         .font(.caption)
-                        .foregroundStyle(account.statusColor)
+                        .foregroundStyle(account.authFile?.quotaCooldownModel == nil ? account.statusColor : .orange)
                 }
             }
 

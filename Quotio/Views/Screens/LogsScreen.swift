@@ -12,11 +12,9 @@ struct LogsScreen: View {
     @State private var showsClearConfirmation = false
     @State private var hasNewLogs = false
     @State private var copyFeedback: String?
-    @AppStorage("loggingToFile") private var loggingToFile = true
-
     /// 连接身份改变即重启页面轮询，避免沿用旧管理密钥或旧服务的文件游标。
     private var connectionIdentity: String {
-        "\(viewModel.proxyManager.proxyStatus.running)|\(loggingToFile)|\(viewModel.proxyManager.managementURL)|\(viewModel.proxyManager.managementKey)"
+        "\(viewModel.proxyManager.proxyStatus.running)|\(viewModel.proxyManager.managementURL)|\(viewModel.proxyManager.managementKey)"
     }
 
     private var filteredLogs: [LogEntry] {
@@ -41,9 +39,11 @@ struct LogsScreen: View {
                 ProxyRequiredView(description: "logs.startProxy".localized()) {
                     await viewModel.startProxy()
                 }
-            } else if !loggingToFile {
+            } else if logsViewModel.isFileLoggingEnabled == false {
                 ContentUnavailableView("logs.browser.disabled".localized(), systemImage: "doc.text",
                     description: Text("logs.browser.disabledHelp".localized()))
+            } else if logsViewModel.isFileLoggingEnabled == nil && logsViewModel.errorMessage == nil {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 browser
             }
@@ -61,7 +61,7 @@ struct LogsScreen: View {
             Text("logs.browser.clearHelp".localized())
         }
         .task(id: connectionIdentity) {
-            guard viewModel.proxyManager.proxyStatus.running, loggingToFile else {
+            guard viewModel.proxyManager.proxyStatus.running else {
                 logsViewModel.reset()
                 return
             }
@@ -170,7 +170,7 @@ struct LogsScreen: View {
             Button("action.refresh".localized(), systemImage: "arrow.clockwise") {
                 Task { await logsViewModel.refreshLogs() }
             }
-            .disabled(logsViewModel.isRefreshing || logsViewModel.isClearing || !loggingToFile
+            .disabled(logsViewModel.isRefreshing || logsViewModel.isClearing || logsViewModel.isFileLoggingEnabled != true
                       || !viewModel.proxyManager.proxyStatus.running)
             Menu {
                 Button("logs.browser.copyVisible".localized(), systemImage: "doc.on.doc") {
@@ -181,7 +181,7 @@ struct LogsScreen: View {
                 Button("logs.browser.clear".localized(), systemImage: "trash", role: .destructive) {
                     showsClearConfirmation = true
                 }
-                .disabled(logsViewModel.isRefreshing || logsViewModel.isClearing || !loggingToFile
+                .disabled(logsViewModel.isRefreshing || logsViewModel.isClearing || logsViewModel.isFileLoggingEnabled != true
                           || !viewModel.proxyManager.proxyStatus.running)
             } label: {
                 Label("apiKeys.manager.more".localized(), systemImage: "ellipsis.circle")

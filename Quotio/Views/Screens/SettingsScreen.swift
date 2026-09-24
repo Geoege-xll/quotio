@@ -167,7 +167,8 @@ struct ProxySettingsSection: View {
     @State private var switchPreviewModel = true
     @State private var requestRetry = 3
     @State private var maxRetryInterval = 30
-    @State private var loggingToFile = true
+    // 与代理默认配置保持一致；加载完成后以管理 API 返回的实时值覆盖。
+    @State private var loggingToFile = false
     @State private var requestLog = false
     @State private var debugMode = false
     
@@ -376,7 +377,7 @@ struct ProxySettingsSection: View {
             routingStrategy = fetchedStrategy
             requestRetry = config.requestRetry ?? 3
             maxRetryInterval = config.maxRetryInterval ?? 30
-            loggingToFile = config.loggingToFile ?? true
+            loggingToFile = config.loggingToFile ?? false
             requestLog = config.requestLog ?? false
             debugMode = config.debug ?? false
             switchProject = config.quotaExceeded?.switchProject ?? true

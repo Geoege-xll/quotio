@@ -202,7 +202,8 @@ struct AccountRow: View {
 
     private var statusColor: Color {
         switch account.status {
-        case "ready": return account.isDisabled ? .gray : .green
+        // 代理的 active 与 ready 都表示账号可用；只有显式禁用时才使用灰色。
+        case "ready", "active": return account.isDisabled ? .gray : .green
         case "cooling", "outdated": return .orange
         case "error": return .red
         default: return .gray
@@ -446,13 +447,12 @@ struct AccountRow: View {
     }
 
     private var accountAvatar: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Circle()
                 .fill(account.provider.color.opacity(colorScheme == .dark ? 0.22 : 0.12))
                 .overlay(
                     Circle().strokeBorder(account.provider.color.opacity(0.35), lineWidth: 0.5)
                 )
-                .frame(width: 28, height: 28)
 
             if !avatarInitial.isEmpty {
                 Text(avatarInitial)
@@ -463,8 +463,10 @@ struct AccountRow: View {
                     .font(.system(size: 11))
                     .foregroundStyle(account.provider.color)
             }
-
-            // Status dot badge on bottom right
+        }
+        .frame(width: 28, height: 28)
+        .overlay(alignment: .bottomTrailing) {
+            // 字母与头像在独立的居中容器内；状态点只叠在右下角，不参与字母的对齐。
             if account.status != nil {
                 Circle()
                     .fill(statusColor)
@@ -476,7 +478,6 @@ struct AccountRow: View {
                     .offset(x: 1.5, y: 1.5)
             }
         }
-        .frame(width: 28, height: 28)
     }
     
     private func handleMenuBarToggle() {
