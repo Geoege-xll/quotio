@@ -19,12 +19,19 @@ final class CLIProxyManager {
         get { UserDefaults.standard.bool(forKey: "allowNetworkAccess") }
         set {
             guard newValue != UserDefaults.standard.bool(forKey: "allowNetworkAccess") else { return }
-            UserDefaults.standard.set(newValue, forKey: "allowNetworkAccess")
             ensureConfigExists()
-            if newValue {
-                ensureApiKeyExistsInConfig()
+            configWriteFailed = false
+            // 先确认客户端密钥及监听地址都已落盘，再更新偏好与界面；失败时不能让开关显示
+            // “仅本机”而旧进程仍监听所有网卡，也不能在缺少密钥时开放局域网监听。
+            if newValue && !ensureApiKeyExistsInConfig() {
+                lastError = "无法确认 CPA 客户端密钥，已取消局域网访问变更"
+                return
             }
-            updateConfigHost(newValue ? "0.0.0.0" : "127.0.0.1")
+            guard updateConfigHost(newValue ? "0.0.0.0" : "127.0.0.1") else {
+                lastError = "CPA 监听地址写入失败，已保留原访问模式"
+                return
+            }
+            UserDefaults.standard.set(newValue, forKey: "allowNetworkAccess")
 
             // Restart proxy if running to apply changes
             restartProxyIfRunning()
@@ -210,15 +217,19 @@ final class CLIProxyManager {
 
     /// 只修改指定的 v8 字段，保留其余节点、注释和顺序；解析失败时拒绝写入。
     /// 旧配置先由官方迁移器处理，避免在混合布局上按错误路径修改密钥。
-    private func updateV8Config(path: [String], value: Any) {
-        guard let text = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
+    @discardableResult
+    private func updateV8Config(path: [String], value: Any) -> Bool {
         do {
+            // 文件不可读与解析失败一样属于写入失败；启动流程必须立即停止，而不是等待健康检查超时。
+            let text = try String(contentsOfFile: configPath, encoding: .utf8)
             let updated = try CPAConfigLayout.updating(text, path: path, value: value)
             if updated != text { try updated.write(toFile: configPath, atomically: true, encoding: .utf8) }
+            return true
         } catch {
             configWriteFailed = true
             lastError = "CPA 8 配置更新失败，请检查 config.yaml 的字段结构"
             NSLog("[CLIProxyManager] Failed to update CPA 8 config path: \(path.joined(separator: "."))")
+            return false
         }
     }
     
@@ -278,23 +289,29 @@ final class CLIProxyManager {
         }
     }
 
-    private func updateConfigValue(pattern: String, replacement: String) {
+    @discardableResult
+    private func updateConfigValue(pattern: String, replacement: String) -> Bool {
         guard FileManager.default.fileExists(atPath: configPath),
               var content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
             NSLog("[CLIProxyManager] ERROR: Failed to read config file at \(configPath)")
-            return
+            configWriteFailed = true
+            return false
         }
         
         guard let range = content.range(of: pattern, options: .regularExpression) else {
             NSLog("[CLIProxyManager] ERROR: Pattern '\(pattern)' not found in config")
-            return
+            configWriteFailed = true
+            return false
         }
         
         do {
             content.replaceSubrange(range, with: replacement)
             try content.write(toFile: configPath, atomically: true, encoding: .utf8)
+            return true
         } catch {
             NSLog("[CLIProxyManager] ERROR: Failed to write config file: \(error)")
+            configWriteFailed = true
+            return false
         }
     }
 
@@ -307,35 +324,34 @@ final class CLIProxyManager {
         updateConfigValue(pattern: #"(?m)^port:[ \t]*\d+"#, replacement: "port: \(newPort)")
     }
 
-    private func updateConfigHost(_ host: String) {
+    @discardableResult
+    private func updateConfigHost(_ host: String) -> Bool {
         if hasV8Section("server") {
-            updateV8Config(path: ["server", "host"], value: host)
-            return
+            return updateV8Config(path: ["server", "host"], value: host)
         }
-        updateConfigValue(pattern: #"(?m)^host:[^\n]*$"#, replacement: "host: \"\(host)\"")
+        return updateConfigValue(pattern: #"(?m)^host:[^\n]*$"#, replacement: "host: \"\(host)\"")
     }
 
-    private func ensureApiKeyExistsInConfig() {
-        if hasV8Section("access") {
+    @discardableResult
+    private func ensureApiKeyExistsInConfig() -> Bool {
+        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8),
+              let root = try? Yams.load(yaml: content) as? [String: Any] else { return false }
+        if root["access"] != nil || root["api-keys"] is [String: Any] || CPAConfigLayout.isMigratedV8(root) {
             // v8 的顶层 api-keys 保存上游密钥，绝不能向其中插入客户端密钥字符串。
-            guard let text = try? String(contentsOfFile: configPath, encoding: .utf8),
-                  let root = try? Yams.load(yaml: text) as? [String: Any] else { return }
+            // 混合布局中即使 server/management 尚未齐全，只要顶层 api-keys 已是分组映射，
+            // 也必须按 v8 处理；access 本身结构错误则拒绝猜测写入位置。
+            guard root["access"] == nil || root["access"] is [String: Any] else { return false }
             let access = root["access"] as? [String: Any] ?? [:]
             if access["api-keys"] != nil && !(access["api-keys"] is [String]) {
                 NSLog("[CLIProxyManager] CPA 8 access.api-keys is not a list; refusing to overwrite")
-                return
+                return false
             }
             let keys = access["api-keys"] as? [String] ?? []
             if keys.isEmpty {
-                updateV8Config(path: ["access", "api-keys"], value: ["quotio-local-\(UUID().uuidString)"])
+                return updateV8Config(path: ["access", "api-keys"], value: ["quotio-local-\(UUID().uuidString)"])
             }
-            return
+            return true
         }
-        guard FileManager.default.fileExists(atPath: configPath),
-              let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
-            return
-        }
-
         var lines = content.components(separatedBy: "\n")
         if let apiKeysIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "api-keys:" }) {
             var hasKey = false
@@ -366,9 +382,10 @@ final class CLIProxyManager {
             if !hasKey {
                 let newKey = "quotio-local-\(UUID().uuidString)"
                 lines.insert("  - \"\(newKey)\"", at: apiKeysIndex + 1)
-                try? lines.joined(separator: "\n").write(toFile: configPath, atomically: true, encoding: .utf8)
+                do { try lines.joined(separator: "\n").write(toFile: configPath, atomically: true, encoding: .utf8) }
+                catch { return false }
             }
-            return
+            return true
         }
 
         let newKey = "quotio-local-\(UUID().uuidString)"
@@ -376,7 +393,9 @@ final class CLIProxyManager {
         lines.append("api-keys:")
         lines.append("  - \"\(newKey)\"")
         lines.append("")
-        try? lines.joined(separator: "\n").write(toFile: configPath, atomically: true, encoding: .utf8)
+        do { try lines.joined(separator: "\n").write(toFile: configPath, atomically: true, encoding: .utf8) }
+        catch { return false }
+        return true
     }
     
     func updateConfigAllowRemote(_ enabled: Bool) {
@@ -654,7 +673,8 @@ final class CLIProxyManager {
 
     private func applyV8ProviderPatch(
         using client: ManagementAPIClient,
-        legacyOwnedProviderIDs: Set<UUID> = []
+        legacyOwnedProviderIDs: Set<UUID> = [],
+        legacyOwnedKeys: [String: Set<String>] = [:]
     ) async throws {
         // 在网络 await 前固定本轮界面状态；若用户同时继续编辑，快照不能错记成尚未提交的新值。
         let providersSnapshot = CustomProviderService.shared.providers
@@ -664,6 +684,7 @@ final class CLIProxyManager {
             let source = try Data(contentsOf: URL(fileURLWithPath: configPath))
             let patch = try CustomProviderService.shared.makeV8ProviderPatch(
                 configPath: configPath, legacyOwnedProviderIDs: legacyOwnedProviderIDs,
+                legacyOwnedKeys: legacyOwnedKeys,
                 managedProviders: providersSnapshot
             )
             // v8 的凭据族是整体数组；构造期间若别的客户端改了文件，立即重算以免覆盖新组。
@@ -938,6 +959,11 @@ final class CLIProxyManager {
         try Task.checkCancellation()
         guard runtimeSessionID == startingSession else { throw CancellationError() }
         
+        // 旧配置在同步管理密钥和端口之前先留内存快照；迁移开始时再写入备份文件。
+        // 这样备份保留的是本轮启动前的原件，而不是已经被启动前步骤改写的版本。
+        let originalLegacyConfig: Data?
+        if usesV8Config { originalLegacyConfig = nil }
+        else { originalLegacyConfig = try Data(contentsOf: URL(fileURLWithPath: configPath)) }
         configWriteFailed = false
         syncSecretKeyInConfig()
         // 服务商变更等 v8 管理接口就绪后再提交，避免离线重写整份配置及用户注释。
@@ -984,7 +1010,8 @@ final class CLIProxyManager {
         environment["TERM"] = "xterm-256color"
         process.environment = environment
         
-        process.terminationHandler = { terminatedProcess in
+        // Process 会持有终止回调；外层也弱引用管理器，避免进程存活期间通过回调形成保留环。
+        process.terminationHandler = { [weak self] terminatedProcess in
             let status = terminatedProcess.terminationStatus
             let pid = terminatedProcess.processIdentifier
             
@@ -1046,14 +1073,30 @@ final class CLIProxyManager {
                 }
             )
             guard case .ready = outcome else { throw ProxyError.startupFailed }
+            // 健康检查期间用户可能已经点了停止；不能让旧启动继续迁移或写入配置。
+            try Task.checkCancellation()
+            guard runtimeSessionID == startingSession, self.process === process, process.isRunning else {
+                throw CancellationError()
+            }
             if !usesV8Config {
-                try await migrateLegacyConfigToV8()
+                guard let originalLegacyConfig else {
+                    throw ProxyError.networkError("CPA 配置在启动期间被修改，请重试迁移")
+                }
+                try await migrateLegacyConfigToV8(
+                    startingSession: startingSession, process: process,
+                    originalLegacyConfig: originalLegacyConfig
+                )
             } else {
                 let client = ManagementAPIClient(baseURL: "\(baseURL)/v8/management", authKey: managementKey)
                 defer { Task { await client.invalidate() } }
-                // 即便已有 v8 外壳，也让官方规范化器处理未来新增的旧字段映射。
-                try await client.migrateLegacyConfigToV8()
+                // 已完成迁移的配置不再每次启动发送空 PATCH；该接口会写盘且失败会阻断启动。
                 try await applyV8ProviderPatch(using: client)
+            }
+            // 迁移与服务商同步都有网络等待；停止操作会更换会话并清空进程。
+            // 重新确认本轮仍有效，避免旧任务把已停止的服务重新标为运行中。
+            try Task.checkCancellation()
+            guard runtimeSessionID == startingSession, self.process === process, process.isRunning else {
+                throw CancellationError()
             }
             // 全局代理偏好在官方迁移之后才写入 requests.proxy-url。
             // 旧配置里的单密钥 proxy-url 不能在备份之前被无锚点文本替换。
@@ -1084,27 +1127,64 @@ final class CLIProxyManager {
     }
 
     /// 只借助 CPA 官方迁移器改写配置。保留原文件副本直到新布局及 v8 管理接口都通过检查。
-    private func migrateLegacyConfigToV8() async throws {
+    private func migrateLegacyConfigToV8(
+        startingSession: UUID, process: Process, originalLegacyConfig: Data
+    ) async throws {
         let configURL = URL(fileURLWithPath: configPath)
-        let legacyYAML = try String(contentsOf: configURL, encoding: .utf8)
+        guard let legacyYAML = String(data: originalLegacyConfig, encoding: .utf8) else {
+            throw ProxyError.networkError("旧 CPA 配置不是 UTF-8，无法安全备份和迁移")
+        }
         let legacyOwnedProviderIDs = CustomProviderService.shared.legacyOwnedProviderIDs(in: legacyYAML)
+        let legacyOwnedKeys = CustomProviderService.shared.legacyOwnedKeys(in: legacyYAML)
         let backupURL = configURL.deletingLastPathComponent()
             .appendingPathComponent("config.pre-v8-\(UUID().uuidString).yaml")
-        try FileManager.default.copyItem(at: configURL, to: backupURL)
+        // 备份含客户端与上游密钥，创建时即限定为当前用户可读写；写完核对字节，
+        // 不让部分写入的文件冒充可恢复的原始配置。
+        guard FileManager.default.createFile(
+            atPath: backupURL.path, contents: originalLegacyConfig,
+            attributes: [.posixPermissions: NSNumber(value: 0o600)]
+        ), (try? Data(contentsOf: backupURL)) == originalLegacyConfig else {
+            throw ProxyError.networkError("旧 CPA 配置备份未完整写入，已取消迁移")
+        }
         let client = ManagementAPIClient(baseURL: "\(baseURL)/v8/management", authKey: managementKey)
         defer { Task { await client.invalidate() } }
+        var migratedSnapshot: Data?
+        var providerPatchStarted = false
         do {
             try await client.migrateLegacyConfigToV8()
+            // 记录官方迁移刚完成的文件；健康检查失败时仅在主文件仍逐字一致的情况下
+            // 才允许自动恢复旧配置，避免覆盖等待期间其他管理客户端的修改。
+            migratedSnapshot = try Data(contentsOf: configURL)
             guard usesV8Config,
                   await compatibilityChecker.isHealthy(port: proxyStatus.port, managementKey: managementKey) else {
                 throw ProxyError.networkError("CPA 8 配置迁移后校验失败")
             }
+            // 停止可能发生在官方迁移的网络请求期间；不得再提交服务商补丁。
+            try Task.checkCancellation()
+            guard runtimeSessionID == startingSession, self.process === process, process.isRunning else {
+                throw CancellationError()
+            }
             // 完成结构转换后仅 PATCH 受管理的凭据族，CPA 会校验并保留其余注释。
-            try await applyV8ProviderPatch(using: client, legacyOwnedProviderIDs: legacyOwnedProviderIDs)
+            providerPatchStarted = true
+            try await applyV8ProviderPatch(
+                using: client, legacyOwnedProviderIDs: legacyOwnedProviderIDs,
+                legacyOwnedKeys: legacyOwnedKeys
+            )
             // 首次迁移成功后仍保留原文件；只有实机运行和凭据行为都验证过才适合清理。
             // 备份仅在旧布局迁移时创建一次，后续 v8 启动不会重复生成。
             NSLog("[CLIProxyManager] CPA 8 migration backup retained at \(backupURL.path)")
         } catch {
+            if error is CancellationError || providerPatchStarted {
+                // 停止或服务商 PATCH 开始后，当前文件可能已经包含官方或外部写入；
+                // 保留主文件和备份，下次启动按实际布局继续同步，不用旧副本覆盖它们。
+                throw error
+            }
+            guard let migratedSnapshot,
+                  let current = try? Data(contentsOf: configURL), current == migratedSnapshot else {
+                throw ProxyError.networkError(
+                    "CPA 8 迁移未完成，当前配置可能已被其他客户端修改；已保留主文件和备份 \(backupURL.path)：\(error.localizedDescription)"
+                )
+            }
             // 先复制备份到同目录临时文件，确认副本完整后才原子替换；恢复失败绝不能先删除主配置。
             let migrationError = error
             let restoreURL = configURL.deletingLastPathComponent()

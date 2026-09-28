@@ -3,7 +3,7 @@ import SwiftUI
 import XCTest
 @testable import QuotioPlus
 
-/// 只保留明细页的滚轮交互回归；固定窗口宽高和列数属于已经定版的视觉验收范围。
+/// 只检验明细页的滚轮和内容高度行为；不锁定已定版界面的固定像素外观。
 @MainActor
 final class CPAUsageDetailInteractionTests: XCTestCase {
     func testTableWheelScrollsWholePageAndKeepsHorizontalScrolling() async throws {
@@ -33,23 +33,51 @@ final class CPAUsageDetailInteractionTests: XCTestCase {
         XCTAssertEqual(outer.contentView.bounds.minY, newOuterY, accuracy: 1)
     }
 
+    func testChangingPageAndReplacingTableRecomputesContentHeight() async throws {
+        let (window, controller) = makeWindow(TableFixture(count: 20))
+        defer { window.close() }
+        try await settleLayout()
+        let longHeight = try tableHeight(in: controller.view)
+
+        // 翻到只剩一行的末页时，内层表格应立即收缩，避免留下上一页的空白。
+        controller.rootView = TableFixture(count: 1)
+        try await settleLayout()
+        let shortHeight = try tableHeight(in: controller.view)
+        XCTAssertLessThan(shortHeight, longHeight - 100)
+
+        // 相同行数的行内容增高也必须重新测量，不能只依赖行数变化。
+        controller.rootView = TableFixture(count: 1, rowHeight: 80)
+        try await settleLayout()
+        XCTAssertGreaterThan(try tableHeight(in: controller.view), shortHeight + 20)
+
+        // 切换统计类别会替换原生 Table；测量器应跟随新实例并保留空态提示空间。
+        controller.rootView = TableFixture(count: 0, tableIdentity: 1)
+        try await settleLayout()
+        let emptyTable = try XCTUnwrap(tables(in: controller.view).first)
+        XCTAssertEqual(emptyTable.numberOfRows, 0)
+        XCTAssertGreaterThan(try tableHeight(in: controller.view), 100)
+    }
+
     /// 使用合成表格行测试事件传递，不读取用户的统计数据库。
     private struct TableFixture: View {
         let count: Int
+        var rowHeight: CGFloat = 38
+        var tableIdentity = 0
         private struct Row: Identifiable { let id: Int }
 
         var body: some View {
             CPAUsageDetailPage {
                 Text("筛选和摘要").frame(height: 200)
             } content: {
-                CPAUsageTableCard(layoutIdentity: "wheel-\(count)") {
+                CPAUsageTableCard(layoutIdentity: "interaction-\(count)-\(rowHeight)-\(tableIdentity)") {
                     Text("明细")
                 } content: {
                     Table((0..<count).map { Row(id: $0) }) {
-                        TableColumn("模型") { row in Text("model-\(row.id)") }.width(300)
+                        TableColumn("模型") { row in Text("model-\(row.id)").frame(height: rowHeight) }.width(300)
                         TableColumn("Tokens") { _ in Text("203.0M") }.width(300)
                         TableColumn("请求") { _ in Text("2,728") }.width(180)
                     }
+                    .id(tableIdentity)
                 } footer: {
                     Text("每页 20 条")
                 }
@@ -76,6 +104,11 @@ final class CPAUsageDetailInteractionTests: XCTestCase {
 
     private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     private func tables(in view: NSView) -> [NSTableView] { descendants(view).compactMap { $0 as? NSTableView } }
+
+    private func tableHeight(in view: NSView) throws -> CGFloat {
+        let table = try XCTUnwrap(tables(in: view).first)
+        return try XCTUnwrap(table.enclosingScrollView).frame.height
+    }
 
     private func wheel(vertical: Int32, horizontal: Int32) throws -> NSEvent {
         let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,

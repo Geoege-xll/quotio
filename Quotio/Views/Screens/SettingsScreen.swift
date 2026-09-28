@@ -509,7 +509,9 @@ struct LocalProxyServerSection: View {
     @AppStorage("autoStartProxy") private var autoStartProxy = false
     @AppStorage("autoStartTunnel") private var autoStartTunnel = false
     @AppStorage("autoRestartTunnel") private var autoRestartTunnel = false
-    @AppStorage("allowNetworkAccess") private var allowNetworkAccess = false
+    // 局域网开关先保存在视图状态；管理器确认密钥和监听地址写入成功后才更新 UserDefaults。
+    // 直接用 @AppStorage 会先写偏好，导致管理器把本次切换误判成“值未变化”而跳过配置更新。
+    @State private var allowNetworkAccess = false
     @State private var portText: String = ""
     @State private var isLoadingConfig = false  // Prevents onChange from firing during initial load
     
@@ -568,11 +570,16 @@ struct LocalProxyServerSection: View {
                 .onChange(of: allowNetworkAccess) { _, newValue in
                     guard !isLoadingConfig else { return }
                     viewModel.proxyManager.allowNetworkAccess = newValue
+                    // 配置不可写时管理器会保留原偏好；把开关回退到真实访问模式。
+                    if viewModel.proxyManager.allowNetworkAccess != newValue {
+                        allowNetworkAccess = viewModel.proxyManager.allowNetworkAccess
+                    }
                 }
         }
         .onAppear {
             isLoadingConfig = true
             portText = String(viewModel.proxyManager.port)
+            allowNetworkAccess = viewModel.proxyManager.allowNetworkAccess
             // Delay clearing the flag to allow onChange to be suppressed
             DispatchQueue.main.async {
                 isLoadingConfig = false
