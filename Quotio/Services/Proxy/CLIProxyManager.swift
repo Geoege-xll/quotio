@@ -729,31 +729,12 @@ final class CLIProxyManager {
     
     private struct ReleaseInfo: Codable {
         let tagName: String
-        let assets: [AssetInfo]
         let prerelease: Bool
         
         enum CodingKeys: String, CodingKey {
             case tagName = "tag_name"
-            case assets
             case prerelease
         }
-    }
-    
-    private struct AssetInfo: Codable {
-        let name: String
-        let browserDownloadUrl: String
-        
-        enum CodingKeys: String, CodingKey {
-            case name
-            case browserDownloadUrl = "browser_download_url"
-        }
-        
-        var downloadURL: String { browserDownloadUrl }
-    }
-    
-    private struct CompatibleAsset {
-        let name: String
-        let downloadURL: String
     }
     
     private func fetchLatestRelease() async throws -> ReleaseInfo {
@@ -771,8 +752,21 @@ final class CLIProxyManager {
         let session = URLSession(configuration: config)
         let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw ProxyError.networkError("Failed to fetch release info")
+        }
+        if ProxyReleasePageParser.isRateLimited(httpResponse) {
+            // GitHub API 限流时只从官方发行页选择稳定的 v8；不能照搬上游 /latest，
+            // 因为 CPA 的 7.x 与 8.x 仍可能并行发布。
+            let tags = try await fetchReleaseTagsFromWeb(requiredCount: 1, stableOnly: true)
+            guard let tag = tags.first else {
+                throw ProxyUpgradeError.noVersionAvailable
+            }
+            // 此处仅选择标签；下载前仍由 fetchGitHubRelease 读取资产与摘要。
+            return ReleaseInfo(tagName: tag, prerelease: false)
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw ProxyError.networkError("Failed to fetch release info (HTTP \(httpResponse.statusCode))")
         }
 
         let releases = try JSONDecoder().decode([ReleaseInfo].self, from: data)
@@ -780,28 +774,6 @@ final class CLIProxyManager {
             !$0.prerelease && ProxyVersionInfo(version: $0.tagName, sha256: "").isSupportedMajorVersion
         }) else { throw ProxyUpgradeError.noVersionAvailable }
         return release
-    }
-    
-    private func findCompatibleAsset(in release: ReleaseInfo) -> CompatibleAsset? {
-        #if arch(arm64)
-        let targetPatterns = ["darwin_arm64", "darwin_aarch64"]
-        #else
-        let targetPatterns = ["darwin_amd64"]
-        #endif
-        let skipPatterns = ["windows", "linux", "checksum"]
-        
-        for asset in release.assets {
-            let lowercaseName = asset.name.lowercased()
-            
-            let shouldSkip = skipPatterns.contains { lowercaseName.contains($0) }
-            if shouldSkip { continue }
-            
-            if targetPatterns.contains(where: { lowercaseName.contains($0) }) {
-                return CompatibleAsset(name: asset.name, downloadURL: asset.browserDownloadUrl)
-            }
-        }
-        
-        return nil
     }
     
     private func downloadAsset(url: String) async throws -> Data {
@@ -1464,6 +1436,78 @@ final class CLIProxyManager {
     }
 }
 
+/// 仅解析 GitHub 官方发行页中下载链接与同一资产行的摘要；页面结构变化时返回失败，
+/// 绝不使用缺少 SHA-256 的资产继续安装，以维持原有下载校验边界。
+nonisolated enum ProxyReleasePageParser {
+    static func isRateLimited(_ response: HTTPURLResponse) -> Bool {
+        response.statusCode == 429 || (response.statusCode == 403 && (
+            response.value(forHTTPHeaderField: "X-RateLimit-Remaining") == "0"
+                || response.value(forHTTPHeaderField: "Retry-After") != nil
+        ))
+    }
+
+    static func isStableV8(_ tag: String) -> Bool {
+        tag.range(of: #"^v?8\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil
+    }
+
+    static func tags(in html: String, repository: String) -> [String] {
+        let prefix = NSRegularExpression.escapedPattern(for: "/\(repository)/releases/expanded_assets/")
+        var seen = Set<String>()
+        return captures(prefix + #"([^"<>\s/]+)"#, in: html).filter { tag in
+            // 发行列表同时包含 7.x；先过滤后截取数量，避免限流时降级回旧内核。
+            ProxyVersionInfo(version: tag, sha256: "").isSupportedMajorVersion
+                && seen.insert(tag).inserted
+        }
+    }
+
+    static func nextPage(in html: String, repository: String) -> Int? {
+        let path = NSRegularExpression.escapedPattern(for: "/\(repository)/releases?page=")
+        // 仅信任官方发行列表中标为 next_page 的站内链接，不跟随页面中的任意网址。
+        for anchor in captures(#"(<a\b[^>]*>)"#, in: html) {
+            guard anchor.range(of: #"\bnext_page\b"#, options: .regularExpression) != nil,
+                  let number = captures(#"href=""# + path + #"([0-9]+)""#, in: anchor).first,
+                  let page = Int(number) else { continue }
+            return page
+        }
+        return nil
+    }
+
+    static func release(tag: String, html: String, repository: String) -> GitHubRelease? {
+        guard ProxyVersionInfo(version: tag, sha256: "").isSupportedMajorVersion else { return nil }
+        let encodedTag = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
+        let prefix = "/\(repository)/releases/download/\(encodedTag)/"
+        let pathPattern = #"href="("# + NSRegularExpression.escapedPattern(for: prefix) + #"[^"<>\s]+)""#
+        var assets: [GitHubAsset] = []
+
+        for row in html.components(separatedBy: "</li>") {
+            guard let path = captures(pathPattern, in: row).first else { continue }
+            let name = String(path.dropFirst(prefix.count))
+            guard !name.isEmpty else { continue }
+            let digest = captures(#"(sha256:[a-fA-F0-9]{64})(?![a-fA-F0-9])"#, in: row).first
+            assets.append(GitHubAsset(
+                name: name,
+                browserDownloadUrl: "https://github.com" + path,
+                digest: digest,
+                size: 0,
+                contentType: nil
+            ))
+        }
+
+        guard !assets.isEmpty else { return nil }
+        return GitHubRelease(
+            tagName: tag, name: nil, body: nil, assets: assets,
+            prerelease: !isStableV8(tag), publishedAt: nil
+        )
+    }
+
+    private static func captures(_ pattern: String, in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+            Range($0.range(at: 1), in: text).map { String(text[$0]) }
+        }
+    }
+}
+
 enum ProxyError: LocalizedError {
     case binaryNotFound
     case startupFailed
@@ -1793,6 +1837,7 @@ extension CLIProxyManager {
     /// Fetch all available releases from GitHub.
     /// Used by Advanced Mode to allow users to select a specific version.
     private func fetchAvailableUpstreamVersions(limit: Int) async throws -> [ProxyVersionInfo] {
+        guard limit > 0 else { return [] }
         // v7 与 v8 同时发布，需要在过滤后再限制数量，否则列表可能只剩几条甚至为空。
         let pageSize = min(max(limit * 3, 30), 100)
         let urlString = "https://api.github.com/repos/\(Self.upstreamRepository)/releases?per_page=\(pageSize)"
@@ -1808,8 +1853,23 @@ extension CLIProxyManager {
         let session = URLSession(configuration: config)
         let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw ProxyError.networkError("Failed to fetch releases")
+        }
+        if ProxyReleasePageParser.isRateLimited(httpResponse) {
+            // 仅在明确限流时使用 HTML 回退；每个候选仍须通过 v8 和 SHA-256 校验。
+            var versions: [ProxyVersionInfo] = []
+            for tag in try await fetchReleaseTagsFromWeb(requiredCount: max(limit * 3, 20)) {
+                guard versions.count < limit else { break }
+                let release = try await fetchReleaseFromWeb(tag: tag)
+                if let info = versionInfo(from: release) { versions.append(info) }
+            }
+            // HTML 结构变更或摘要缺失时明确失败，不能把不可安装资产当作“没有更新”。
+            guard !versions.isEmpty else { throw ProxyUpgradeError.noVersionAvailable }
+            return versions
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw ProxyError.networkError("Failed to fetch releases (HTTP \(httpResponse.statusCode))")
         }
 
         let releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
@@ -1839,11 +1899,65 @@ extension CLIProxyManager {
         let session = URLSession(configuration: config)
         let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw ProxyError.networkError("Failed to fetch release info")
+        }
+        if ProxyReleasePageParser.isRateLimited(httpResponse) {
+            return try await fetchReleaseFromWeb(tag: tag)
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw ProxyError.networkError("Failed to fetch release info (HTTP \(httpResponse.statusCode))")
         }
 
         return try JSONDecoder().decode(GitHubRelease.self, from: data)
+    }
+
+    /// GitHub API 配额耗尽时读取公开发行页；沿用代理设置，不绕过用户配置的网络路径。
+    private func fetchReleasePage(path: String) async throws -> String {
+        guard let url = URL(string: "https://github.com/\(Self.upstreamRepository)/\(path)") else {
+            throw ProxyError.networkError("Invalid GitHub release URL")
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Quotio/1.0", forHTTPHeaderField: "User-Agent")
+        let session = URLSession(configuration: ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 30))
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else {
+            throw ProxyError.networkError("Failed to fetch GitHub release page")
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func fetchReleaseTagsFromWeb(requiredCount: Int, stableOnly: Bool = false) async throws -> [String] {
+        var tags: [String] = []
+        var seen = Set<String>()
+        var page = 1
+        // 官方列表每页仅约十条，且 v7/v8 并行发布；限流回退最多查看十页，
+        // 一旦找到足够的 v8 候选就停止，避免无限翻页或无谓的网络请求。
+        while page <= 10 && tags.count < requiredCount {
+            let path = page == 1 ? "releases" : "releases?page=\(page)"
+            let html = try await fetchReleasePage(path: path)
+            for tag in ProxyReleasePageParser.tags(in: html, repository: Self.upstreamRepository) {
+                guard (!stableOnly || ProxyReleasePageParser.isStableV8(tag)),
+                      seen.insert(tag).inserted else { continue }
+                tags.append(tag)
+            }
+            guard let next = ProxyReleasePageParser.nextPage(in: html, repository: Self.upstreamRepository),
+                  next == page + 1 else { break }
+            page = next
+        }
+        guard !tags.isEmpty else { throw ProxyUpgradeError.noVersionAvailable }
+        return tags
+    }
+
+    private func fetchReleaseFromWeb(tag: String) async throws -> GitHubRelease {
+        let encoded = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
+        let html = try await fetchReleasePage(path: "releases/expanded_assets/\(encoded)")
+        guard let release = ProxyReleasePageParser.release(
+            tag: tag, html: html, repository: Self.upstreamRepository
+        ) else {
+            throw ProxyError.networkError("GitHub release assets or checksums are unavailable")
+        }
+        return release
     }
     
     /// Find compatible asset from GitHub release.
@@ -1959,12 +2073,14 @@ extension CLIProxyManager {
             if let url = versionInfo.downloadURL {
                 downloadURL = url
             } else {
-                // Fall back to GitHub release
-                let release = try await fetchLatestRelease()
-                guard let asset = findCompatibleAsset(in: release) else {
+                // 已指定版本缺少下载地址时必须查询同一标签；取“最新版”会把另一个版本
+                // 的二进制与当前摘要组合，既浪费下载，也可能误导后续升级状态。
+                let tag = versionInfo.version.hasPrefix("v") ? versionInfo.version : "v\(versionInfo.version)"
+                let release = try await fetchGitHubRelease(tag: tag)
+                guard let asset = findCompatibleAsset(from: release) else {
                     throw ProxyUpgradeError.downloadFailed("No compatible binary found")
                 }
-                downloadURL = asset.downloadURL
+                downloadURL = asset.browserDownloadUrl
             }
             
             downloadProgress = 0.1

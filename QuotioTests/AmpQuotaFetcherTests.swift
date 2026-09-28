@@ -42,6 +42,21 @@ final class AmpQuotaFetcherTests: XCTestCase {
                        .amount(value: 0, unit: .usd, semantics: .balance))
     }
 
+    /// 新版 Tier 标签沿用金额与小时额度格式，账号邮箱及方案名称都必须保留。
+    func testAmountBasedTierKeepsAccountIdentityAndQuota() throws {
+        let quota = try XCTUnwrap(AmpQuotaParser.parse(displayText: """
+        Signed in as tier@example.com (personal)
+        Amp Megawatt Tier: agent usage $12 of $20 remaining (60%), orb usage 500.5h of 750h a1.small orb hours remaining (67%)
+        """))
+
+        XCTAssertEqual(quota.accountDisplayName, "tier@example.com")
+        XCTAssertEqual(quota.planType, "Megawatt")
+        XCTAssertEqual(quota.models.map(\.name), ["amp-agent-usage", "amp-orb-usage"])
+        XCTAssertEqual(quota.models[0].percentage, 60)
+        XCTAssertEqual(quota.models[0].presentation, .progress(used: 8, limit: 20, unit: .usd))
+        XCTAssertEqual(quota.models[1].percentage, 500.5 / 750 * 100, accuracy: 0.0001)
+    }
+
     /// 零分母、超限剩余量及非有限数值均不能制造有效订阅配额。
     func testAmountBasedSubscriptionRejectsInvalidLimits() {
         for (remaining, limit, hours) in [("12", "0", "500"), ("21", "20", "500"),
@@ -141,6 +156,20 @@ final class AmpQuotaFetcherTests: XCTestCase {
         XCTAssertEqual(orb.usedPercentage, 2)
         XCTAssertEqual(orb.displayName, "Orb Usage")
         XCTAssertEqual(orb.resetTime, "2026-09-02T12:00:00Z")
+    }
+
+    /// 旧百分比格式在切换为 Tier 标签时仍要识别续期时间，避免旧额度残留。
+    func testParserMapsPercentageTierAndRenewalSuffix() throws {
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-08-11T12:00:00Z"))
+        let quota = try XCTUnwrap(AmpQuotaParser.parse(displayText: """
+        Signed in as tier@example.com (personal)
+        Amp Kilowatt Tier: 64% other usage and 98% orb usage remaining - resets upon renewal in 22 days
+        """, now: now))
+
+        XCTAssertEqual(quota.accountDisplayName, "tier@example.com")
+        XCTAssertEqual(quota.planType, "Kilowatt")
+        XCTAssertEqual(quota.models.map(\.percentage), [64, 98])
+        XCTAssertEqual(quota.models.map(\.resetTime), ["2026-09-02T12:00:00Z", "2026-09-02T12:00:00Z"])
     }
 
     func testParserMapsRealBalanceOutputWithFreeAndSubscription() throws {

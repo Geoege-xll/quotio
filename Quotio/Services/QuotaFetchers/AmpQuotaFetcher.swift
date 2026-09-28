@@ -80,8 +80,10 @@ nonisolated enum AmpQuotaParser {
         }
 
         var plan = identity.flatMap { $0[1].isEmpty ? nil : $0[1] }
+        // 上游 2cf5b6b：Amp 会将同一档位标为 Subscription 或 Tier；
+        // 两种标签后的额度结构相同，统一解析以保留邮箱、方案与各项剩余额度。
         if let subscription = captures(
-            #"(?im)^\s*Amp\s+([^:\r\n]+?)\s+Subscription:\s*agent usage\s+\$([\d,]+(?:\.\d+)?)\s+of\s+\$([\d,]+(?:\.\d+)?)\s+remaining\s+\([\d.]+%\),\s*orb usage\s+([\d,]+(?:\.\d+)?)h\s+of\s+([\d,]+(?:\.\d+)?)h\b"#,
+            #"(?im)^\s*Amp\s+([^:\r\n]+?)\s+(?:Subscription|Tier):\s*agent usage\s+\$([\d,]+(?:\.\d+)?)\s+of\s+\$([\d,]+(?:\.\d+)?)\s+remaining\s+\([\d.]+%\),\s*orb usage\s+([\d,]+(?:\.\d+)?)h\s+of\s+([\d,]+(?:\.\d+)?)h\b"#,
             in: text
         ), let agentRemaining = dollars(subscription[1]), let agentLimit = dollars(subscription[2]),
            let orbRemaining = dollars(subscription[3]), let orbLimit = dollars(subscription[4]),
@@ -99,7 +101,7 @@ nonisolated enum AmpQuotaParser {
                 name: "amp-orb-usage", percentage: orbRemaining / orbLimit * 100, resetTime: ""
             ))
         } else if let subscription = captures(
-            #"(?im)^\s*Amp\s+([^:\r\n]+?)\s+Subscription:\s*([\d.]+)%\s+(?:other|agent)\s+usage\s+and\s+([\d.]+)%\s+orb\s+usage\s+remaining\b(?:\s*-\s*resets\s+upon\s+renewal\s+in\s+(\d+)\s+(minutes?|hours?|days?|weeks?|months?|years?))?"#,
+            #"(?im)^\s*Amp\s+([^:\r\n]+?)\s+(?:Subscription|Tier):\s*([\d.]+)%\s+(?:other|agent)\s+usage\s+and\s+([\d.]+)%\s+orb\s+usage\s+remaining\b(?:\s*-\s*resets\s+upon\s+renewal\s+in\s+(\d+)\s+(minutes?|hours?|days?|weeks?|months?|years?))?"#,
             in: text
         ), let agent = validPercentage(subscription[1]),
            let orb = validPercentage(subscription[2]) {

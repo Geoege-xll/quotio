@@ -718,6 +718,23 @@ final class MonitorRuntimeTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    /// 旧快照没有失败字段，升级后仍须正常解码，并将失败状态视为空。
+    func testLegacySnapshotWithoutIssuesRemainsReadable() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let quota = ProviderQuotaData(models: [ModelQuota(name: "test", percentage: 42, resetTime: "")])
+        let encodedQuota = try JSONSerialization.jsonObject(with: JSONEncoder().encode(quota))
+        let legacy = try JSONSerialization.data(withJSONObject: [
+            "quotas": ["codex": ["account": encodedQuota]]
+        ])
+        try legacy.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let snapshot = await MonitorSnapshotStore(url: url).loadSnapshot()
+        XCTAssertEqual(snapshot.quotas[.codex]?["account"]?.models.first?.percentage, 42)
+        XCTAssertTrue(snapshot.issues.isEmpty)
+        XCTAssertTrue(snapshot.accountIssues.isEmpty)
+    }
+
     func testLegacyModelQuotaDecodesWithoutMetricPresentation() throws {
         let data = Data(#"{"name":"legacy","percentage":42,"resetTime":"","used":3,"limit":10}"#.utf8)
 
@@ -1805,6 +1822,105 @@ final class MonitorRuntimeTests: XCTestCase {
         XCTAssertEqual(result["account"]?.models.first?.percentage, 75)
         let issues = await coordinator.currentIssues()
         XCTAssertNotNil(issues[.codex])
+    }
+
+    /// 上游缓存语义：旧额度与本轮失败提示一起落盘，重启后不能把缓存显示成刷新成功。
+    func testCoordinatorRestoresFailureAlongsideLastGoodQuota() async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let snapshots = directory.appendingPathComponent("snapshot.json")
+        let metadata = directory.appendingPathComponent("accounts.json")
+        let coordinator = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
+        let previous = ProviderQuotaData(
+            models: [ModelQuota(name: "test", percentage: 75, resetTime: "")],
+            lastUpdated: Date(timeIntervalSince1970: 1_234)
+        )
+
+        let retained = await coordinator.refresh(provider: .codex, force: true, previous: ["account": previous]) { [:] }
+        await coordinator.finish(quotas: [.codex: retained])
+        let restarted = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
+        let restored = await restarted.bootstrap()
+
+        XCTAssertEqual(restored.quotas[.codex]?["account"]?.models.first?.percentage, 75)
+        XCTAssertNotNil(restored.issues[.codex])
+
+        // 后续成功刷新必须同时清除磁盘上的失败标记，避免再重启时重复出现旧告警。
+        let fresh = await restarted.refresh(provider: .codex, force: true, previous: retained) {
+            ["account": ProviderQuotaData(models: [ModelQuota(name: "test", percentage: 50, resetTime: "")])]
+        }
+        await restarted.finish(quotas: [.codex: fresh])
+        let recovered = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
+        XCTAssertEqual(recovered.quotas[.codex]?["account"]?.models.first?.percentage, 50)
+        XCTAssertNil(recovered.issues[.codex])
+    }
+
+    /// 失败标记按服务商记录；删除额度快照不能擅自推断其他账号已恢复。
+    func testSnapshotAccountRemovalKeepsUnrelatedFailureState() async {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = MonitorSnapshotStore(url: url)
+        let quota = ProviderQuotaData(models: [ModelQuota(name: "test", percentage: 75, resetTime: "")])
+        let issue = MonitorRefreshIssue(message: "refresh failed", occurredAt: Date(timeIntervalSince1970: 1_234))
+        await store.store(
+            [.codex: ["first": quota, "second": quota], .claude: ["other": quota]],
+            issues: [.codex: issue, .claude: issue]
+        )
+
+        await store.removeAccount(provider: .codex, accountKey: "first")
+        let partial = await store.loadSnapshot()
+        XCTAssertNotNil(partial.issues[.codex])
+        XCTAssertNotNil(partial.issues[.claude])
+
+        await store.removeAccount(provider: .codex, accountKey: "second")
+        let final = await store.loadSnapshot()
+        XCTAssertNotNil(final.issues[.codex])
+        XCTAssertNotNil(final.issues[.claude])
+        XCTAssertNotNil(final.quotas[.claude]?["other"])
+    }
+
+    /// 单账号失败也需跨重启恢复；账号即使没有可用额度，删除时仍须清掉对应错误。
+    func testAccountFailureRoundTripAndIssueOnlyRemoval() async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let snapshots = directory.appendingPathComponent("snapshot.json")
+        let metadata = directory.appendingPathComponent("accounts.json")
+        let store = MonitorSnapshotStore(url: snapshots)
+        let failed = QuotaAccountID(provider: .codex, accountKey: "failed@example.com")
+        let unrelated = QuotaAccountID(provider: .claude, accountKey: "other@example.com")
+        let issue = MonitorRefreshIssue(message: "refresh failed", occurredAt: Date(timeIntervalSince1970: 1_234))
+        await store.store([:], accountIssues: [failed: issue, unrelated: issue])
+
+        let restored = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
+        XCTAssertEqual(restored.accountIssues[failed], issue)
+        XCTAssertEqual(restored.accountIssues[unrelated], issue)
+
+        let removed = await store.removeAccount(provider: .codex, accountKey: failed.accountKey)
+        XCTAssertTrue(removed)
+        let remaining = await store.loadSnapshot()
+        XCTAssertNil(remaining.accountIssues[failed])
+        XCTAssertEqual(remaining.accountIssues[unrelated], issue)
+    }
+
+    /// 当前凭据返回套餐但不再返回额度时，用空窗口的新观察覆盖旧百分比，不能回填旧额度。
+    func testCoordinatorReplacesOldQuotaWithPlanOnlyObservation() async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let snapshots = directory.appendingPathComponent("snapshot.json")
+        let metadata = directory.appendingPathComponent("accounts.json")
+        let coordinator = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
+        let previous = ProviderQuotaData(models: [ModelQuota(name: "old", percentage: 75, resetTime: "")])
+        let planOnly = ProviderQuotaData(models: [], planType: "Pro")
+
+        let result = await coordinator.refresh(provider: .codex, force: true, previous: ["account": previous]) {
+            ["account": planOnly]
+        }
+
+        XCTAssertEqual(result["account"]?.planType, "Pro")
+        XCTAssertTrue(result["account"]?.models.isEmpty == true)
+        let issues = await coordinator.currentIssues()
+        XCTAssertNil(issues[.codex])
+
+        // 上游 413b02b：当前套餐观察还必须覆盖磁盘旧窗口，下一次启动不可恢复旧百分比。
+        await coordinator.finish(quotas: [.codex: result])
+        let restored = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
+        XCTAssertEqual(restored.quotas[.codex]?["account"]?.planType, "Pro")
+        XCTAssertTrue(restored.quotas[.codex]?["account"]?.models.isEmpty == true)
     }
 
     func testCoordinatorRemovesStaleQuotaWhenCredentialsAreMissing() async {

@@ -470,6 +470,7 @@ final class QuotaViewModel {
         guard canCommit(context) else { return }
         monitorAccounts = bootstrap.accounts
         monitorIssues = bootstrap.issues
+        monitorAccountIssues = bootstrap.accountIssues
         providerQuotas = bootstrap.quotas
 
         // Keep legacy files available only as a compatibility source.
@@ -856,10 +857,11 @@ final class QuotaViewModel {
         subscriptionInfos[.antigravity] = subscriptionInfos[.antigravity]?.filter { antigravity[$0.key] != nil }
         monitorAccounts = accounts
         monitorIssues = issues
+        clearRecoveredMonitorAccountIssues()
         removeDisabledMonitorQuotas()
         await refreshImportedIDEQuotas()
         guard canCommit(context) else { return }
-        await coordinator.finish(quotas: providerQuotas, revision: context.revision)
+        await coordinator.finish(quotas: providerQuotas, accountIssues: monitorAccountIssues, revision: context.revision)
         guard canCommit(context) else { return }
 
         checkQuotaNotifications()
@@ -2084,6 +2086,8 @@ final class QuotaViewModel {
                     message: "monitor.refresh.failed".localized(),
                     occurredAt: Date()
                 )
+                // 单账号失败不更新额度时间，但必须把失败与旧额度一起落盘供重启后恢复。
+                await persistMonitorAccountIssues(context: context)
             }
             return
         }
@@ -2387,8 +2391,10 @@ final class QuotaViewModel {
             guard canCommit(context) else { return }
             monitorAccounts = accounts
             monitorIssues = issues
+            // 单服务商刷新与全量刷新使用同一恢复判定；旧额度本身不能消除新失败。
+            clearRecoveredMonitorAccountIssues()
             removeDisabledMonitorQuotas()
-            await monitorCoordinator.finish(quotas: providerQuotas, revision: context.revision)
+            await monitorCoordinator.finish(quotas: providerQuotas, accountIssues: monitorAccountIssues, revision: context.revision)
             guard canCommit(context) else { return }
         }
         lastQuotaRefreshTime = Date()
@@ -2397,6 +2403,23 @@ final class QuotaViewModel {
         pruneMenuBarItems()
         autoSelectMenuBarItems()
         notifyQuotaDataChanged()
+    }
+
+    /// 只有刷新后的账号观察晚于失败发生时间，才清除该账号的错误状态。
+    /// 保留未返回新额度的失败提示，防止缓存的旧百分比被误认为本轮刷新成功。
+    private func clearRecoveredMonitorAccountIssues() {
+        monitorAccountIssues = monitorAccountIssues.filter { account, issue in
+            guard let quota = providerQuotas[account.provider]?[account.accountKey] else { return true }
+            return quota.lastUpdated <= issue.occurredAt
+        }
+    }
+
+    /// 单账号失败只持久化状态，不把失败当作一次成功刷新去推进页面更新时间或通知。
+    private func persistMonitorAccountIssues(context: RefreshContext) async {
+        guard modeManager.isMonitorMode, canCommit(context) else { return }
+        await monitorCoordinator.finish(
+            quotas: providerQuotas, accountIssues: monitorAccountIssues, revision: context.revision
+        )
     }
 
     /// Refresh all auto-detected providers (those that don't support manual auth)

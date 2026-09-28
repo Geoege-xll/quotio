@@ -13,6 +13,77 @@ final class CPA8VersionPolicyTests: XCTestCase {
         }
     }
 
+    /// 只有明确的 GitHub API 限流才访问发行页；普通 403 或服务端错误保持原始失败。
+    func testReleasePageFallbackRequiresRateLimitResponse() throws {
+        let url = try XCTUnwrap(URL(string: "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases"))
+        let throttled = try XCTUnwrap(HTTPURLResponse(
+            url: url, statusCode: 403, httpVersion: nil, headerFields: ["X-RateLimit-Remaining": "0"]
+        ))
+        let forbidden = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 403, httpVersion: nil, headerFields: nil))
+        let tooMany = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 429, httpVersion: nil, headerFields: nil))
+
+        XCTAssertTrue(ProxyReleasePageParser.isRateLimited(throttled))
+        XCTAssertTrue(ProxyReleasePageParser.isRateLimited(tooMany))
+        XCTAssertFalse(ProxyReleasePageParser.isRateLimited(forbidden))
+    }
+
+    /// 回退页包含并行发布的 v7 与 v8，必须先筛选 v8，且仅保留首次出现的标签。
+    func testReleasePageTagsRemainV8Only() {
+        let html = """
+        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v7.3.21"></a>
+        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.3"></a>
+        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.3"></a>
+        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.2"></a>
+        """
+
+        XCTAssertEqual(ProxyReleasePageParser.tags(in: html, repository: "router-for-me/CLIProxyAPI"),
+                       ["v8.0.3", "v8.0.2"])
+        XCTAssertTrue(ProxyReleasePageParser.isStableV8("v8.0.3"))
+        XCTAssertFalse(ProxyReleasePageParser.isStableV8("v8.0.4-rc1"))
+    }
+
+    /// 官方首屏可能全是较新的 v7；必须只沿站内下一页链接继续查找 v8。
+    func testReleasePagePaginationCanReachV8AfterV7OnlyPage() {
+        let first = """
+        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v7.3.22"></a>
+        <a class="next_page" rel="next" href="/router-for-me/CLIProxyAPI/releases?page=2">Next</a>
+        """
+        let second = """
+        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.3"></a>
+        <a href="https://example.com/router-for-me/CLIProxyAPI/releases?page=3">External</a>
+        """
+
+        XCTAssertTrue(ProxyReleasePageParser.tags(in: first, repository: "router-for-me/CLIProxyAPI").isEmpty)
+        XCTAssertEqual(ProxyReleasePageParser.nextPage(in: first, repository: "router-for-me/CLIProxyAPI"), 2)
+        XCTAssertEqual(ProxyReleasePageParser.tags(in: second, repository: "router-for-me/CLIProxyAPI"), ["v8.0.3"])
+        XCTAssertNil(ProxyReleasePageParser.nextPage(in: second, repository: "router-for-me/CLIProxyAPI"))
+    }
+
+    /// 下载地址必须属于指定发行版；缺少该资产行 SHA-256 时不得生成可安装版本。
+    func testReleasePageAssetKeepsMatchingDigest() throws {
+        let digest = String(repeating: "a", count: 64)
+        let html = """
+        <li><a href="/router-for-me/CLIProxyAPI/releases/download/v8.0.3/CLIProxyAPI_8.0.3_darwin_arm64.tar.gz">macOS</a><span>sha256:\(digest)</span></li>
+        <li><a href="/router-for-me/CLIProxyAPI/releases/download/v7.3.21/old.tar.gz">旧版</a></li>
+        """
+        let release = try XCTUnwrap(ProxyReleasePageParser.release(
+            tag: "v8.0.3", html: html, repository: "router-for-me/CLIProxyAPI"
+        ))
+
+        XCTAssertEqual(release.assets.count, 1)
+        XCTAssertEqual(release.assets[0].sha256Checksum, digest)
+        XCTAssertEqual(ProxyVersionInfo(from: release, asset: release.assets[0])?.version, "8.0.3")
+        XCTAssertNil(ProxyReleasePageParser.release(
+            tag: "v7.3.21", html: html, repository: "router-for-me/CLIProxyAPI"
+        ))
+
+        let withoutDigest = try XCTUnwrap(ProxyReleasePageParser.release(
+            tag: "v8.0.3", html: html.replacingOccurrences(of: "sha256:\(digest)", with: ""),
+            repository: "router-for-me/CLIProxyAPI"
+        ))
+        XCTAssertNil(ProxyVersionInfo(from: withoutDigest, asset: withoutDigest.assets[0]))
+    }
+
     func testVersionDeclarationAloneCannotSkipOfficialConfigMigration() {
         // 混合文件可被 CPA 8 读取，但仍须通过官方 v8 写入接口完成布局迁移。
         let mixed: [String: Any] = [

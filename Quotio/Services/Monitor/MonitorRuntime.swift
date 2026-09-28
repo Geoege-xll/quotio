@@ -98,6 +98,7 @@ nonisolated struct MonitorRefreshBatch: Sendable {
     var accounts: [MonitorAccount]
     var quotas: [AIProvider: [String: ProviderQuotaData]]
     var issues: [AIProvider: MonitorRefreshIssue]
+    var accountIssues: [QuotaAccountID: MonitorRefreshIssue]
 }
 
 nonisolated protocol MonitorProviderRuntime: Sendable {
@@ -339,6 +340,15 @@ actor MonitorMetadataStore {
 actor MonitorSnapshotStore {
     private struct Payload: Codable {
         var quotas: [String: [String: ProviderQuotaData]]
+        // 旧版快照只有 quotas；可选字段保证升级后仍能读取已有文件。
+        var issues: [String: MonitorRefreshIssue]?
+        var accountIssues: [String: [String: MonitorRefreshIssue]]?
+    }
+
+    struct Snapshot: Sendable {
+        let quotas: [AIProvider: [String: ProviderQuotaData]]
+        let issues: [AIProvider: MonitorRefreshIssue]
+        let accountIssues: [QuotaAccountID: MonitorRefreshIssue]
     }
 
     private let url: URL
@@ -356,30 +366,56 @@ actor MonitorSnapshotStore {
     }
 
     func load() -> [AIProvider: [String: ProviderQuotaData]] {
+        loadSnapshot().quotas
+    }
+
+    func loadSnapshot() -> Snapshot {
         guard let data = try? Data(contentsOf: url),
               let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
-            return [:]
+            return Snapshot(quotas: [:], issues: [:], accountIssues: [:])
         }
-        return payload.quotas.reduce(into: [:]) { result, item in
+        let quotas = payload.quotas.reduce(into: [AIProvider: [String: ProviderQuotaData]]()) { result, item in
             if let provider = AIProvider(rawValue: item.key) {
                 result[provider] = item.value
             }
         }
+        let issues = (payload.issues ?? [:]).reduce(into: [AIProvider: MonitorRefreshIssue]()) { result, item in
+            if let provider = AIProvider(rawValue: item.key) {
+                result[provider] = item.value
+            }
+        }
+        let accountIssues = (payload.accountIssues ?? [:]).reduce(into: [QuotaAccountID: MonitorRefreshIssue]()) { result, item in
+            guard let provider = AIProvider(rawValue: item.key) else { return }
+            for (accountKey, issue) in item.value {
+                result[QuotaAccountID(provider: provider, accountKey: accountKey)] = issue
+            }
+        }
+        return Snapshot(quotas: quotas, issues: issues, accountIssues: accountIssues)
     }
 
-    func store(_ quotas: [AIProvider: [String: ProviderQuotaData]], revision: UInt64? = nil, state: MonitorStateRevision? = nil) {
+    func store(_ quotas: [AIProvider: [String: ProviderQuotaData]], issues: [AIProvider: MonitorRefreshIssue] = [:], accountIssues: [QuotaAccountID: MonitorRefreshIssue] = [:], revision: UInt64? = nil, state: MonitorStateRevision? = nil) {
         if let revision, let state {
-            state.withCurrent(revision) { write(quotas) }
+            state.withCurrent(revision) { write(quotas, issues: issues, accountIssues: accountIssues) }
         } else {
-            write(quotas)
+            write(quotas, issues: issues, accountIssues: accountIssues)
         }
     }
 
-    private func write(_ quotas: [AIProvider: [String: ProviderQuotaData]]) {
+    private func write(_ quotas: [AIProvider: [String: ProviderQuotaData]], issues: [AIProvider: MonitorRefreshIssue], accountIssues: [QuotaAccountID: MonitorRefreshIssue]) {
         let encoded = quotas.reduce(into: [String: [String: ProviderQuotaData]]()) {
             $0[$1.key.rawValue] = $1.value
         }
-        guard let data = try? JSONEncoder().encode(Payload(quotas: encoded)) else { return }
+        let encodedIssues = issues.reduce(into: [String: MonitorRefreshIssue]()) {
+            $0[$1.key.rawValue] = $1.value
+        }
+        var encodedAccountIssues: [String: [String: MonitorRefreshIssue]] = [:]
+        for (account, issue) in accountIssues {
+            encodedAccountIssues[account.provider.rawValue, default: [:]][account.accountKey] = issue
+        }
+        // 额度和失败状态在同一次原子写入中发布，重启后不会把旧额度误认为最新成功结果。
+        guard let data = try? JSONEncoder().encode(Payload(
+            quotas: encoded, issues: encodedIssues, accountIssues: encodedAccountIssues
+        )) else { return }
         do {
             try SecureAtomicFileWriter.write(data, to: url)
         } catch {
@@ -407,8 +443,10 @@ actor MonitorSnapshotStore {
     }
 
     private func removeAccountFromDisk(provider: AIProvider, accountKey: String) -> Bool {
-        var quotas = load()
-        guard var accountQuotas = quotas[provider] else { return false }
+        let snapshot = loadSnapshot()
+        var quotas = snapshot.quotas
+        var accountQuotas = quotas[provider] ?? [:]
+        var accountIssues = snapshot.accountIssues
 
         // Match the identity Monitor itself dedupes on (`MonitorAccount.deduplicationKey`):
         // the Monitor row carries a trimmed account key while the snapshot key is stored
@@ -417,17 +455,24 @@ actor MonitorSnapshotStore {
         let matchingKeys = accountQuotas.keys.filter {
             $0 == accountKey || $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalized
         }
-        guard !matchingKeys.isEmpty else { return false }
+        let matchingIssueKeys = accountIssues.keys.filter {
+            $0.provider == provider && ($0.accountKey == accountKey
+                || $0.accountKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalized)
+        }
+        guard !matchingKeys.isEmpty || !matchingIssueKeys.isEmpty else { return false }
 
         for key in matchingKeys {
             accountQuotas.removeValue(forKey: key)
         }
+        for key in matchingIssueKeys { accountIssues.removeValue(forKey: key) }
         if accountQuotas.isEmpty {
             quotas.removeValue(forKey: provider)
         } else {
             quotas[provider] = accountQuotas
         }
-        write(quotas)
+        // 失败状态按服务商记录，当前文件无法判断它是否属于被删账号；留待下次成功刷新清除，
+        // 避免删除一个额度快照时抹掉同服务商其他账号仍在发生的失败。
+        write(quotas, issues: snapshot.issues, accountIssues: accountIssues)
         return true
     }
 }
@@ -761,11 +806,16 @@ actor MonitorRefreshCoordinator {
     }
 
     func bootstrap() async -> MonitorRefreshBatch {
-        let quotas = await snapshots.load()
+        let generation = revision.current
+        let snapshot = await snapshots.loadSnapshot()
+        // 上次刷新失败时保留的额度仍可查看，但进入监控模式后必须继续显示失败状态。
+        // 若读取磁盘期间已开始新一代刷新，不用旧文件覆盖刚产生的失败或恢复结果。
+        if revision.current == generation { issues = snapshot.issues }
         return MonitorRefreshBatch(
-            accounts: await discoverAccounts(merging: quotas),
-            quotas: quotas,
-            issues: issues
+            accounts: await discoverAccounts(merging: snapshot.quotas),
+            quotas: snapshot.quotas,
+            issues: issues,
+            accountIssues: snapshot.accountIssues
         )
     }
 
@@ -921,10 +971,10 @@ actor MonitorRefreshCoordinator {
         return fresh
     }
 
-    func finish(quotas: [AIProvider: [String: ProviderQuotaData]], revision expected: UInt64? = nil) async {
+    func finish(quotas: [AIProvider: [String: ProviderQuotaData]], accountIssues: [QuotaAccountID: MonitorRefreshIssue] = [:], revision expected: UInt64? = nil) async {
         // 调用方在捕获 quotas 的同一个同步段捕获世代；不能等存储 actor 收到调用才生成版本。
         let expected = expected ?? revision.current
-        await snapshots.store(quotas, revision: expected, state: revision)
+        await snapshots.store(quotas, issues: issues, accountIssues: accountIssues, revision: expected, state: revision)
     }
 
     /// Forget every Monitor-owned trace of a single account: its persisted snapshot
