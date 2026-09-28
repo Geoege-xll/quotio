@@ -671,6 +671,21 @@ final class MonitorRuntimeTests: XCTestCase {
         func increment() { value += 1 }
     }
 
+    private actor BootstrapGate {
+        private var isOpen = false
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            if !isOpen { await withCheckedContinuation { waiting.append($0) } }
+        }
+
+        func open() {
+            isOpen = true
+            waiting.forEach { $0.resume() }
+            waiting.removeAll()
+        }
+    }
+
     func testStableAccountIDDoesNotDependOnSource() {
         let native = MonitorAccount.make(
             provider: .codex,
@@ -1851,6 +1866,61 @@ final class MonitorRuntimeTests: XCTestCase {
         let recovered = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
         XCTAssertEqual(recovered.quotas[.codex]?["account"]?.models.first?.percentage, 50)
         XCTAssertNil(recovered.issues[.codex])
+    }
+
+    /// 快照读完后同世代刷新可能先完成；启动恢复只合并未刷新的服务商。
+    func testBootstrapDoesNotOverwriteConcurrentRefreshIssues() async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let snapshots = directory.appendingPathComponent("snapshot.json")
+        let metadata = directory.appendingPathComponent("accounts.json")
+        let previous = ProviderQuotaData(models: [ModelQuota(name: "test", percentage: 75, resetTime: "")])
+        let oldIssue = MonitorRefreshIssue(message: "older failure", occurredAt: Date(timeIntervalSince1970: 1_234))
+        let store = MonitorSnapshotStore(url: snapshots)
+        await store.store([.codex: ["account": previous]], issues: [.claude: oldIssue])
+
+        let coordinator = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
+        let gate = BootstrapGate()
+        let loaded = expectation(description: "快照已读取")
+        await coordinator.setBootstrapLoadedHookForTesting {
+            loaded.fulfill()
+            await gate.wait()
+        }
+        let bootstrap = Task { await coordinator.bootstrap() }
+        await fulfillment(of: [loaded], timeout: 5)
+
+        _ = await coordinator.refresh(provider: .codex, force: true, previous: ["account": previous]) { [:] }
+        await gate.open()
+        let result = await bootstrap.value
+        XCTAssertNotNil(result.issues[.codex])
+        XCTAssertEqual(result.issues[.claude], oldIssue)
+        await coordinator.setBootstrapLoadedHookForTesting(nil)
+    }
+
+    /// 并发成功同样要阻止旧失败回流，即使刷新前内存中没有错误可供 removeValue 删除。
+    func testBootstrapDoesNotRestoreFailureAfterConcurrentSuccess() async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let snapshots = directory.appendingPathComponent("snapshot.json")
+        let metadata = directory.appendingPathComponent("accounts.json")
+        let oldIssue = MonitorRefreshIssue(message: "older failure", occurredAt: Date(timeIntervalSince1970: 1_234))
+        await MonitorSnapshotStore(url: snapshots).store([:], issues: [.codex: oldIssue])
+
+        let coordinator = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
+        let gate = BootstrapGate()
+        let loaded = expectation(description: "快照已读取")
+        await coordinator.setBootstrapLoadedHookForTesting {
+            loaded.fulfill()
+            await gate.wait()
+        }
+        let bootstrap = Task { await coordinator.bootstrap() }
+        await fulfillment(of: [loaded], timeout: 5)
+
+        _ = await coordinator.refresh(provider: .codex, force: true, previous: [:]) {
+            ["account": ProviderQuotaData(models: [ModelQuota(name: "test", percentage: 50, resetTime: "")])]
+        }
+        await gate.open()
+        let result = await bootstrap.value
+        XCTAssertNil(result.issues[.codex])
+        await coordinator.setBootstrapLoadedHookForTesting(nil)
     }
 
     /// 失败标记按服务商记录；删除额度快照不能擅自推断其他账号已恢复。

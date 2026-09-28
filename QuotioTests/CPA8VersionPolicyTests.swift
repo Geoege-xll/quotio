@@ -27,36 +27,63 @@ final class CPA8VersionPolicyTests: XCTestCase {
         XCTAssertFalse(ProxyReleasePageParser.isRateLimited(forbidden))
     }
 
-    /// 回退页包含并行发布的 v7 与 v8，必须先筛选 v8，且仅保留首次出现的标签。
-    func testReleasePageTagsRemainV8Only() {
+    /// 网页中的预发布标记独立于标签格式；同时过滤 v7 并去除重复条目。
+    func testReleasePageUsesPublishedStatusInsteadOfTagShape() {
         let html = """
-        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v7.3.21"></a>
-        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.3"></a>
-        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.3"></a>
-        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.2"></a>
+        <section id="release-v7.3.21"><include-fragment data-deferred-src="https://github.com/router-for-me/CLIProxyAPI/releases/expanded_assets/v7.3.21"></include-fragment></section>
+        <section id="release-v8.0.4"><span class="Label Label--warning">Pre-release</span><include-fragment data-deferred-src="https://github.com/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.4"></include-fragment></section>
+        <section id="release-v8.2.1-1"><include-fragment data-deferred-src="https://github.com/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.2.1-1"></include-fragment></section>
+        <section id="release-v8.2.1-1"><include-fragment data-deferred-src="https://github.com/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.2.1-1"></include-fragment></section>
         """
 
-        XCTAssertEqual(ProxyReleasePageParser.tags(in: html, repository: "router-for-me/CLIProxyAPI"),
-                       ["v8.0.3", "v8.0.2"])
-        XCTAssertTrue(ProxyReleasePageParser.isStableV8("v8.0.3"))
-        XCTAssertFalse(ProxyReleasePageParser.isStableV8("v8.0.4-rc1"))
+        let listed = ProxyReleasePageParser.listedReleases(in: html, repository: "router-for-me/CLIProxyAPI")
+        XCTAssertEqual(listed, [
+            .init(tag: "v8.0.4", prerelease: true),
+            .init(tag: "v8.2.1-1", prerelease: false)
+        ])
+        // 列表标记需传递给指定标签的资产解析；资产页本身不包含发布状态。
+        let assetHTML = """
+        <li><a href="/router-for-me/CLIProxyAPI/releases/download/v8.0.4/CLIProxyAPI_8.0.4_darwin_arm64.tar.gz">macOS</a><span>sha256:\(String(repeating: "a", count: 64))</span></li>
+        """
+        let release = ProxyReleasePageParser.release(
+            tag: listed[0].tag, html: assetHTML,
+            repository: "router-for-me/CLIProxyAPI", prerelease: listed[0].prerelease
+        )
+        XCTAssertEqual(release?.prerelease, true)
     }
 
     /// 官方首屏可能全是较新的 v7；必须只沿站内下一页链接继续查找 v8。
     func testReleasePagePaginationCanReachV8AfterV7OnlyPage() {
         let first = """
-        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v7.3.22"></a>
+        <section id="release-v7.3.22"><include-fragment data-deferred-src="https://github.com/router-for-me/CLIProxyAPI/releases/expanded_assets/v7.3.22"></include-fragment></section>
         <a class="next_page" rel="next" href="/router-for-me/CLIProxyAPI/releases?page=2">Next</a>
         """
         let second = """
-        <a href="/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.3"></a>
+        <section id="release-v8.0.3"><include-fragment data-deferred-src="https://github.com/router-for-me/CLIProxyAPI/releases/expanded_assets/v8.0.3"></include-fragment></section>
         <a href="https://example.com/router-for-me/CLIProxyAPI/releases?page=3">External</a>
         """
 
-        XCTAssertTrue(ProxyReleasePageParser.tags(in: first, repository: "router-for-me/CLIProxyAPI").isEmpty)
+        XCTAssertTrue(ProxyReleasePageParser.listedReleases(in: first, repository: "router-for-me/CLIProxyAPI").isEmpty)
         XCTAssertEqual(ProxyReleasePageParser.nextPage(in: first, repository: "router-for-me/CLIProxyAPI"), 2)
-        XCTAssertEqual(ProxyReleasePageParser.tags(in: second, repository: "router-for-me/CLIProxyAPI"), ["v8.0.3"])
+        XCTAssertEqual(ProxyReleasePageParser.listedReleases(in: second, repository: "router-for-me/CLIProxyAPI"),
+                       [.init(tag: "v8.0.3", prerelease: false)])
         XCTAssertNil(ProxyReleasePageParser.nextPage(in: second, repository: "router-for-me/CLIProxyAPI"))
+    }
+
+    /// 单个发行资产不可读或校验信息缺失时，后面的可安装版本仍须出现在列表中。
+    func testReleasePageVersionCollectionSkipsBrokenCandidates() async throws {
+        let candidates: [ProxyReleasePageParser.ListedRelease] = [
+            .init(tag: "v8.0.5", prerelease: false),
+            .init(tag: "v8.0.4", prerelease: false),
+            .init(tag: "v8.0.3", prerelease: false)
+        ]
+        let versions = try await ProxyReleasePageParser.collectAvailableVersions(from: candidates, limit: 2) { candidate in
+            if candidate.tag == "v8.0.5" { throw ProxyError.networkError("assets not ready") }
+            if candidate.tag == "v8.0.4" { return nil }
+            return ProxyVersionInfo(version: "8.0.3", sha256: String(repeating: "a", count: 64))
+        }
+
+        XCTAssertEqual(versions.map(\.version), ["8.0.3"])
     }
 
     /// 下载地址必须属于指定发行版；缺少该资产行 SHA-256 时不得生成可安装版本。

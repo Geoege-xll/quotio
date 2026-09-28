@@ -777,10 +777,17 @@ actor MonitorRefreshCoordinator {
     private var inFlight: [AIProvider: Flight] = [:]
     private var retryAfter: [AIProvider: Date] = [:]
     private(set) var issues: [AIProvider: MonitorRefreshIssue] = [:]
+    /// 普通刷新不会推进账号世代；单独记录各服务商已完成的刷新，避免启动快照覆盖并发结果。
+    private var completedRefreshVersions: [AIProvider: UInt64] = [:]
     #if DEBUG
     /// 在等待网络结果前触发，测试用它确定多个等待者都已经进入同一轮刷新。
     private var waiterHookForTesting: (@Sendable () -> Void)?
     func setWaiterHookForTesting(_ hook: (@Sendable () -> Void)?) { waiterHookForTesting = hook }
+    /// 测试可在快照读取完成后暂停启动流程，稳定复现同世代刷新的交错顺序。
+    private var bootstrapLoadedHookForTesting: (@Sendable () async -> Void)?
+    func setBootstrapLoadedHookForTesting(_ hook: (@Sendable () async -> Void)?) {
+        bootstrapLoadedHookForTesting = hook
+    }
     #endif
 
     /// Generic account keys that represent the same underlying login as a more
@@ -807,10 +814,19 @@ actor MonitorRefreshCoordinator {
 
     func bootstrap() async -> MonitorRefreshBatch {
         let generation = revision.current
+        let refreshVersions = completedRefreshVersions
         let snapshot = await snapshots.loadSnapshot()
+        #if DEBUG
+        if let bootstrapLoadedHookForTesting { await bootstrapLoadedHookForTesting() }
+        #endif
         // 上次刷新失败时保留的额度仍可查看，但进入监控模式后必须继续显示失败状态。
-        // 若读取磁盘期间已开始新一代刷新，不用旧文件覆盖刚产生的失败或恢复结果。
-        if revision.current == generation { issues = snapshot.issues }
+        // 账号世代不涵盖普通刷新；逐服务商比较完成次数，保留读取期间的新失败或恢复结果。
+        if revision.current == generation {
+            for provider in Set(issues.keys).union(snapshot.issues.keys) {
+                guard completedRefreshVersions[provider] == refreshVersions[provider] else { continue }
+                issues[provider] = snapshot.issues[provider]
+            }
+        }
         return MonitorRefreshBatch(
             accounts: await discoverAccounts(merging: snapshot.quotas),
             quotas: snapshot.quotas,
@@ -934,6 +950,8 @@ actor MonitorRefreshCoordinator {
         guard revision.current == generation, !Task.isCancelled else { return [:] }
         if inFlight[provider]?.id == flight.id { inFlight[provider] = nil }
         let fresh = fetched.filter { credentialAccountKeys?.contains($0.key) ?? true }
+        // 即使本次成功后 issues 原本就为空，也要阻止并发 bootstrap 恢复磁盘上的旧失败。
+        completedRefreshVersions[provider, default: 0] &+= 1
 
         if fresh.isEmpty, credentialAvailability == .missing {
             issues.removeValue(forKey: provider)
