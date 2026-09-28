@@ -360,7 +360,12 @@ actor CPAModelAliasService {
             typealias Change = (path: [String], before: Data?, after: Data?)
             func encoded(_ value: Any?) throws -> Data? {
                 guard let value else { return nil }
-                return try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
+                // v8 配置 PUT 与服务商 PATCH 使用同一套 YAML 解码器；路径或
+                // base-url 若被 Foundation 写为转义斜杠，同样会遭到 invalid_body。
+                return try JSONSerialization.data(
+                    withJSONObject: value,
+                    options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]
+                )
             }
             var changes: [Change] = []
             func appendIfChanged(_ path: [String], old: Any?, new: Any?) throws {

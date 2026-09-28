@@ -5,6 +5,34 @@ import XCTest
 
 @MainActor
 final class CPA8ProviderPatchTests: XCTestCase {
+    func testProviderPatchKeepsBaseURLSlashesForCPA8Parser() throws {
+        let provider = CustomProvider(
+            name: "Fixture Claude", type: .claudeCompatibility,
+            baseURL: "https://example.invalid/v1",
+            apiKeys: [CustomAPIKeyEntry(apiKey: "fixture-secret")]
+        )
+        let yaml = """
+        config-version: 8
+        server: {port: 8317}
+        management: {secret-key: fixture}
+        api-keys: {}
+
+        """
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cpa-v8-slash-\(UUID().uuidString).yaml")
+        try yaml.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let patch = try XCTUnwrap(CustomProviderService.shared.makeV8ProviderPatch(
+            configPath: file.path, managedProviders: [provider]
+        ))
+        let body = try XCTUnwrap(String(data: patch, encoding: .utf8))
+        // CPA 8 的 YAML 解码器拒绝 Foundation 默认生成的转义斜杠；
+        // 这个断言覆盖从模型数据到实际 HTTP 正文的序列化边界。
+        XCTAssertTrue(body.contains(#""base-url":"https://example.invalid/v1""#))
+        XCTAssertFalse(body.contains(#"\/"#))
+    }
+
     func testAdoptingLegacyGroupKeepsUnknownSettingsAndOtherProviders() throws {
         let provider = CustomProvider(
             name: "Private Claude", type: .claudeCompatibility,

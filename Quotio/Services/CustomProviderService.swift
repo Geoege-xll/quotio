@@ -563,7 +563,13 @@ final class CustomProviderService {
             if before != after { changedFamilies[family] = groups }
         }
         guard !changedFamilies.isEmpty else { return nil }
-        return try JSONSerialization.data(withJSONObject: ["api-keys": changedFamilies], options: [.sortedKeys])
+        // CPA 8 的 /config 虽然先检查 JSON 有效性，实际却用 YAML 解析器读取正文。
+        // Foundation 默认把 base-url 中的斜杠编码为 \/；这是合法 JSON，但上游
+        // YAML 解析器会返回 invalid_body。保留普通斜杠，确保 URL 仍能被 CPA 接受。
+        return try JSONSerialization.data(
+            withJSONObject: ["api-keys": changedFamilies],
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
     }
 
     private func managedName(for provider: CustomProvider) -> String {
