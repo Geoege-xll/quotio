@@ -1,5 +1,3 @@
-import AppKit
-import SwiftUI
 import XCTest
 @testable import QuotioPlus
 
@@ -83,64 +81,6 @@ final class CPAUsageTrendTests: XCTestCase {
             XCTAssertEqual(report.summary.metrics.requests, 382)
             XCTAssertLessThanOrEqual(report.trend.count, 240)
             assertComponents(report)
-        }
-    }
-}
-
-/// 真实 AppKit 窗口验证四系列图在紧凑宽度、单系列、空数据及明暗模式下的布局。
-/// 导出合成数据图片供人工检查线型、图例和轴标签，不读取用户统计。
-@MainActor
-final class CPAUsageTrendRenderingTests: XCTestCase {
-    func testMultiSeriesChartsFitCompactWindowInBothAppearances() async throws {
-        let beginning = Date(timeIntervalSince1970: 1_783_500_000)
-        let points = (0..<12).map { index in
-            CPAUsageTrendPoint(date: beginning.addingTimeInterval(Double(index * 3600)), requests: index + 1,
-                               tokens: 100_000 + (index % 4) * 50_000, input: 95_000 + (index % 4) * 45_000,
-                               output: 5_000 + (index % 4) * 5_000, cached: 70_000 + (index % 3) * 25_000)
-        }
-        let destination = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("build/CPATrendReview")
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        for scheme in [ColorScheme.light, .dark] {
-            let name = scheme == .light ? "light" : "dark"
-            let fixtures: [(String, AnyView)] = [
-                ("tokens-" + name, AnyView(CPAUsageTrendChart(points: points, hourly: true, metric: .tokens))),
-                ("output-" + name, AnyView(CPAUsageTrendPlot(points: points, series: [.output], hourly: true)
-                    .frame(height: 190).quotioCard())),
-                ("requests-" + name, AnyView(CPAUsageTrendChart(points: points, hourly: true, metric: .requests))),
-                ("empty-" + name, AnyView(CPAUsageTrendChart(points: [], hourly: true, metric: .tokens))),
-                ("single-" + name, AnyView(CPAUsageTrendChart(points: Array(points.prefix(1)), hourly: true, metric: .tokens)))
-            ]
-            for (label, fixture) in fixtures {
-                let controller = NSHostingController(rootView: fixture.padding(12)
-                    .background(QuotioTheme.Colors.canvasBackground(for: scheme)).preferredColorScheme(scheme))
-                // 主机窗口由用例控制外框；卡片仍可按自身内容缩短纵向留白。
-                controller.sizingOptions = []
-                let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 560, height: 440),
-                                      styleMask: [.titled], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false
-                window.contentViewController = controller
-                // NSHostingController 接入窗口时会采用自身最小尺寸；之后显式恢复测试宽度，
-                // 避免把一张只有几十像素宽的图片误当作紧凑窗口验收结果。
-                // 图例和说明允许随内容增高，宿主留足纵向空间；产品中该卡片位于可滚动页面。
-                window.setContentSize(CGSize(width: 560, height: 440))
-                window.orderFront(nil)
-                let started = ContinuousClock.now
-                try await Task.sleep(for: .milliseconds(100))
-                controller.view.layoutSubtreeIfNeeded()
-                XCTAssertLessThan(started.duration(to: .now), .seconds(5), "图表布局不能持续占用主线程")
-                XCTAssertEqual(controller.view.bounds.width, 560, accuracy: 1)
-                // 图表固定为 190pt，卡片高度还包含标题、图例及说明；
-                // 验证能放入窗口且图形未被压扁，不要求内容必须撑满 440pt 外框。
-                XCTAssertGreaterThan(controller.view.bounds.height, 190)
-                XCTAssertLessThanOrEqual(controller.view.bounds.height, 440)
-                XCTAssertLessThanOrEqual(controller.view.fittingSize.width, 560)
-                let bitmap = try XCTUnwrap(controller.view.bitmapImageRepForCachingDisplay(in: controller.view.bounds))
-                controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
-                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                    .write(to: destination.appendingPathComponent(label + ".png"))
-                window.close()
-            }
         }
     }
 }

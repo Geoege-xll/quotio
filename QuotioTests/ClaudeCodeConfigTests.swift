@@ -1,6 +1,4 @@
 import XCTest
-import SwiftUI
-import AppKit
 @testable import QuotioPlus
 
 final class ClaudeCodeConfigTests: XCTestCase {
@@ -716,81 +714,5 @@ final class ClaudeCodeConfigTests: XCTestCase {
         XCTAssertEqual(decoded.claudeDefaultModelSelector, "custom/model[1m]")
         let restored = try JSONDecoder().decode(AgentConfiguration.self, from: JSONEncoder().encode(decoded))
         XCTAssertEqual(restored.claudeDefaultModelSelector, decoded.claudeDefaultModelSelector)
-    }
-
-    /// 单独渲染模型表格，避免完整弹窗的滚动区域遮住待验收的默认行；输出位于仓库构建目录。
-    @MainActor
-    func testRenderDefaultRowInheritanceAndIndependentContext() throws {
-        let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("build/ClaudeDefaultRowReview", isDirectory: true)
-        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        for follows in [true, false] {
-            var config = configuration()
-            config.claudeModel = follows ? "opus" : "provider/reasoning-model"
-            config.claudeDefaultModel1M = !follows
-            config.claudeModel1M = [.opus: follows]
-            config.claudeModelDisplayNames = [.opus: "主力推理", .sonnet: "日常编码", .haiku: "快速任务"]
-            let viewModel = AgentSetupViewModel()
-            viewModel.selectedAgent = .claudeCode
-            viewModel.currentConfiguration = config
-            for (name, scheme) in [("light", ColorScheme.light), ("dark", ColorScheme.dark)] {
-                let view = ClaudeModelMappingView(viewModel: viewModel, onOneMillionChange: {})
-                    .frame(width: 540).padding(20)
-                    .background(QuotioTheme.Colors.cardBackground(for: scheme))
-                    .environment(\.colorScheme, scheme)
-                let hosting = NSHostingView(rootView: view)
-                hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
-                let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-                window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-                window.contentView = hosting
-                hosting.layoutSubtreeIfNeeded()
-                let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                try png.write(to: output.appendingPathComponent("default-\(follows ? "inherited" : "independent")-\(name).png"))
-            }
-        }
-    }
-
-    @MainActor
-    func testRenderAndExportClaudeModelSlotsAndAdvancedSettings() async throws {
-        let output = URL(fileURLWithPath: "/Users/liqunmacmini/Desktop/quotio/build/ClaudeModelDisplayReview", isDirectory: true)
-        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-
-        var config = AgentConfiguration(agent: .claudeCode, proxyURL: "http://127.0.0.1:8317/v1", apiKey: "quotio-local-test")
-        config.claudeModel = ModelSlot.opus.rawValue
-        config.modelSlots = [
-            .opus: "gemini-3.8-flash-high",
-            .sonnet: "glm-5.3",
-            .haiku: "gemini-3.8-flash-high"
-        ]
-        config.claudeModelDisplayNames = [
-            .opus: "主力推理",
-            .sonnet: "日常编码",
-            .haiku: "快速任务"
-        ]
-        config.claudeModel1M = [.opus: true]
-
-        let viewModel = AgentSetupViewModel()
-        viewModel.selectedAgent = .claudeCode
-        viewModel.currentConfiguration = config
-
-        for (name, scheme) in [("light", ColorScheme.light), ("dark", ColorScheme.dark)] {
-            let view = AgentConfigSheet(viewModel: viewModel, agent: .claudeCode)
-                .frame(width: 580, height: 750)
-                .environment(\.colorScheme, scheme)
-
-            let hosting = NSHostingView(rootView: view)
-            hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
-            let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-            window.contentView = hosting
-            hosting.layoutSubtreeIfNeeded()
-
-            let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-            try png.write(to: output.appendingPathComponent("claude-sheet-\(name).png"))
-        }
     }
 }

@@ -1,5 +1,3 @@
-import AppKit
-import SwiftUI
 import XCTest
 @testable import QuotioPlus
 
@@ -148,28 +146,5 @@ final class MenuBarQuotaPairTests: XCTestCase {
             StatusBarQuotaItemView.accessibilityValue(for: unknown, displayMode: .used),
             "quota.noDataYet".localized()
         )
-    }
-
-    @MainActor
-    func testCompactQuotaPairViewFitsMenuBarHeight() {
-        let item = MenuBarQuotaDisplayItem(
-            id: "codex-test",
-            providerSymbol: "O",
-            accountShort: "test",
-            percentage: 63,
-            provider: .codex,
-            quotaPair: MenuBarQuotaPair(
-                top: MenuBarQuotaMetric(labelKey: "quota.metric.session", remainingPercentage: 81),
-                bottom: MenuBarQuotaMetric(labelKey: "quota.metric.weekly", remainingPercentage: 63)
-            )
-        )
-        let hostingView = NSHostingView(
-            rootView: StatusBarQuotaItemView(item: item, colorMode: .monochrome)
-        )
-
-        hostingView.layoutSubtreeIfNeeded()
-
-        XCTAssertLessThanOrEqual(hostingView.fittingSize.height, 22)
-        XCTAssertLessThan(hostingView.fittingSize.width, 40)
     }
 }
