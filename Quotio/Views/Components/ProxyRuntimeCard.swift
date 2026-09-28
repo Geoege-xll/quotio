@@ -77,15 +77,13 @@ struct ProxyRuntimeCard: View {
             }
             .buttonStyle(.borderless)
 
-            // 实时性能与吞吐遥测 (形态 B：直接内置于运行服务卡底部，反映网关实时健康与吞吐)
-            Divider().opacity(0.5)
-            ProxyPerformanceTelemetryView(store: viewModel.usageMonitor, isRunning: manager.proxyStatus.running)
-
             if manager.isDownloading {
                 ProgressView(value: manager.downloadProgress)
                     .accessibilityLabel("runtime.installing".localized())
             }
 
+            // 启动或配置同步错误属于服务状态，放在遥测区之前，避免用户误认为
+            // “性能与吞吐”指标本身返回了 HTTP 400。
             if let error = manager.lastError ?? viewModel.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption)
@@ -97,6 +95,10 @@ struct ProxyRuntimeCard: View {
                 }
                 .buttonStyle(.link)
             }
+
+            // 实时性能与吞吐遥测 (形态 B：直接内置于运行服务卡底部，反映网关实时健康与吞吐)
+            Divider().opacity(0.5)
+            ProxyPerformanceTelemetryView(store: viewModel.usageMonitor, isRunning: manager.proxyStatus.running)
 
             if let copyFeedback {
                 Text(copyFeedback)

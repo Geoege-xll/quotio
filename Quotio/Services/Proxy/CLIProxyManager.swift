@@ -1064,8 +1064,16 @@ final class CLIProxyManager {
             } else {
                 let client = ManagementAPIClient(baseURL: "\(baseURL)/v8/management", authKey: managementKey)
                 defer { Task { await client.invalidate() } }
-                // 已完成迁移的配置不再每次启动发送空 PATCH；该接口会写盘且失败会阻断启动。
-                try await applyV8ProviderPatch(using: client)
+                // CPA 已通过健康检查，服务商同步属于后续配置操作。
+                // 同步失败时保留旧配置和待同步快照，并向界面报告原因；不能把已健康
+                // 启动的进程杀掉，否则用户连现有账号也无法继续使用。
+                do {
+                    try await applyV8ProviderPatch(using: client)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = "CPA 已启动，但服务商同步失败：\(error.localizedDescription)"
+                }
             }
             // 迁移与服务商同步都有网络等待；停止操作会更换会话并清空进程。
             // 重新确认本轮仍有效，避免旧任务把已停止的服务重新标为运行中。

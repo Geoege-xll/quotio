@@ -455,7 +455,15 @@ private struct DashboardRefreshButton: View {
                 }
             }
         } label: {
-            Image(systemName: "arrow.clockwise")
+            // 与其他导航栏刷新按钮保持一致：刷新期间由整个图标位置切换为菊花，
+            // 固定尺寸避免按钮在刷新开始和结束时发生宽度跳动。
+            if isRefreshing || viewModel.isRefreshingDashboard {
+                SmallProgressView()
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 16, height: 16)
+            }
         }
         .disabled(isRefreshing || viewModel.isRefreshingDashboard)
         .help("action.refresh".localized())

@@ -187,10 +187,12 @@ enum KeychainHelper {
     ) -> (data: Data, account: String)? {
         let query = externalCredentialQuery(service: service, account: account)
 
-        var result: AnyObject?
-        let status = performNonInteractiveSecurityCall {
-            SecItemCopyMatching(query as CFDictionary, &result)
+        var unmanagedResult: Unmanaged<CFTypeRef>?
+        let status = performSecurityCall {
+            QuotioSecItemCopyMatchingWithoutInteraction(query as CFDictionary, &unmanagedResult)
         }
+        // SecItemCopyMatching 遵循 Create 规则；C 兼容层只透传对象，不改变其所有权。
+        let result = unmanagedResult?.takeRetainedValue()
         if status == errSecSuccess,
            let item = result as? [String: Any],
            let data = item[kSecValueData as String] as? Data,
@@ -235,8 +237,8 @@ enum KeychainHelper {
             return false
         }
         let query = externalCredentialUpdateQuery(service: service, account: account)
-        let status = performNonInteractiveSecurityCall {
-            SecItemUpdate(
+        let status = performSecurityCall {
+            QuotioSecItemUpdateWithoutInteraction(
                 query as CFDictionary,
                 [kSecValueData as String: newData] as CFDictionary
             )
@@ -424,30 +426,14 @@ enum KeychainHelper {
         return operation()
     }
 
-    /// Run a keychain call against a credential owned by another app without letting
-    /// securityd show a password dialog.
-    ///
-    /// `LAContext.interactionNotAllowed` only governs the data-protection keychain. Items
-    /// written by other tools (Claude Code, Codex CLI) live in the legacy login keychain,
-    /// where access is enforced by securityd's ACL and partition-list checks. Those checks
-    /// ignore the `LAContext` flag and raise the "wants to access key ... in your keychain"
-    /// prompt whenever this app is not on the item's allow list. The allow list is reset
-    /// every time the owning tool rewrites the item (token refresh, account switch), so
-    /// "Always Allow" cannot stick and the prompt returns on the next background refresh.
-    ///
-    /// The only supported way to make that path fail silently is the process-wide
-    /// `SecKeychainSetUserInteractionAllowed(false)`, which turns the prompt into
-    /// `errSecAuthFailed` / `errSecInteractionNotAllowed`. The flag is global, so it is only
-    /// flipped while `securityLock` is held and is restored before the lock is released.
-    nonisolated private static func performNonInteractiveSecurityCall(
-        _ operation: () -> OSStatus
-    ) -> OSStatus {
-        performSecurityCall {
-            var previous: DarwinBoolean = true
-            SecKeychainGetUserInteractionAllowed(&previous)
-            SecKeychainSetUserInteractionAllowed(false)
-            defer { SecKeychainSetUserInteractionAllowed(previous.boolValue) }
-            return operation()
+    #if DEBUG
+    /// 回归测试读取交互标志；实际钥匙串调用仍由 securityLock 串行保护。
+    nonisolated static func legacyKeychainInteractionAllowedForTesting() -> Bool? {
+        var allowed = false
+        let status = performSecurityCall {
+            QuotioGetLegacyKeychainInteractionAllowed(&allowed)
         }
+        return status == errSecSuccess ? allowed : nil
     }
+    #endif
 }

@@ -108,6 +108,23 @@ final class ManagementAPIClientLifecycleTests: XCTestCase {
         XCTAssertEqual(state.requestCount, 2)
     }
 
+    func testV8ConfigPatchReportsValidationReasonWithoutDiscardingStatus() async {
+        let (client, state) = fixture { _, _ in
+            // 仅用人工字段名模拟 CPA 的错误正文，验证启动失败时能显示可操作的原因。
+            .replyStatus(#"{"error":"invalid_config","message":"api-keys.claude[1].keys: invalid entry"}"#, 400)
+        }
+        do {
+            try await client.patchV8Config(Data(#"{"api-keys":{}}"#.utf8))
+            XCTFail("CPA 拒绝配置时不能误报同步成功")
+        } catch APIError.configRejected(let status, let reason) {
+            XCTAssertEqual(status, 400)
+            XCTAssertEqual(reason, "api-keys.claude[1].keys: invalid entry")
+        } catch {
+            XCTFail("应保留 CPA 的配置校验原因：\(error)")
+        }
+        XCTAssertEqual(state.requestCount, 1)
+    }
+
     func testUsageQueueIsNeverRetriedAfterTransportFailure() async {
         let (client, state) = fixture { _, _ in .fail(.networkConnectionLost) }
         do {
@@ -185,7 +202,7 @@ final class ManagementAPIClientLifecycleTests: XCTestCase {
 
 /// 每个测试使用独立主机名和状态，锁只保护 URLProtocol 的跨线程回调记录。
 private final class LifecycleHTTPState: @unchecked Sendable {
-    enum Response { case reply(String), fail(URLError.Code), hold }
+    enum Response { case reply(String), replyStatus(String, Int), fail(URLError.Code), hold }
     private let lock = NSLock()
     private var count = 0
     private let response: @Sendable (URLRequest, Int) -> Response
@@ -210,8 +227,13 @@ private final class LifecycleHTTPProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         switch state.next(request) {
-        case .reply(let body):
+        case .reply(let body), .replyStatus(let body, 200):
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200,
+                httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(body.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        case .replyStatus(let body, let status):
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status,
                 httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Data(body.utf8))
             client?.urlProtocolDidFinishLoading(self)

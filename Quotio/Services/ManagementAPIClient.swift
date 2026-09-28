@@ -175,6 +175,15 @@ actor ManagementAPIClient {
             
             guard 200...299 ~= httpResponse.statusCode else {
                 Self.log("[\(clientId)][\(requestId)] HTTP ERROR \(httpResponse.statusCode)")
+                // CPA 8 的配置接口会在错误正文中给出具体字段与校验原因。
+                // 只解析本机配置写入响应，避免把其他接口的任意正文展示成诊断信息；
+                // 不记录请求正文，其中可能含有上游服务商密钥。
+                if endpoint == "/config", method == "PATCH",
+                   let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let reason = (payload["message"] as? String) ?? (payload["error"] as? String) {
+                    let singleLine = reason.components(separatedBy: .newlines).joined(separator: " ")
+                    throw APIError.configRejected(httpResponse.statusCode, String(singleLine.prefix(300)))
+                }
                 throw APIError.httpError(httpResponse.statusCode)
             }
             
@@ -712,6 +721,7 @@ nonisolated enum APIError: LocalizedError {
     case invalidURL
     case invalidResponse
     case httpError(Int)
+    case configRejected(Int, String)
     case decodingError(String)
     case connectionError(String)
     
@@ -720,6 +730,7 @@ nonisolated enum APIError: LocalizedError {
         case .invalidURL: return "Invalid URL"
         case .invalidResponse: return "Invalid response"
         case .httpError(let code): return "HTTP error: \(code)"
+        case .configRejected(let code, let reason): return "CPA 8 配置校验失败（HTTP \(code)）：\(reason)"
         case .decodingError(let msg): return "Decoding error: \(msg)"
         case .connectionError(let msg): return "Connection error: \(msg)"
         }
