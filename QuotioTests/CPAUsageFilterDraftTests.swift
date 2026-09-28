@@ -1,29 +1,30 @@
 import XCTest
 @testable import QuotioPlus
 
-/// 草稿和选项的回归不启动查询、不读取用户数据，直接验证常驻条件与附加条件的产品契约。
+/// 草稿和选项的回归不启动查询、不读取用户数据，直接验证顶部工具栏与“更多筛选”面板的条件归属。
 final class CPAUsageFilterDraftTests: XCTestCase {
     private var defaultDraft: CPAUsageFilterDraft {
         .init(selection: CPAUsageSelection(range: .all), dimension: .model, metric: .tokens)
     }
 
-    func testHiddenCountExcludesEveryPersistentControlAndIncludesMetric() {
+    func testHiddenCountIncludesControlsMovedIntoAdvancedSheet() {
         var draft = defaultDraft
         XCTAssertEqual(draft.hiddenConditionCount, 0)
         draft.selection.range = .hours24
         draft.selection.provider = "a-custom-provider"
         draft.dimension = .apiKey
-        XCTAssertEqual(draft.hiddenConditionCount, 0, "时间、提供商和分组已经常驻，不能计入更多徽章")
+        // 顶部只保留预设时间；提供商与分组已移入面板，二者应各占一个徽章计数。
+        XCTAssertEqual(draft.hiddenConditionCount, 2)
         draft.selection.model = "model"
         draft.selection.source = "source-hash"
         draft.selection.apiKey = "key-hash"
         draft.selection.outcome = .failed
         draft.metric = .requests
-        XCTAssertEqual(draft.hiddenConditionCount, 5)
+        XCTAssertEqual(draft.hiddenConditionCount, 7)
         draft.metric = .tokens
-        XCTAssertEqual(draft.hiddenConditionCount, 4)
+        XCTAssertEqual(draft.hiddenConditionCount, 6)
         draft.selection.range = .custom
-        XCTAssertEqual(draft.hiddenConditionCount, 5, "自定义时间仅在更多筛选中展示，需要计入隐藏条件")
+        XCTAssertEqual(draft.hiddenConditionCount, 7, "自定义时间只能在更多筛选中编辑，需要计入面板条件")
     }
 
     func testResetChangesOnlyDraftAndRestoresAllEightConditions() {

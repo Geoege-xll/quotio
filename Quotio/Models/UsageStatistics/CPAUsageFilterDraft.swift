@@ -7,8 +7,8 @@ nonisolated struct CPAUsageFilterDraft: Hashable, Sendable {
     var dimension: CPAUsageDimension
     var metric: CPAUsageChartMetric
 
-    /// 常驻区展示预设时间、分组和提供商；自定义时间仅在完整面板中编辑，因此也计入隐藏条件。
-    /// 指标默认 Tokens，切换成请求数也算一个附加条件，避免收起后隐藏实际统计口径。
+    /// 顶部工具栏只直接编辑预设时间；提供商、分组与其他条件均在“更多筛选”面板中编辑。
+    /// 自定义时间和非默认统计指标也计入面板徽章，让收起面板后仍能看到有多少条件生效。
     var hiddenConditionCount: Int {
         [selection.provider, selection.model, selection.source, selection.apiKey].filter { !$0.isEmpty }.count
             + (selection.outcome == .all ? 0 : 1) + (metric == .tokens ? 0 : 1)
