@@ -127,10 +127,18 @@ struct UsageStatisticsScreen: View {
             if clientUsage.isLoading { clientUsage.cancelRefresh() }
             else { clientUsage.refresh() }
         } label: {
-            Label((clientUsage.isLoading ? "usage.client.cancel" : "usage.refresh").localized(),
-                  systemImage: clientUsage.isLoading ? "xmark.circle" : "arrow.clockwise")
+            // 扫描期间用菊花替换整枚刷新图标，与其他导航刷新按钮保持一致；
+            // 两种状态占用相同尺寸，避免工具栏在开始和结束扫描时发生布局跳动。
+            if clientUsage.isLoading {
+                SmallProgressView()
+            } else {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 16, height: 16)
+            }
         }
+        // 扫描仍可从此按钮取消；菊花没有文字，需按当前操作更新辅助功能名称。
         .help((clientUsage.isLoading ? "usage.client.cancel" : "usage.refresh").localized())
+        .accessibilityLabel((clientUsage.isLoading ? "usage.client.cancel" : "usage.refresh").localized())
     }
     private func clusterLabel(_ key: String, symbol: String) -> some View {
         Label(key.localized(), systemImage: symbol).font(.caption2.weight(.semibold))
