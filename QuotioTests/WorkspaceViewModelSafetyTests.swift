@@ -534,6 +534,7 @@ private actor WorkspaceSkillStub: WorkspaceSkillServicing {
     func uninstallSkill(skillDirectory: String) async throws {}
     func updateAllSkillsReport() async -> WorkspaceOperationResult { .init() }
     func checkForSkillUpdates(_ skills: [WorkspaceSkill]) async throws -> Set<String> { updates }
+    func backfillSourceUpdateDates(for skills: [WorkspaceSkill]) async -> Int { 0 }
     func installSkill(skill: DiscoverableSkill, targetAgents: Set<WorkspaceAgent>) async throws { installCalls.append(skill.directory) }
     func importUnmanagedSkill(_ unmanaged: UnmanagedSkill) async throws {}
     func exportSkillsArchive(to destinationURL: URL) async throws {}

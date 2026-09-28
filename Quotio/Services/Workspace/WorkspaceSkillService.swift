@@ -58,9 +58,14 @@ public actor WorkspaceSkillService {
         try db.transaction {
             let hadRepos = try !db.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='skill_repos'").isEmpty
             try db.execute("CREATE TABLE IF NOT EXISTS skill_repos (owner TEXT NOT NULL, name TEXT NOT NULL, branch TEXT NOT NULL DEFAULT 'main', enabled INTEGER NOT NULL DEFAULT 1, source TEXT DEFAULT 'custom', created_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(owner,name))")
-            try db.execute("CREATE TABLE IF NOT EXISTS skills_metadata (directory TEXT PRIMARY KEY, name TEXT, description TEXT, repo_owner TEXT, repo_name TEXT, repo_branch TEXT DEFAULT 'main', readme_url TEXT, installed_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, content_hash TEXT, repository_path TEXT)")
-            if try !db.rows("PRAGMA table_info(skills_metadata)").contains(where: { $0["name"] == "repository_path" }) {
+            try db.execute("CREATE TABLE IF NOT EXISTS skills_metadata (directory TEXT PRIMARY KEY, name TEXT, description TEXT, repo_owner TEXT, repo_name TEXT, repo_branch TEXT DEFAULT 'main', readme_url TEXT, installed_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, source_updated_at INTEGER, content_hash TEXT, repository_path TEXT)")
+            let metadataColumns = try db.rows("PRAGMA table_info(skills_metadata)")
+            if !metadataColumns.contains(where: { $0["name"] == "repository_path" }) {
                 try db.execute("ALTER TABLE skills_metadata ADD COLUMN repository_path TEXT")
+            }
+            if !metadataColumns.contains(where: { $0["name"] == "source_updated_at" }) {
+                // 旧 updated_at 是本地操作时间，不能迁移成来源更新时间；等待查询 GitHub 后再填充。
+                try db.execute("ALTER TABLE skills_metadata ADD COLUMN source_updated_at INTEGER")
             }
             try db.execute("CREATE TABLE IF NOT EXISTS workspace_migrations (name TEXT PRIMARY KEY)")
             if try db.rows("SELECT name FROM workspace_migrations WHERE name=?", ["private_skill_store_v1"]).isEmpty {
@@ -166,7 +171,8 @@ public actor WorkspaceSkillService {
             skills.append(WorkspaceSkill(name: parsed.name, description: parsed.description, directory: directory,
                 readmeURL: meta?.readmeURL, repoOwner: meta?.repoOwner, repoName: meta?.repoName, repoBranch: meta?.repoBranch,
                 installedAt: effectiveInstalledAt, updatedAt: effectiveUpdatedAt,
-                contentHash: meta?.contentHash, enabledAgents: enabled, repositoryRelativePath: meta?.repositoryPath))
+                sourceUpdatedAt: meta?.sourceUpdatedAt, contentHash: meta?.contentHash,
+                enabledAgents: enabled, repositoryRelativePath: meta?.repositoryPath))
         }
         return skills.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -271,6 +277,14 @@ public actor WorkspaceSkillService {
     }
     private struct TreeResponse: Decodable, Sendable { let tree: [TreeEntry]; let truncated: Bool? }
     private struct CommitResponse: Decodable, Sendable { let sha: String }
+    private struct SourceCommitResponse: Decodable, Sendable {
+        let commit: CommitDetails
+        struct CommitDetails: Decodable, Sendable {
+            let committer: CommitIdentity?
+            let author: CommitIdentity?
+        }
+        struct CommitIdentity: Decodable, Sendable { let date: String? }
+    }
 
     public func discoverSkills(repo: SkillRepo) async throws -> [DiscoverableSkill] {
         let tree = try await fetchTree(repo)
@@ -310,6 +324,9 @@ public actor WorkspaceSkillService {
         guard selected.contains(where: { $0.path == (relative.isEmpty ? "SKILL.md" : relative + "/SKILL.md") }) else {
             throw WorkspaceSkillError.invalidRepository(relative)
         }
+        // 安装时记录远端技能目录本身的最近提交时间，不把本地下载日当作技能更新时间。
+        let sourceUpdatedAt = try? await fetchSourceUpdatedAt(
+            repo: repo, relativePath: relative, revision: tree.first?.revision)
         let stage = ssotSkillsDir + "/.download-" + UUID().uuidString
         try fileManager.createDirectory(atPath: stage, withIntermediateDirectories: false)
         defer { try? fileManager.removeItem(atPath: stage) }
@@ -338,7 +355,7 @@ public actor WorkspaceSkillService {
         if exists { try backupSkillBeforeAction(skillDirectory: skill.directory) }
         let meta = SkillMetadata(readmeURL: skill.readmeURL, repoOwner: repo.owner, repoName: repo.name,
             repoBranch: repo.branch, repositoryPath: relative, installedAt: previous?.installedAt ?? Date(),
-            updatedAt: Date(), contentHash: try directoryHash(stage))
+            updatedAt: Date(), sourceUpdatedAt: sourceUpdatedAt, contentHash: try directoryHash(stage))
         var movedNew = false
         do {
             try db.transaction {
@@ -416,6 +433,40 @@ public actor WorkspaceSkillService {
             if remote != local { outdated.insert(skill.directory) }
         }
         return outdated
+    }
+
+    /// 为升级前已经安装的技能补齐来源时间。网络失败时保留空值，不使用旧的本地操作时间。
+    /// 只更新来源身份仍一致且时间尚为空的记录，避免异步请求覆盖刚重新安装的技能。
+    public func backfillSourceUpdateDates(for skills: [WorkspaceSkill]) async -> Int {
+        var filled = 0
+        for skill in skills where skill.sourceUpdatedAt == nil {
+            guard !Task.isCancelled else { return filled }
+            guard let owner = skill.repoOwner, let name = skill.repoName else { continue }
+            let repo = SkillRepo(owner: owner, name: name, branch: skill.repoBranch ?? "main")
+            do {
+                let relative: String
+                if let savedPath = skill.repositoryRelativePath {
+                    relative = savedPath
+                } else {
+                    // 旧库没有仓库内路径时，仅接受目录树中唯一的同名技能，不能按本地目录猜来源。
+                    let tree = try await fetchTree(repo)
+                    let candidate = DiscoverableSkill(name: skill.name, description: skill.description,
+                        directory: skill.directory, repoOwner: owner, repoName: name, repoBranch: repo.branch)
+                    relative = try resolveRepositoryPath(skill: candidate, tree: tree)
+                }
+                guard let date = try await fetchSourceUpdatedAt(repo: repo, relativePath: relative) else { continue }
+                try database().execute("UPDATE skills_metadata SET source_updated_at=?, repository_path=COALESCE(repository_path,?) WHERE directory=? AND source_updated_at IS NULL AND lower(repo_owner)=lower(?) AND lower(repo_name)=lower(?) AND COALESCE(repo_branch,'main')=? AND (repository_path IS NULL OR repository_path=?)",
+                    [String(Int(date.timeIntervalSince1970)), relative, skill.directory, owner, name, repo.branch, relative])
+                filled += 1
+            } catch WorkspaceSkillError.requestFailed(let detail) where detail.contains("HTTP 403") || detail.contains("HTTP 429") {
+                // 匿名 API 达到额度后停止本轮补取，避免对剩余技能重复发出必然失败的请求。
+                return filled
+            } catch {
+                // 单个来源不可用不影响其他技能，页面继续隐藏无法核实的日期。
+                continue
+            }
+        }
+        return filled
     }
 
     /// Git blob SHA-1 包含固定头部；与 GitHub Tree API 返回值同义，避免为检测逐个下载文件。
@@ -533,7 +584,8 @@ public actor WorkspaceSkillService {
                     let meta = SkillMetadata(readmeURL: previous?.readmeURL, repoOwner: previous?.repoOwner,
                         repoName: previous?.repoName, repoBranch: previous?.repoBranch,
                         repositoryPath: previous?.repositoryPath, installedAt: previous?.installedAt ?? Date(),
-                        updatedAt: Date(), contentHash: try directoryHash(destination))
+                        updatedAt: Date(), sourceUpdatedAt: previous?.sourceUpdatedAt,
+                        contentHash: try directoryHash(destination))
                     try saveMetadata(db, directory: unmanaged.name, meta: meta, name: parsed.name, description: parsed.description)
                 }
             }
@@ -720,6 +772,32 @@ public actor WorkspaceSkillService {
 
     // MARK: - GitHub API（固定提交 SHA，防止同一次安装混入不同提交的文件）
 
+    /// GitHub 的路径过滤只返回触及该技能目录的提交，避免把仓库里其他技能的提交日误显示出来。
+    private func fetchSourceUpdatedAt(repo: SkillRepo, relativePath: String, revision: String? = nil) async throws -> Date? {
+        for value in [repo.owner, repo.name] {
+            guard value.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil,
+                  value != ".", value != ".." else { throw WorkspaceSkillError.invalidRepository(repo.id) }
+        }
+        if !relativePath.isEmpty { try validateRelativePath(relativePath) }
+        guard var url = URLComponents(string: "https://api.github.com/repos/\(repo.owner)/\(repo.name)/commits") else {
+            throw WorkspaceSkillError.invalidRepository(repo.id)
+        }
+        // 安装时用目录树对应的固定提交，防止查询期间分支前进而拿到未安装版本的日期。
+        url.queryItems = [URLQueryItem(name: "sha", value: revision ?? repo.branch)]
+        if !relativePath.isEmpty { url.queryItems?.append(URLQueryItem(name: "path", value: relativePath)) }
+        url.queryItems?.append(URLQueryItem(name: "per_page", value: "1"))
+        guard let urlString = url.url?.absoluteString else { throw WorkspaceSkillError.invalidRepository(repo.id) }
+        let data = try await fetchData(urlString)
+        let commits = try JSONDecoder().decode([SourceCommitResponse].self, from: data)
+        guard let text = commits.first?.commit.committer?.date ?? commits.first?.commit.author?.date else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plainFormatter = ISO8601DateFormatter()
+        let date = formatter.date(from: text) ?? plainFormatter.date(from: text)
+        guard let date, date.timeIntervalSince1970 > 86400 else { return nil }
+        return date
+    }
+
     private func fetchTree(_ repo: SkillRepo, forceRefresh: Bool = false) async throws -> [TreeEntry] {
         for value in [repo.owner, repo.name] {
             guard value.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil, value != ".", value != ".." else {
@@ -817,6 +895,7 @@ public actor WorkspaceSkillService {
         let repositoryPath: String?
         let installedAt: Date
         let updatedAt: Date
+        let sourceUpdatedAt: Date?
         let contentHash: String?
     }
 
@@ -831,7 +910,9 @@ public actor WorkspaceSkillService {
             guard let directory = row["directory"] else { continue }
             result[directory] = SkillMetadata(readmeURL: row["readme_url"], repoOwner: row["repo_owner"], repoName: row["repo_name"], repoBranch: row["repo_branch"],
                 repositoryPath: row["repository_path"], installedAt: Date(timeIntervalSince1970: Double(row["installed_at"] ?? "0") ?? 0),
-                updatedAt: Date(timeIntervalSince1970: Double(row["updated_at"] ?? "0") ?? 0), contentHash: row["content_hash"])
+                updatedAt: Date(timeIntervalSince1970: Double(row["updated_at"] ?? "0") ?? 0),
+                sourceUpdatedAt: row["source_updated_at"].flatMap(Double.init).map(Date.init(timeIntervalSince1970:)),
+                contentHash: row["content_hash"])
         }
         // 来源记录不能只在第一次建库时导入：用户之后仍可能通过 skills.sh 安装技能。
         // 每次只读合并最新安装凭据，保留 Quotio 已保存的来源；浏览不会写库或修改外部锁文件。
@@ -845,14 +926,16 @@ public actor WorkspaceSkillService {
             if !hasSavedSource {
                 result[directory] = SkillMetadata(readmeURL: receipt.readmeURL, repoOwner: receipt.repoOwner,
                     repoName: receipt.repoName, repoBranch: receipt.repoBranch, repositoryPath: receipt.repositoryPath,
-                    installedAt: saved.installedAt, updatedAt: saved.updatedAt, contentHash: saved.contentHash)
+                    installedAt: saved.installedAt, updatedAt: saved.updatedAt,
+                    sourceUpdatedAt: saved.sourceUpdatedAt, contentHash: saved.contentHash)
             } else if savedRepo?.owner.lowercased() == receipt.repoOwner?.lowercased(),
                       savedRepo?.name.lowercased() == receipt.repoName?.lowercased(),
                       saved.repoBranch == receipt.repoBranch, saved.repositoryPath == nil {
                 // 路径属于具体分支；仅同仓库、同 ref 才能补齐，避免把新分支目录拼到旧分支下载。
                 result[directory] = SkillMetadata(readmeURL: saved.readmeURL, repoOwner: saved.repoOwner,
                     repoName: saved.repoName, repoBranch: saved.repoBranch, repositoryPath: receipt.repositoryPath,
-                    installedAt: saved.installedAt, updatedAt: saved.updatedAt, contentHash: saved.contentHash)
+                    installedAt: saved.installedAt, updatedAt: saved.updatedAt,
+                    sourceUpdatedAt: saved.sourceUpdatedAt, contentHash: saved.contentHash)
             }
         }
         return result
@@ -860,9 +943,10 @@ public actor WorkspaceSkillService {
 
     private func saveMetadata(_ db: WorkspaceSkillDatabase, directory: String, meta: SkillMetadata, name: String? = nil, description: String? = nil, ignoreExisting: Bool = false) throws {
         let mode = ignoreExisting ? "IGNORE" : "REPLACE"
-        try db.execute("INSERT OR \(mode) INTO skills_metadata(directory,name,description,repo_owner,repo_name,repo_branch,repository_path,readme_url,installed_at,updated_at,content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        try db.execute("INSERT OR \(mode) INTO skills_metadata(directory,name,description,repo_owner,repo_name,repo_branch,repository_path,readme_url,installed_at,updated_at,source_updated_at,content_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             [directory, name, description, meta.repoOwner, meta.repoName, meta.repoBranch, meta.repositoryPath, meta.readmeURL,
-             String(Int(meta.installedAt.timeIntervalSince1970)), String(Int(meta.updatedAt.timeIntervalSince1970)), meta.contentHash])
+             String(Int(meta.installedAt.timeIntervalSince1970)), String(Int(meta.updatedAt.timeIntervalSince1970)),
+             meta.sourceUpdatedAt.map { String(Int($0.timeIntervalSince1970)) }, meta.contentHash])
     }
 
     private func importSkillLockMetadata(db: WorkspaceSkillDatabase) throws {
@@ -902,7 +986,8 @@ public actor WorkspaceSkillService {
                 repoOwner: repository.owner, repoName: repository.name,
                 repoBranch: item["ref"] as? String ?? item["branch"] as? String ?? "HEAD",
                 repositoryPath: relative, installedAt: installed, updatedAt: date(item["updatedAt"]) ?? installed,
-                contentHash: nil) // skills CLI 的 Git tree SHA 不是 Quotio 的目录内容哈希，不能混用。
+                sourceUpdatedAt: nil,
+                contentHash: nil) // skills CLI 的操作时间和 Git tree SHA 不能冒充来源更新时间或目录内容哈希。
         }
         return result
     }

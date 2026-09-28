@@ -264,14 +264,22 @@ public nonisolated struct WorkspaceSkill: Identifiable, Codable, Sendable {
     /// 仓库内真实目录路径，与本地目录名分开保存，避免嵌套技能安装到错误来源。
     public let repositoryRelativePath: String?
     public let installedAt: Date?
+    /// 本地纳管或更新操作时间，只用于兼容现有记录，不能作为技能来源的更新时间展示。
     public var updatedAt: Date?
+    /// 来源仓库中该技能目录最近一次提交的时间；未知时不以本地安装或文件修改时间代替。
+    public var sourceUpdatedAt: Date?
     public var contentHash: String?
     public var enabledAgents: Set<WorkspaceAgent>
 
-    /// 检查更新时间是否真实有效（排查 0001 年 distantPast 与 1970 年等占位时间戳）
+    /// 检查旧本地操作时间是否真实有效（排查 0001 年 distantPast 与 1970 年等占位时间戳）。
     public var isValidUpdatedAt: Bool {
         guard let updatedAt else { return false }
         return updatedAt.timeIntervalSince1970 > 86400
+    }
+
+    public var isValidSourceUpdatedAt: Bool {
+        guard let sourceUpdatedAt else { return false }
+        return sourceUpdatedAt.timeIntervalSince1970 > 86400
     }
 
     public init(
@@ -284,6 +292,7 @@ public nonisolated struct WorkspaceSkill: Identifiable, Codable, Sendable {
         repoBranch: String? = nil,
         installedAt: Date? = nil,
         updatedAt: Date? = nil,
+        sourceUpdatedAt: Date? = nil,
         contentHash: String? = nil,
         enabledAgents: Set<WorkspaceAgent> = [],
         repositoryRelativePath: String? = nil
@@ -297,6 +306,7 @@ public nonisolated struct WorkspaceSkill: Identifiable, Codable, Sendable {
         self.repoBranch = repoBranch
         self.installedAt = installedAt
         self.updatedAt = updatedAt
+        self.sourceUpdatedAt = sourceUpdatedAt
         self.contentHash = contentHash
         self.enabledAgents = enabledAgents
         self.repositoryRelativePath = repositoryRelativePath

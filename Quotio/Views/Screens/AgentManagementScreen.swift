@@ -1553,23 +1553,9 @@ private struct AgentSkillsView: View {
                             .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(.primary)
 
-                        // GitHub Repo badge if linked
-                        if let owner = skill.repoOwner, let repo = skill.repoName {
-                            HStack(spacing: 3) {
-                                Image(systemName: "link")
-                                    .font(.system(size: 8.5))
-                                Text("\(owner)/\(repo)")
-                                    .font(.system(size: 10.5))
-                            }
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2.5)
-                            .background(Capsule().fill(Color.blue.opacity(colorScheme == .dark ? 0.20 : 0.10)))
-                            .foregroundStyle(Color.blue)
-                        }
-
-                        // Updated timestamp (仅在获取到真实有效更新时间时展示，排查掉 0001 年 / 1970 年等占位值)
-                        if let updatedAt = skill.updatedAt, skill.isValidUpdatedAt {
-                            Text("更新于 \(updatedAt.formatted(date: .abbreviated, time: .omitted))")
+                        // 仓库来源已显示在折叠标题中；这里只展示可核实的技能目录提交时间。
+                        if let sourceUpdatedAt = skill.sourceUpdatedAt, skill.isValidSourceUpdatedAt {
+                            Text("更新于 \(sourceUpdatedAt.formatted(date: .abbreviated, time: .omitted))")
                                 .font(.system(size: 10.5))
                                 .foregroundStyle(.tertiary)
                         }

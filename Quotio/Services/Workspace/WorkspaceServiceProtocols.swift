@@ -30,6 +30,7 @@ public nonisolated protocol WorkspaceSkillServicing: Sendable {
     func uninstallSkill(skillDirectory: String) async throws
     func updateAllSkillsReport() async -> WorkspaceOperationResult
     func checkForSkillUpdates(_ skills: [WorkspaceSkill]) async throws -> Set<String>
+    func backfillSourceUpdateDates(for skills: [WorkspaceSkill]) async -> Int
     func discoverSkills(repo: SkillRepo) async throws -> [DiscoverableSkill]
     func installSkill(skill: DiscoverableSkill, targetAgents: Set<WorkspaceAgent>) async throws
     func importUnmanagedSkill(_ unmanaged: UnmanagedSkill) async throws

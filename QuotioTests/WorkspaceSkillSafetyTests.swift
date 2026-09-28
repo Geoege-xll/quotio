@@ -39,6 +39,21 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
         XCTAssertTrue(installed.isEmpty)
     }
 
+    func testLegacyDatabaseMigrationNeverUsesLocalUpdateTimeAsSourceTime() async throws {
+        _ = try writeSkill(".quotio/skills/review")
+        let database = try WorkspaceSkillDatabase(path: home.appendingPathComponent(".quotio/quotio.db").path, create: true)
+        try database.execute("CREATE TABLE skills_metadata (directory TEXT PRIMARY KEY, name TEXT, description TEXT, repo_owner TEXT, repo_name TEXT, repo_branch TEXT, readme_url TEXT, installed_at INTEGER, updated_at INTEGER, content_hash TEXT, repository_path TEXT)")
+        try database.execute("INSERT INTO skills_metadata(directory,repo_owner,repo_name,repo_branch,repository_path,installed_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            ["review", "owner", "repository", "main", "skills/review", "1700000000", "1800000000"])
+        let service = WorkspaceSkillService(homeDir: home.path)
+        try await service.prepareStorage()
+        let installed = try await service.loadInstalledSkills()
+        XCTAssertEqual(installed.count, 1)
+        XCTAssertNil(installed[0].sourceUpdatedAt)
+        XCTAssertNotNil(installed[0].updatedAt)
+        XCTAssertTrue(try database.rows("PRAGMA table_info(skills_metadata)").contains { $0["name"] == "source_updated_at" })
+    }
+
     func testToggleAndUninstallPreserveIndependentClientDirectory() async throws {
         let service = try await service()
         _ = try writeSkill(".quotio/skills/review", body: "managed")
@@ -184,6 +199,27 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
         let installed = try await service.loadInstalledSkills()
         XCTAssertEqual(installed[0].repositoryRelativePath, "skills/productivity/review")
         XCTAssertEqual(installed[0].enabledAgents, [.claude])
+        XCTAssertEqual(installed[0].sourceUpdatedAt, ISO8601DateFormatter().date(from: "2025-02-03T04:05:06Z"))
+        XCTAssertNotEqual(installed[0].updatedAt, installed[0].sourceUpdatedAt,
+            "本地安装日不能冒充来源技能目录的最近提交日")
+    }
+
+    func testExistingSkillHidesLocalOperationTimeUntilSourceDateIsBackfilled() async throws {
+        let fixture = try networkFixture(failScript: false)
+        try await fixture.service.prepareStorage()
+        let discovered = try await fixture.service.discoverSkills(repo: fixture.repo)
+        try await fixture.service.installSkill(skill: discovered[0], targetAgents: [.claude])
+        let database = try WorkspaceSkillDatabase(path: home.appendingPathComponent(".quotio/quotio.db").path)
+        try database.execute("UPDATE skills_metadata SET source_updated_at=NULL, repository_path=NULL WHERE directory=?", ["review"])
+        let before = try await fixture.service.loadInstalledSkills()
+        XCTAssertNil(before[0].sourceUpdatedAt)
+        XCTAssertNotNil(before[0].updatedAt)
+
+        let filled = await fixture.service.backfillSourceUpdateDates(for: before)
+        XCTAssertEqual(filled, 1)
+        let after = try await fixture.service.loadInstalledSkills()
+        XCTAssertEqual(after[0].sourceUpdatedAt, ISO8601DateFormatter().date(from: "2025-02-03T04:05:06Z"))
+        XCTAssertEqual(after[0].repositoryRelativePath, "skills/productivity/review")
     }
 
     func testUpdateCheckFindsOnlyChangedRemoteContentWithoutReinstalling() async throws {
@@ -323,6 +359,13 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
         let revision = String(repeating: "f", count: 40)
         let raw = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.name)/" + revision
         WorkspaceSkillFixtureProtocol.store.set(prefix + "/commits/main", status: 200, data: try JSONSerialization.data(withJSONObject: ["sha": revision]))
+        for ref in ["main", revision] {
+            var sourceCommitsURL = URLComponents(string: prefix + "/commits")!
+            sourceCommitsURL.queryItems = [URLQueryItem(name: "sha", value: ref),
+                URLQueryItem(name: "path", value: "skills/productivity/review"), URLQueryItem(name: "per_page", value: "1")]
+            WorkspaceSkillFixtureProtocol.store.set(sourceCommitsURL.url!.absoluteString, status: 200,
+                data: try JSONSerialization.data(withJSONObject: [["commit": ["committer": ["date": "2025-02-03T04:05:06Z"]]]]))
+        }
         let files = [
             ("SKILL.md", "100644", "---\nname: review\ndescription: complete fixture\n---\nUse scripts/check.sh"),
             ("scripts/check.sh", "100755", "#!/bin/sh\necho complete\n"),

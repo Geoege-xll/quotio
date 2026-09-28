@@ -26,6 +26,8 @@ public final class WorkspaceViewModel {
     private var storageRevision = 0
     // 容量刷新独立于删除按钮生命周期；同一时刻只运行一个任务，新请求通过版本号合并。
     @ObservationIgnored private var storageAnalysisTask: Task<Void, Never>?
+    /// 来源更新时间补取独立运行，不让 GitHub 的逐技能请求阻塞技能列表首次展示。
+    @ObservationIgnored private var sourceDateTask: Task<Void, Never>?
     // 缓存不是 UI 状态，输入变更时失效；访问入口仍读取可观察输入，保证 SwiftUI 正常刷新。
     @ObservationIgnored private var sessionListCache: WorkspaceSessionListSnapshot?
     private var hasStartedInitialLoad = false
@@ -363,6 +365,8 @@ public final class WorkspaceViewModel {
     // MARK: - Skills Actions
 
     public func refreshSkills() async {
+        sourceDateTask?.cancel()
+        sourceDateTask = nil
         skillRevision += 1
         let revision = skillRevision
         let reposRevision = repositoryDataRevision
@@ -382,10 +386,25 @@ public final class WorkspaceViewModel {
             // 本地刷新可移除技能，但远端差异只有用户重新检测后才能更新结论。
             availableSkillUpdates.formIntersection(Set(installed.map(\.directory)))
             unmanagedSkills = unmanaged
+            backfillMissingSourceDates(from: installed, revision: revision)
             if let repo = selectedRepo { await fetchDiscoverableSkills(repo: repo) }
         } catch {
             guard revision == skillRevision, !Task.isCancelled else { return }
             errorMessage = "读取技能失败: \(error.localizedDescription)"
+        }
+    }
+
+    private func backfillMissingSourceDates(from skills: [WorkspaceSkill], revision: Int) {
+        let missing = skills.filter { $0.sourceUpdatedAt == nil && $0.repoOwner != nil && $0.repoName != nil }
+        guard !missing.isEmpty else { return }
+        sourceDateTask = Task { [weak self] in
+            guard let self else { return }
+            let count = await self.skillService.backfillSourceUpdateDates(for: missing)
+            guard count > 0, !Task.isCancelled, revision == self.skillRevision else { return }
+            // 补取结果写入独立字段后再读取；旧的本地操作时间始终不进入来源日期。
+            guard let refreshed = try? await self.skillService.loadInstalledSkills(),
+                  !Task.isCancelled, revision == self.skillRevision else { return }
+            self.installedSkills = refreshed
         }
     }
 
