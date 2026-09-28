@@ -5,6 +5,10 @@ import SwiftUI
 struct WorkspaceSkillRepositorySection<Content: View>: View {
     let group: WorkspaceSkillRepositoryGroup
     let searchText: String
+    let hasUpdates: Bool
+    let isUpdating: Bool
+    let isBusy: Bool
+    let onUpdate: () -> Void
     @ViewBuilder let content: Content
     @State private var isExpanded = false
 
@@ -42,6 +46,18 @@ struct WorkspaceSkillRepositorySection<Content: View>: View {
                 .accessibilityHint(isExpanded ? "收起技能列表" : "展开技能列表")
 
                 if let repository = group.repository {
+                    if hasUpdates {
+                        Button(action: onUpdate) {
+                            // 更新只针对这一仓库内检测出差异的技能，进度替换整个按钮内容。
+                            if isUpdating { SmallProgressView() }
+                            else { Label("更新", systemImage: "arrow.down.circle") }
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .buttonStyle(.quotioMicroCapsule(height: 26))
+                        .fixedSize()
+                        .disabled(isBusy)
+                        .help("更新此仓库中检测出差异的技能")
+                    }
                     WorkspaceSkillRepositoryAddressButton(repository: repository)
                 }
             }

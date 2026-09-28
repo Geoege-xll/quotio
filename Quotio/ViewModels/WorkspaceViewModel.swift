@@ -66,7 +66,9 @@ public final class WorkspaceViewModel {
     public var unmanagedSkills: [UnmanagedSkill] = []
     public var skillSearchText = ""
     public var isLoadingSkills = false
-    public var isUpdatingAllSkills = false
+    public private(set) var isCheckingSkillUpdates = false
+    public private(set) var updatingSkillRepositoryID: String? = nil
+    public private(set) var availableSkillUpdates: Set<String> = []
     public var isDiscoveringSkills = false
     public var isExportingSkills = false
     public var selectedSkillForPreview: WorkspaceSkill? = nil
@@ -78,6 +80,7 @@ public final class WorkspaceViewModel {
     public var storageReport: WorkspaceStorageReport? = nil
     public var isAnalyzingStorage = false
     public var isCleaningStorage = false
+    public private(set) var cacheCleaningTarget: String? = nil
     public var toastMessage: String? = nil
     public var errorMessage: String? = nil
 
@@ -376,6 +379,8 @@ public final class WorkspaceViewModel {
             if reposRevision == repositoryDataRevision { repos = loadedRepos }
             if !repos.contains(where: { $0.id == selectedRepo?.id }) { selectedRepo = repos.first }
             installedSkills = installed
+            // 本地刷新可移除技能，但远端差异只有用户重新检测后才能更新结论。
+            availableSkillUpdates.formIntersection(Set(installed.map(\.directory)))
             unmanagedSkills = unmanaged
             if let repo = selectedRepo { await fetchDiscoverableSkills(repo: repo) }
         } catch {
@@ -416,6 +421,7 @@ public final class WorkspaceViewModel {
         defer { isMutatingSkills = false }
         do {
             try await skillService.uninstallSkill(skillDirectory: skill.directory)
+            availableSkillUpdates.remove(skill.directory)
             try await reloadLocalSkills()
             showToast("已卸载技能: \(skill.name)")
         } catch {
@@ -423,18 +429,52 @@ public final class WorkspaceViewModel {
         }
     }
 
-    public func updateAllSkills() async {
-        guard !isMutatingSkills else { return }
+    /// 导航栏只检测差异，不触发逐个下载；结果按技能目录记录，仓库标题可据此显示更新入口。
+    public func checkForSkillUpdates() async {
+        guard !isMutatingSkills, !isCheckingSkillUpdates else { return }
+        let revision = skillRevision
         isMutatingSkills = true
-        isUpdatingAllSkills = true
-        defer { isUpdatingAllSkills = false; isMutatingSkills = false }
-        let result = await skillService.updateAllSkillsReport()
+        isCheckingSkillUpdates = true
+        defer { isCheckingSkillUpdates = false; isMutatingSkills = false }
         do {
-            try await reloadLocalSkills()
-            presentOperationResult(result, success: "一键更新完成，共更新 \(result.succeededCount) 个技能")
+            let updates = try await skillService.checkForSkillUpdates(installedSkills)
+            // 检测期间若技能列表被其他入口刷新，旧快照不能覆盖新的列表状态。
+            guard revision == skillRevision, !Task.isCancelled else { return }
+            availableSkillUpdates = updates
+            showToast(updates.isEmpty ? "所有已安装技能均为最新" : "检测到 \(updates.count) 个技能有更新")
         } catch {
-            errorMessage = error.localizedDescription
+            guard revision == skillRevision, !Task.isCancelled else { return }
+            errorMessage = "检测技能更新失败：\(error.localizedDescription)"
         }
+    }
+
+    /// 仓库按钮只安装本次检测到差异的技能，沿用服务层的备份、完整目录替换与回滚保护。
+    public func updateAvailableSkills(in repositoryID: String) async {
+        guard !isMutatingSkills,
+              let group = WorkspaceSkillRepositoryGroup.groups(in: installedSkills, matching: "").first(where: { $0.id == repositoryID }),
+              group.repository != nil else { return }
+        let pending = group.skills.filter { availableSkillUpdates.contains($0.directory) }
+        guard !pending.isEmpty else { return }
+        isMutatingSkills = true
+        updatingSkillRepositoryID = repositoryID
+        defer { updatingSkillRepositoryID = nil; isMutatingSkills = false }
+        var result = WorkspaceOperationResult()
+        for skill in pending {
+            guard let owner = skill.repoOwner, let name = skill.repoName else { continue }
+            let candidate = DiscoverableSkill(name: skill.name, description: skill.description,
+                directory: skill.directory, repoOwner: owner, repoName: name, repoBranch: skill.repoBranch ?? "main",
+                readmeURL: skill.readmeURL, repositoryRelativePath: skill.repositoryRelativePath)
+            do {
+                try await skillService.installSkill(skill: candidate, targetAgents: skill.enabledAgents)
+                availableSkillUpdates.remove(skill.directory)
+                result.succeededCount += 1
+            } catch {
+                result.failures.append("\(skill.name)：\(error.localizedDescription)")
+            }
+        }
+        do { try await reloadLocalSkills() }
+        catch { result.failures.append("刷新技能列表：\(error.localizedDescription)") }
+        presentOperationResult(result, success: "已更新 \(result.succeededCount) 个技能")
     }
 
     public func fetchDiscoverableSkills(repo: SkillRepo) async {
@@ -461,6 +501,7 @@ public final class WorkspaceViewModel {
         defer { isMutatingSkills = false }
         do {
             try await skillService.installSkill(skill: skill, targetAgents: targetAgents)
+            availableSkillUpdates.remove(skill.directory)
             try await reloadLocalSkills()
             showToast("已安装技能: \(skill.name)")
         } catch {
@@ -507,6 +548,7 @@ public final class WorkspaceViewModel {
         let unmanaged = try await skillService.scanUnmanagedSkills()
         guard revision == skillRevision else { return }
         installedSkills = installed
+        availableSkillUpdates.formIntersection(Set(installed.map(\.directory)))
         unmanagedSkills = unmanaged
         isLoadingSkills = false
     }
@@ -680,7 +722,9 @@ public final class WorkspaceViewModel {
     private func clearCaches(for agent: WorkspaceAgent?) async {
         guard !isCleaningStorage else { return }
         isCleaningStorage = true
-        defer { isCleaningStorage = false }
+        // 用独立目标区分全局清理、单智能体清理和旧会话清理，只有点击的按钮显示菊花。
+        cacheCleaningTarget = agent?.rawValue ?? "all"
+        defer { cacheCleaningTarget = nil; isCleaningStorage = false }
         let result = await storageService.clearCachesReport(for: agent)
         await analyzeStorage()
         let formatted = ByteCountFormatter.string(fromByteCount: result.freedBytes, countStyle: .file)

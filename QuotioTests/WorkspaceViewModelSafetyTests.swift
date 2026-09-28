@@ -6,6 +6,29 @@ import Observation
 /// 不使用真实 Home、网络或时间等待验证竞态。
 final class WorkspaceViewModelSafetyTests: XCTestCase {
     @MainActor
+    func testDetectedSkillUpdatesOnlyInstallChangedSkillsInSelectedRepository() async {
+        let skills = WorkspaceSkillStub()
+        let vm = makeViewModel(skills: skills)
+        vm.installedSkills = [
+            WorkspaceSkill(name: "新版", description: "", directory: "changed", repoOwner: "owner", repoName: "first", enabledAgents: [.claude]),
+            WorkspaceSkill(name: "旧版", description: "", directory: "unchanged", repoOwner: "owner", repoName: "first", enabledAgents: [.codex]),
+            WorkspaceSkill(name: "其他仓库", description: "", directory: "other", repoOwner: "owner", repoName: "second", enabledAgents: [.pi])
+        ]
+        await skills.setInstalledSkills(vm.installedSkills)
+        await skills.setAvailableUpdates(["changed", "other"])
+
+        await vm.checkForSkillUpdates()
+        XCTAssertEqual(vm.availableSkillUpdates, ["changed", "other"])
+        await vm.updateAvailableSkills(in: "github:owner/first")
+
+        // 同仓库的未变技能和其他仓库待更新技能都不能被这次仓库按钮重新安装。
+        let calls = await skills.installCalls
+        XCTAssertEqual(calls, ["changed"])
+        XCTAssertEqual(vm.availableSkillUpdates, ["other"])
+        XCTAssertNil(vm.updatingSkillRepositoryID)
+    }
+
+    @MainActor
     func testLateRepositoryResponseCannotReplaceCurrentSelection() async {
         let skills = WorkspaceSkillStub()
         await skills.setDeferredDiscovery(true)
@@ -483,13 +506,16 @@ private actor WorkspaceSkillStub: WorkspaceSkillServicing {
     func prepareStorage() async throws { prepareCount += 1 }
     private var repos: [SkillRepo] = []
     private var deferredLocalLoad = false
+    private var installed: [WorkspaceSkill] = []
+    private var updates: Set<String> = []
+    private(set) var installCalls: [String] = []
     private var localLoad: CheckedContinuation<[WorkspaceSkill], Never>?
     private var localObserver: CheckedContinuation<Void, Never>?
     func loadRepos() async throws -> [SkillRepo] { repos }
     func saveRepos(_ repos: [SkillRepo]) async { self.repos = repos }
     func setDeferredLocalLoad(_ value: Bool) { deferredLocalLoad = value }
     func loadInstalledSkills() async throws -> [WorkspaceSkill] {
-        guard deferredLocalLoad else { return [] }
+        guard deferredLocalLoad else { return installed }
         return await withCheckedContinuation {
             localLoad = $0
             localObserver?.resume(); localObserver = nil
@@ -500,12 +526,15 @@ private actor WorkspaceSkillStub: WorkspaceSkillServicing {
         await withCheckedContinuation { localObserver = $0 }
     }
     func finishLocalLoad() { localLoad?.resume(returning: []); localLoad = nil; deferredLocalLoad = false }
+    func setInstalledSkills(_ value: [WorkspaceSkill]) { installed = value }
+    func setAvailableUpdates(_ value: Set<String>) { updates = value }
     func scanUnmanagedSkills() async throws -> [UnmanagedSkill] { [] }
     func toggleAgent(skillDirectory: String, agent: WorkspaceAgent, enable: Bool) async throws {}
     func bulkToggleAllAgents(skillDirectory: String, enable: Bool) async throws {}
     func uninstallSkill(skillDirectory: String) async throws {}
     func updateAllSkillsReport() async -> WorkspaceOperationResult { .init() }
-    func installSkill(skill: DiscoverableSkill, targetAgents: Set<WorkspaceAgent>) async throws {}
+    func checkForSkillUpdates(_ skills: [WorkspaceSkill]) async throws -> Set<String> { updates }
+    func installSkill(skill: DiscoverableSkill, targetAgents: Set<WorkspaceAgent>) async throws { installCalls.append(skill.directory) }
     func importUnmanagedSkill(_ unmanaged: UnmanagedSkill) async throws {}
     func exportSkillsArchive(to destinationURL: URL) async throws {}
     func setDeferredDiscovery(_ value: Bool) { deferredDiscovery = value }

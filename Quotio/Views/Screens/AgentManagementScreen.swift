@@ -129,17 +129,23 @@ public struct AgentManagementScreen: View {
             Button {
                 Task { await viewModel.refreshSessions() }
             } label: {
-                HStack(spacing: 4) {
-                    if viewModel.isLoadingSessions {
-                        ProgressView().controlSize(.mini)
-                    }
-                    Label("刷新会话", systemImage: "arrow.clockwise")
-                }
+                if viewModel.isLoadingSessions { SmallProgressView() }
+                else { Image(systemName: "arrow.clockwise") }
             }
             .help("刷新会话")
             .disabled(viewModel.isLoadingSessions || viewModel.isDeletingSessions)
 
         case .skills:
+            Button {
+                Task { await viewModel.refreshSkills() }
+            } label: {
+                // 与账户管理的刷新按钮一致：加载期间用菊花替换整枚图标，不挤动导航布局。
+                if viewModel.isLoadingSkills { SmallProgressView() }
+                else { Image(systemName: "arrow.clockwise") }
+            }
+            .help("刷新技能")
+            .disabled(viewModel.isLoadingSkills || viewModel.isMutatingSkills)
+
             Button {
                 viewModel.showAddRepoSheet = true
             } label: {
@@ -150,39 +156,36 @@ public struct AgentManagementScreen: View {
             Button {
                 Task { await viewModel.exportSkillsBackup() }
             } label: {
-                HStack(spacing: 4) {
-                    if viewModel.isExportingSkills {
-                        ProgressView().controlSize(.mini)
-                    }
-                    Label("导出备份包", systemImage: "square.and.arrow.up")
-                }
+                if viewModel.isExportingSkills { SmallProgressView() }
+                else { Label("导出备份包", systemImage: "square.and.arrow.up") }
             }
             .help("导出全部技能为 .zip 归档文件")
             .disabled(viewModel.isMutatingSkills || viewModel.installedSkills.isEmpty)
 
             Button {
-                Task { await viewModel.updateAllSkills() }
+                Task { await viewModel.checkForSkillUpdates() }
             } label: {
-                HStack(spacing: 4) {
-                    if viewModel.isUpdatingAllSkills {
-                        ProgressView().controlSize(.mini)
-                    }
-                    Label("一键全部更新", systemImage: "arrow.triangle.2.circlepath")
-                }
+                if viewModel.isCheckingSkillUpdates { SmallProgressView() }
+                else { Label("检测更新", systemImage: "arrow.triangle.2.circlepath") }
             }
-            .help("更新所有已安装技能")
-            .disabled(viewModel.isMutatingSkills || viewModel.installedSkills.isEmpty)
+            .help("检测技能更新")
+            .disabled(viewModel.isMutatingSkills || viewModel.isLoadingSkills || viewModel.installedSkills.isEmpty)
 
         case .storage:
             Button {
+                Task { await viewModel.clearAllCaches() }
+            } label: {
+                if viewModel.cacheCleaningTarget == "all" { SmallProgressView() }
+                else { Image(systemName: "trash") }
+            }
+            .help("清空全部智能体缓存")
+            .disabled((viewModel.storageReport?.totalCacheBytes ?? 0) == 0 || viewModel.isCleaningStorage)
+
+            Button {
                 Task { await viewModel.analyzeStorage() }
             } label: {
-                HStack(spacing: 4) {
-                    if viewModel.isAnalyzingStorage {
-                        ProgressView().controlSize(.mini)
-                    }
-                    Label("重新度量", systemImage: "gauge")
-                }
+                if viewModel.isAnalyzingStorage { SmallProgressView() }
+                else { Label("重新度量", systemImage: "gauge") }
             }
             .help("重新分析磁盘与缓存占用")
             .disabled(viewModel.isAnalyzingStorage)
@@ -1447,7 +1450,7 @@ private struct AgentSkillsView: View {
     private var subTabSubtitle: String {
         switch viewModel.selectedSkillSubTab {
         case .installed:
-            return "按来源仓库展开技能，点击地址查看 GitHub 仓库；智能体胶囊可实时挂载或解除软链接。"
+            return "按来源仓库展开技能；检测到内容差异后，可在对应仓库地址前更新。"
         case .discover:
             return "按 SKILL.md 官方规范拉取优质技能，一键部署并在多智能体中分发。"
         }
@@ -1516,7 +1519,18 @@ private struct AgentSkillsView: View {
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(groups) { group in
-                        WorkspaceSkillRepositorySection(group: group, searchText: viewModel.skillSearchText) {
+                        WorkspaceSkillRepositorySection(
+                            group: group,
+                            searchText: viewModel.skillSearchText,
+                            hasUpdates: viewModel.installedSkills.contains {
+                                viewModel.availableSkillUpdates.contains($0.directory) &&
+                                $0.repoOwner?.localizedCaseInsensitiveCompare(group.repository?.owner ?? "") == .orderedSame &&
+                                $0.repoName?.localizedCaseInsensitiveCompare(group.repository?.name ?? "") == .orderedSame
+                            },
+                            isUpdating: viewModel.updatingSkillRepositoryID == group.id,
+                            isBusy: viewModel.isMutatingSkills,
+                            onUpdate: { Task { await viewModel.updateAvailableSkills(in: group.id) } }
+                        ) {
                             LazyVStack(spacing: 12) {
                                 ForEach(group.skills) { skill in
                                     skillRow(skill: skill)
@@ -1942,10 +1956,9 @@ private struct AgentStorageView: View {
                     Button {
                         Task { await viewModel.clearAllCaches() }
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "trash.fill")
-                                .font(.system(size: 10))
-                            Text("清空缓存 (\(formatBytes(report.totalCacheBytes)))")
+                        if viewModel.cacheCleaningTarget == "all" { SmallProgressView() }
+                        else {
+                            Label("清空缓存 (\(formatBytes(report.totalCacheBytes)))", systemImage: "trash.fill")
                                 .font(.system(size: 11, weight: .semibold))
                         }
                     }
@@ -2087,12 +2100,8 @@ private struct AgentStorageView: View {
                     Button {
                         Task { await viewModel.clearAgentCaches(item.agent) }
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "trash")
-                                .font(.system(size: 10))
-                            Text("清空缓存")
-                                .font(.system(size: 11, weight: .medium))
-                        }
+                        if viewModel.cacheCleaningTarget == item.agent.rawValue { SmallProgressView() }
+                        else { Label("清空缓存", systemImage: "trash").font(.system(size: 11, weight: .medium)) }
                     }
                     .buttonStyle(.quotioMicroCapsule(height: 24))
                     .disabled(viewModel.isCleaningStorage)

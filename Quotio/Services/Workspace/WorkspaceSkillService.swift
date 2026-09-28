@@ -21,7 +21,7 @@ public actor WorkspaceSkillService {
     /// actor 在网络 await 时允许重入，因此显式锁住同一个技能的整个操作，
     /// 防止更新等待下载时被卸载，随后又把已卸载的目录写回来。
     private var busySkills: Set<String> = []
-    /// 短时复用同一仓库快照，发现→安装及一键更新不为每个文件重复消耗 GitHub API 配额。
+    /// 短时复用同一仓库快照，发现、检测和安装不为每个文件重复消耗 GitHub API 配额。
     private var repositoryTrees: [String: (Date, [TreeEntry])] = [:]
 
     /// 构造只保存依赖；不创建目录、不迁移用户文件，测试和页面状态初始化均无磁盘副作用。
@@ -389,6 +389,79 @@ public actor WorkspaceSkillService {
         return WorkspaceOperationResult(succeededCount: count, freedBytes: 0, failures: failures)
     }
 
+    /// 只拉取每个来源仓库的目录树，比较远端 Git blob 与本地文件内容和执行位；检测本身不下载或覆盖技能。
+    /// 已安装目录若有本地改动也会被列为差异，实际更新仍使用现有备份与回滚流程。
+    public func checkForSkillUpdates(_ skills: [WorkspaceSkill]) async throws -> Set<String> {
+        var trees: [String: [TreeEntry]] = [:]
+        var outdated: Set<String> = []
+        for skill in skills {
+            try Task.checkCancellation()
+            guard let owner = skill.repoOwner, let name = skill.repoName else { continue }
+            let repo = SkillRepo(owner: owner, name: name, branch: skill.repoBranch ?? "main")
+            let key = repo.id + "@" + repo.branch
+            let tree: [TreeEntry]
+            if let cached = trees[key] {
+                tree = cached
+            } else {
+                // 手动检测必须越过一分钟缓存，避免用户点击后仍看到旧提交。
+                tree = try await fetchTree(repo, forceRefresh: true)
+                trees[key] = tree
+            }
+            let candidate = DiscoverableSkill(name: skill.name, description: skill.description,
+                directory: skill.directory, repoOwner: owner, repoName: name, repoBranch: repo.branch,
+                readmeURL: skill.readmeURL, repositoryRelativePath: skill.repositoryRelativePath)
+            let relative = try resolveRepositoryPath(skill: candidate, tree: tree)
+            let remote = try remoteBlobSignatures(in: tree, relativePath: relative)
+            let local = try localBlobSignatures(at: managedPath(skill.directory))
+            if remote != local { outdated.insert(skill.directory) }
+        }
+        return outdated
+    }
+
+    /// Git blob SHA-1 包含固定头部；与 GitHub Tree API 返回值同义，避免为检测逐个下载文件。
+    private func localBlobSignatures(at root: String) throws -> [String: String] {
+        guard isRegularDirectory(root) else { throw WorkspaceSkillError.invalidPath(root) }
+        var result: [String: String] = [:]
+        func visit(_ folder: String, prefix: String) throws {
+            for name in try fileManager.contentsOfDirectory(atPath: folder).sorted() {
+                let path = folder + "/" + name
+                let relative = prefix + name
+                guard !isSymlink(path) else { throw WorkspaceSkillError.invalidPath(path) }
+                let attributes = try fileManager.attributesOfItem(atPath: path)
+                if attributes[.type] as? FileAttributeType == .typeDirectory {
+                    try visit(path, prefix: relative + "/")
+                } else if attributes[.type] as? FileAttributeType == .typeRegular {
+                    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+                    var hash = Insecure.SHA1()
+                    hash.update(data: Data("blob \(data.count)\0".utf8))
+                    hash.update(data: data)
+                    let sha = hash.finalize().map { String(format: "%02x", $0) }.joined()
+                    let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+                    result[relative] = "\((permissions & 0o111) == 0 ? "100644" : "100755"):\(sha)"
+                } else { throw WorkspaceSkillError.invalidPath(path) }
+            }
+        }
+        try visit(root, prefix: "")
+        return result
+    }
+
+    private func remoteBlobSignatures(in tree: [TreeEntry], relativePath: String) throws -> [String: String] {
+        var result: [String: String] = [:]
+        for entry in tree where relativePath.isEmpty || entry.path.hasPrefix(relativePath + "/") {
+            guard entry.type == "blob" || entry.type == "tree" else { throw WorkspaceSkillError.invalidRepository(entry.path) }
+            if entry.type == "tree" { continue }
+            guard entry.mode == "100644" || entry.mode == "100755",
+                  entry.sha.range(of: "^[a-fA-F0-9]{40}$", options: .regularExpression) != nil else {
+                throw WorkspaceSkillError.invalidRepository(entry.path)
+            }
+            let path = relativePath.isEmpty ? entry.path : String(entry.path.dropFirst(relativePath.count + 1))
+            try validateRelativePath(path)
+            result[path] = "\(entry.mode):\(entry.sha.lowercased())"
+        }
+        guard result["SKILL.md"] != nil else { throw WorkspaceSkillError.invalidRepository(relativePath) }
+        return result
+    }
+
     public func updateAllSkills() async throws -> Int {
         let report = await updateAllSkillsReport()
         guard report.failures.isEmpty else { throw WorkspaceSkillError.incompleteOperation(report.failures.joined(separator: "\n")) }
@@ -647,7 +720,7 @@ public actor WorkspaceSkillService {
 
     // MARK: - GitHub API（固定提交 SHA，防止同一次安装混入不同提交的文件）
 
-    private func fetchTree(_ repo: SkillRepo) async throws -> [TreeEntry] {
+    private func fetchTree(_ repo: SkillRepo, forceRefresh: Bool = false) async throws -> [TreeEntry] {
         for value in [repo.owner, repo.name] {
             guard value.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil, value != ".", value != ".." else {
                 throw WorkspaceSkillError.invalidRepository(repo.id)
@@ -657,7 +730,7 @@ public actor WorkspaceSkillService {
             throw WorkspaceSkillError.invalidRepository(repo.branch)
         }
         let cacheKey = repo.id + "@" + repo.branch
-        if let cached = repositoryTrees[cacheKey], Date().timeIntervalSince(cached.0) < 60 { return cached.1 }
+        if !forceRefresh, let cached = repositoryTrees[cacheKey], Date().timeIntervalSince(cached.0) < 60 { return cached.1 }
         let commitData = try await fetchData("https://api.github.com/repos/\(repo.owner)/\(repo.name)/commits/\(branch)")
         let revision = try JSONDecoder().decode(CommitResponse.self, from: commitData).sha
         guard revision.range(of: "^[a-fA-F0-9]{40,64}$", options: .regularExpression) != nil else {

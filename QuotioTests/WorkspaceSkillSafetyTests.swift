@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import CryptoKit
 @testable import QuotioPlus
 
 /// 所有文件和配置都在每个测试独立的临时 HOME 下，网络由 URLProtocol fixture 接管，
@@ -185,6 +186,31 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
         XCTAssertEqual(installed[0].enabledAgents, [.claude])
     }
 
+    func testUpdateCheckFindsOnlyChangedRemoteContentWithoutReinstalling() async throws {
+        let fixture = try networkFixture(failScript: false)
+        try await fixture.service.prepareStorage()
+        let discovered = try await fixture.service.discoverSkills(repo: fixture.repo)
+        try await fixture.service.installSkill(skill: discovered[0], targetAgents: [.claude])
+        let installed = try await fixture.service.loadInstalledSkills()
+        let initialUpdates = try await fixture.service.checkForSkillUpdates(installed)
+        XCTAssertTrue(initialUpdates.isEmpty)
+
+        // 只改变远端目录树的一个 blob；检测不应修改已安装脚本或触发重新安装。
+        let prefix = "https://api.github.com/repos/\(fixture.repo.owner)/\(fixture.repo.name)"
+        let revision = String(repeating: "f", count: 40)
+        let changed = "# 新版指南"
+        let tree: [[String: Any]] = [
+            ["path": "skills/productivity/review/SKILL.md", "mode": "100644", "type": "blob", "sha": gitBlobSHA("---\nname: review\ndescription: complete fixture\n---\nUse scripts/check.sh"), "size": 82],
+            ["path": "skills/productivity/review/scripts/check.sh", "mode": "100755", "type": "blob", "sha": gitBlobSHA("#!/bin/sh\necho complete\n"), "size": 24],
+            ["path": "skills/productivity/review/references/guide.md", "mode": "100644", "type": "blob", "sha": gitBlobSHA(changed), "size": changed.utf8.count]
+        ]
+        WorkspaceSkillFixtureProtocol.store.set(prefix + "/git/trees/" + revision + "?recursive=1", status: 200,
+            data: try JSONSerialization.data(withJSONObject: ["tree": tree, "truncated": false]))
+        let changedUpdates = try await fixture.service.checkForSkillUpdates(installed)
+        XCTAssertEqual(changedUpdates, ["review"])
+        XCTAssertEqual(try String(contentsOfFile: home.appendingPathComponent(".quotio/skills/review/references/guide.md").path, encoding: .utf8), "reference data")
+    }
+
     func testFailedDownloadDoesNotCreateFinalOrTemporarySkill() async throws {
         let fixture = try networkFixture(failScript: true)
         try await fixture.service.prepareStorage()
@@ -304,7 +330,7 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
         ]
         var tree: [[String: Any]] = []
         for (index, file) in files.enumerated() {
-            let sha = String(repeating: String(index + 1), count: 40)
+            let sha = gitBlobSHA(file.2)
             tree.append(["path": "skills/productivity/review/" + file.0, "mode": file.1, "type": "blob", "sha": sha, "size": file.2.utf8.count])
             WorkspaceSkillFixtureProtocol.store.set(raw + "/skills/productivity/review/" + file.0, status: failScript && index == 1 ? 503 : 200, data: Data(file.2.utf8))
         }
@@ -313,6 +339,15 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [WorkspaceSkillFixtureProtocol.self]
         return (WorkspaceSkillService(homeDir: home.path, session: URLSession(configuration: config)), repo)
+    }
+
+    /// 测试目录树使用真实 Git blob 摘要，使“安装后立即检测”能验证无差异路径。
+    private func gitBlobSHA(_ content: String) -> String {
+        let data = Data(content.utf8)
+        var hash = Insecure.SHA1()
+        hash.update(data: Data("blob \(data.count)\0".utf8))
+        hash.update(data: data)
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 
