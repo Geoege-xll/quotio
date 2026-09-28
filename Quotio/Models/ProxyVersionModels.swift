@@ -78,6 +78,12 @@ nonisolated struct ProxyVersionInfo: Sendable, Identifiable, Equatable {
     let localFilePath: String?
 
     var id: String { version }
+
+    /// 本应用仅允许运行 CPA 8 系列；解析版本号而非字符串前缀，避免接受 80.x 等错误版本。
+    var isSupportedMajorVersion: Bool {
+        let normalized = version.hasPrefix("v") ? String(version.dropFirst()) : version
+        return normalized.split(separator: ".").first.flatMap { Int($0) } == 8
+    }
     
     /// Create from GitHub release and compatible asset.
     /// Note: Returns nil if no valid SHA256 checksum is available.

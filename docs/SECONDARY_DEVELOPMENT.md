@@ -244,9 +244,11 @@ cc-switch 从 `db41d701879592b8eca938cbe5c5ac28dd732b9f` 对比新提交，优�
 
 当前 Quotio 通过 `CLIProxyManager` 从 `router-for-me/CLIProxyAPI` 发布页获取二进制，不在应用工程中编译 CPA 源码。更新时记录实际 CPA 版本，并验证：
 
+2026-09-28 起，QuotioPlus 仅安装、激活和运行 CPA 8.x。官方仍同时发布 7.x，因此 Atom 发布源和版本列表必须先过滤主版本，再选择“最新”版本。既有 7.x 格式的 `config.yaml` 只作为迁移输入：先备份，使用 CPA 的 `/v8/management/config` 空 PATCH 完成官方迁移，验证 v8 配置和管理接口后保留首次迁移备份；失败时恢复原文件。新配置应直接使用 `server`、`management`、`access.api-keys`、`api-keys.<provider>`、`oauth`、`requests` 与 `observability` 结构。当前部分管理功能仍调用 CPA 8 官方保留的 `/v0/management` 兼容接口，后续替换时须逐项核对响应模型与副作用，不能直接全局替换 URL。
+
 1. 版本化存储和活动 `current` 链接可用，升级／回退不会删除活动版本。
 2. 代理启动、停止、健康检查、授权和模型目录正常。
-3. 管理 API 的路径、鉴权、字段和错误语义；尤其是 `/usage-queue` 的消费式读取与旧 `/usage` 兼容。
+3. 管理 API 的路径、鉴权、字段和错误语义；尤其是用量队列的消费式读取，旧 `/usage` 仅用于历史兼容代码。
 4. 队列读取不能套用可能重复消费的普通自动重试；同一时段只能由现有单消费者负责。
 5. 请求数／Token 的停止、重启、失败和持久化状态正确。
 

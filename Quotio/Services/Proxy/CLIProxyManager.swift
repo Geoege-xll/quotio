@@ -5,6 +5,7 @@
 
 import Foundation
 import AppKit
+import Yams
 
 @MainActor
 @Observable
@@ -85,6 +86,11 @@ final class CLIProxyManager {
     private(set) var isStarting = false
     /// 停止可能发生在旧启动的端口清理期间；下一次启动要等旧流程真正退出。
     @ObservationIgnored private var startupWaiters: [CheckedContinuation<Void, Never>] = []
+    /// 界面可能连续保存或切换服务商；串行执行局部 PATCH，防止后发请求用旧文件覆盖先发结果。
+    @ObservationIgnored private var providerSyncInProgress = false
+    @ObservationIgnored private var providerSyncWaiters: [CheckedContinuation<Void, Never>] = []
+    /// 局部配置编辑若失败，启动流程须在拉起进程前明确中止，不能继续用旧端口或旧密钥探测。
+    @ObservationIgnored private var configWriteFailed = false
     private(set) var isDownloading = false
     private(set) var isRegeneratingKey = false
     private(set) var downloadProgress: Double = 0
@@ -186,6 +192,35 @@ final class CLIProxyManager {
     var managementURL: String {
         "\(baseURL)/v0/management"
     }
+
+    /// CPA 8 的配置已经把客户端密钥移到 access.api-keys；顶层 api-keys 是上游凭据分组。
+    /// 这里根据实际文件结构判断，兼容尚未由官方管理接口迁移的旧配置。
+    private var usesV8Config: Bool {
+        guard let text = try? String(contentsOfFile: configPath, encoding: .utf8),
+              let root = try? Yams.load(yaml: text) as? [String: Any] else { return false }
+        return CPAConfigLayout.isMigratedV8(root)
+    }
+
+    /// 混合布局中 v8 字段优先于旧字段；启动前同步端口和管理密钥时必须先识别该节点。
+    private func hasV8Section(_ key: String) -> Bool {
+        guard let text = try? String(contentsOfFile: configPath, encoding: .utf8),
+              let root = try? Yams.load(yaml: text) as? [String: Any] else { return false }
+        return root[key] is [String: Any]
+    }
+
+    /// 只修改指定的 v8 字段，保留其余节点、注释和顺序；解析失败时拒绝写入。
+    /// 旧配置先由官方迁移器处理，避免在混合布局上按错误路径修改密钥。
+    private func updateV8Config(path: [String], value: Any) {
+        guard let text = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
+        do {
+            let updated = try CPAConfigLayout.updating(text, path: path, value: value)
+            if updated != text { try updated.write(toFile: configPath, atomically: true, encoding: .utf8) }
+        } catch {
+            configWriteFailed = true
+            lastError = "CPA 8 配置更新失败，请检查 config.yaml 的字段结构"
+            NSLog("[CLIProxyManager] Failed to update CPA 8 config path: \(path.joined(separator: "."))")
+        }
+    }
     
     init() {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
@@ -264,14 +299,38 @@ final class CLIProxyManager {
     }
 
     private func updateConfigPort(_ newPort: UInt16) {
-        updateConfigValue(pattern: #"port:\s*\d+"#, replacement: "port: \(newPort)")
+        if hasV8Section("server") {
+            updateV8Config(path: ["server", "port"], value: Int(newPort))
+            return
+        }
+        // 旧布局也只修改根级端口，避免碰到服务商 URL 或扩展字段中的同名文本。
+        updateConfigValue(pattern: #"(?m)^port:[ \t]*\d+"#, replacement: "port: \(newPort)")
     }
 
     private func updateConfigHost(_ host: String) {
-        updateConfigValue(pattern: #"host:\s*"[^"]*""#, replacement: "host: \"\(host)\"")
+        if hasV8Section("server") {
+            updateV8Config(path: ["server", "host"], value: host)
+            return
+        }
+        updateConfigValue(pattern: #"(?m)^host:[^\n]*$"#, replacement: "host: \"\(host)\"")
     }
 
     private func ensureApiKeyExistsInConfig() {
+        if hasV8Section("access") {
+            // v8 的顶层 api-keys 保存上游密钥，绝不能向其中插入客户端密钥字符串。
+            guard let text = try? String(contentsOfFile: configPath, encoding: .utf8),
+                  let root = try? Yams.load(yaml: text) as? [String: Any] else { return }
+            let access = root["access"] as? [String: Any] ?? [:]
+            if access["api-keys"] != nil && !(access["api-keys"] is [String]) {
+                NSLog("[CLIProxyManager] CPA 8 access.api-keys is not a list; refusing to overwrite")
+                return
+            }
+            let keys = access["api-keys"] as? [String] ?? []
+            if keys.isEmpty {
+                updateV8Config(path: ["access", "api-keys"], value: ["quotio-local-\(UUID().uuidString)"])
+            }
+            return
+        }
         guard FileManager.default.fileExists(atPath: configPath),
               let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
             return
@@ -321,10 +380,19 @@ final class CLIProxyManager {
     }
     
     func updateConfigAllowRemote(_ enabled: Bool) {
+        if hasV8Section("management") {
+            updateV8Config(path: ["management", "allow-remote"], value: enabled)
+            return
+        }
         updateConfigValue(pattern: #"allow-remote:\s*(true|false)"#, replacement: "allow-remote: \(enabled)")
     }
 
     func updateConfigLogging(enabled: Bool) {
+        if hasV8Section("observability") {
+            updateV8Config(path: ["observability", "logs", "logging-to-file"], value: enabled)
+            restartProxyIfRunning()
+            return
+        }
         updateConfigValue(pattern: #"logging-to-file:\s*(true|false)"#, replacement: "logging-to-file: \(enabled)")
         restartProxyIfRunning()
     }
@@ -332,25 +400,33 @@ final class CLIProxyManager {
     /// Update routing strategy in config file
     /// Note: Changes take effect after proxy restart (CLIProxyAPI does not support live routing API)
     func updateConfigRoutingStrategy(_ strategy: String) {
+        if hasV8Section("routing") {
+            updateV8Config(path: ["routing", "strategy"], value: strategy)
+            restartProxyIfRunning()
+            return
+        }
         updateConfigValue(pattern: #"strategy:\s*"[^"]*""#, replacement: "strategy: \"\(strategy)\"")
         NSLog("[CLIProxyManager] Routing strategy updated to: \(strategy) (restarting proxy)")
         restartProxyIfRunning()
     }
     
     func updateConfigProxyURL(_ url: String?) {
+        if hasV8Section("requests") {
+            updateV8Config(path: ["requests", "proxy-url"], value: url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+            restartProxyIfRunning()
+            return
+        }
         guard FileManager.default.fileExists(atPath: configPath),
               var content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
 
         let proxyValue = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        if let range = content.range(of: #"proxy-url:\s*\"[^\"]*\""#, options: .regularExpression) {
-            content.replaceSubrange(range, with: "proxy-url: \"\(proxyValue)\"")
-            try? content.write(toFile: configPath, atomically: true, encoding: .utf8)
-        } else if let range = content.range(of: #"proxy-url:\s*[^\n]*"#, options: .regularExpression) {
+        if let range = content.range(of: #"(?m)^proxy-url:[^\n]*$"#, options: .regularExpression) {
+            // 旧布局只允许更改根级全局代理；密钥条目里的同名字段属于单密钥代理。
             content.replaceSubrange(range, with: "proxy-url: \"\(proxyValue)\"")
             try? content.write(toFile: configPath, atomically: true, encoding: .utf8)
         } else {
-            if let portRange = content.range(of: #"port:\s*\d+\n"#, options: .regularExpression) {
+            if let portRange = content.range(of: #"(?m)^port:[^\n]*\n"#, options: .regularExpression) {
                 content.insert(contentsOf: "proxy-url: \"\(proxyValue)\"\n", at: portRange.upperBound)
                 try? content.write(toFile: configPath, atomically: true, encoding: .utf8)
             }
@@ -440,37 +516,41 @@ final class CLIProxyManager {
         guard !FileManager.default.fileExists(atPath: configPath) else { return }
 
         let defaultConfig = """
-        host: "\(allowNetworkAccess ? "0.0.0.0" : "127.0.0.1")"
-        port: \(proxyStatus.port)
-        auth-dir: "\(authDir)"
-        proxy-url: ""
-
-        api-keys:
-          - "quotio-local-\(UUID().uuidString)"
-
-        remote-management:
+        config-version: 8
+        server:
+          host: "\(allowNetworkAccess ? "0.0.0.0" : "127.0.0.1")"
+          port: \(proxyStatus.port)
+        management:
           allow-remote: false
           secret-key: "\(managementKey)"
-
-        debug: false
-        logging-to-file: false
-        usage-statistics-enabled: true
-
+        access:
+          api-keys:
+            - "quotio-local-\(UUID().uuidString)"
+        oauth:
+          auth-dir: "\(authDir)"
+        requests:
+          proxy-url: ""
+        observability:
+          logs:
+            debug: false
+            logging-to-file: false
+          usage:
+            usage-statistics-enabled: true
         routing:
           strategy: "round-robin"
-
-        quota-exceeded:
-          switch-project: true
-          switch-preview-model: true
-
-        request-retry: 3
-        max-retry-interval: 30
+          retry:
+            request-retry: 3
+            max-retry-interval: 30
         """
 
         try? defaultConfig.write(toFile: configPath, atomically: true, encoding: .utf8)
     }
     
     private func syncSecretKeyInConfig() {
+        if hasV8Section("management") {
+            updateV8Config(path: ["management", "secret-key"], value: managementKey)
+            return
+        }
         guard FileManager.default.fileExists(atPath: configPath),
               var content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
         
@@ -496,7 +576,12 @@ final class CLIProxyManager {
         let previousKey = managementKey
         let newKey = UUID().uuidString
         managementKey = newKey
+        configWriteFailed = false
         syncSecretKeyInConfig()
+        if configWriteFailed {
+            managementKey = previousKey
+            throw ProxyError.networkError("CPA 8 管理密钥写入配置失败，已保留原密钥")
+        }
         
         guard proxyStatus.running else {
             if !KeychainHelper.saveLocalManagementKey(newKey) {
@@ -545,13 +630,55 @@ final class CLIProxyManager {
         updateConfigProxyURL(isValid ? sanitized : nil)
     }
     
-    private func syncCustomProvidersToConfig() {
-        do {
-            try CustomProviderService.shared.syncToConfigFile(configPath: configPath)
-        } catch {
-            // Silent failure - custom providers are optional
-            Log.proxy("Failed to sync custom providers to config: \\(error)")
+    /// 保存中的服务商在代理运行时立即通过 v8 接口重载；停止状态等下次启动再同步。
+    func syncCustomProvidersToConfig() async throws {
+        guard proxyStatus.running else { return }
+        if providerSyncInProgress {
+            await withCheckedContinuation { providerSyncWaiters.append($0) }
+        } else {
+            providerSyncInProgress = true
         }
+        defer {
+            if providerSyncWaiters.isEmpty {
+                providerSyncInProgress = false
+            } else {
+                providerSyncWaiters.removeFirst().resume()
+            }
+        }
+        // 等待轮到本次同步后再次检查运行状态；服务可能已被用户关闭。
+        guard proxyStatus.running else { return }
+        let client = ManagementAPIClient(baseURL: "\(baseURL)/v8/management", authKey: managementKey)
+        defer { Task { await client.invalidate() } }
+        try await applyV8ProviderPatch(using: client)
+    }
+
+    private func applyV8ProviderPatch(
+        using client: ManagementAPIClient,
+        legacyOwnedProviderIDs: Set<UUID> = []
+    ) async throws {
+        // 在网络 await 前固定本轮界面状态；若用户同时继续编辑，快照不能错记成尚未提交的新值。
+        let providersSnapshot = CustomProviderService.shared.providers
+        var stablePatch: Data?
+        var foundStableSnapshot = false
+        for _ in 0..<3 {
+            let source = try Data(contentsOf: URL(fileURLWithPath: configPath))
+            let patch = try CustomProviderService.shared.makeV8ProviderPatch(
+                configPath: configPath, legacyOwnedProviderIDs: legacyOwnedProviderIDs,
+                managedProviders: providersSnapshot
+            )
+            // v8 的凭据族是整体数组；构造期间若别的客户端改了文件，立即重算以免覆盖新组。
+            guard source == (try Data(contentsOf: URL(fileURLWithPath: configPath))) else { continue }
+            stablePatch = patch
+            foundStableSnapshot = true
+            break
+        }
+        guard foundStableSnapshot else {
+            throw ProxyError.networkError("CPA 配置同时被其他客户端修改，请重试服务商同步")
+        }
+        if let stablePatch { try await client.patchV8Config(stablePatch) }
+        // CPA 确认接收（或配置已经一致）后才记录受管理的模型与请求头。
+        // 网络失败时保留旧快照，下次同步仍能识别应删除的字段。
+        try CustomProviderService.shared.markV8ProvidersSynced(providersSnapshot)
     }
     
     var isBinaryInstalled: Bool {
@@ -582,10 +709,12 @@ final class CLIProxyManager {
     private struct ReleaseInfo: Codable {
         let tagName: String
         let assets: [AssetInfo]
+        let prerelease: Bool
         
         enum CodingKeys: String, CodingKey {
             case tagName = "tag_name"
             case assets
+            case prerelease
         }
     }
     
@@ -607,7 +736,8 @@ final class CLIProxyManager {
     }
     
     private func fetchLatestRelease() async throws -> ReleaseInfo {
-        let urlString = "https://api.github.com/repos/\(Self.upstreamRepository)/releases/latest"
+        // /releases/latest 的标记可能落在仍并行发布的 7.x；从发布列表挑选最新 8.x。
+        let urlString = "https://api.github.com/repos/\(Self.upstreamRepository)/releases?per_page=50"
         guard let url = URL(string: urlString) else {
             throw ProxyError.networkError("Invalid URL")
         }
@@ -624,7 +754,11 @@ final class CLIProxyManager {
             throw ProxyError.networkError("Failed to fetch release info")
         }
 
-        return try JSONDecoder().decode(ReleaseInfo.self, from: data)
+        let releases = try JSONDecoder().decode([ReleaseInfo].self, from: data)
+        guard let release = releases.first(where: {
+            !$0.prerelease && ProxyVersionInfo(version: $0.tagName, sha256: "").isSupportedMajorVersion
+        }) else { throw ProxyUpgradeError.noVersionAvailable }
+        return release
     }
     
     private func findCompatibleAsset(in release: ReleaseInfo) -> CompatibleAsset? {
@@ -775,6 +909,10 @@ final class CLIProxyManager {
         guard isBinaryInstalled else {
             throw ProxyError.binaryNotFound
         }
+        // 配置迁移到 v8 后不能再使用 v7 二进制启动；先校验版本，避免旧内核误读新配置。
+        guard let currentVersion, ProxyVersionInfo(version: currentVersion, sha256: "").isSupportedMajorVersion else {
+            throw ProxyError.networkError("QuotioPlus 现在仅支持 CLIProxyAPI 8.x，请先安装并激活 8.x 版本")
+        }
         
         guard !proxyStatus.running else { return }
 
@@ -800,11 +938,14 @@ final class CLIProxyManager {
         try Task.checkCancellation()
         guard runtimeSessionID == startingSession else { throw CancellationError() }
         
+        configWriteFailed = false
         syncSecretKeyInConfig()
-        syncProxyURLInConfig()
-        syncCustomProvidersToConfig()
+        // 服务商变更等 v8 管理接口就绪后再提交，避免离线重写整份配置及用户注释。
         
         updateConfigPort(proxyStatus.port)
+        guard !configWriteFailed else {
+            throw ProxyError.networkError("CPA 8 配置更新失败，请检查 config.yaml 的字段结构")
+        }
         
         // Use effectiveBinaryPath to support versioned storage
         let activeBinaryPath = effectiveBinaryPath
@@ -891,6 +1032,35 @@ final class CLIProxyManager {
             guard process.isRunning else {
                 throw ProxyError.startupFailed
             }
+
+            // 旧配置可在 CPA 8 上启动，但必须由上游 v8 管理接口负责迁移字段。
+            // 迁移只运行一次，且先留原始副本；手写字段映射容易丢失未建模的凭据。
+            let outcome = try await ProxyStartupHealthPoller().waitUntilReady(
+                isProcessRunning: { process.isRunning },
+                checkHealth: {
+                    await self.compatibilityChecker.isHealthy(
+                        port: self.proxyStatus.port,
+                        managementKey: self.managementKey,
+                        requestTimeout: 1
+                    )
+                }
+            )
+            guard case .ready = outcome else { throw ProxyError.startupFailed }
+            if !usesV8Config {
+                try await migrateLegacyConfigToV8()
+            } else {
+                let client = ManagementAPIClient(baseURL: "\(baseURL)/v8/management", authKey: managementKey)
+                defer { Task { await client.invalidate() } }
+                // 即便已有 v8 外壳，也让官方规范化器处理未来新增的旧字段映射。
+                try await client.migrateLegacyConfigToV8()
+                try await applyV8ProviderPatch(using: client)
+            }
+            // 全局代理偏好在官方迁移之后才写入 requests.proxy-url。
+            // 旧配置里的单密钥 proxy-url 不能在备份之前被无锚点文本替换。
+            syncProxyURLInConfig()
+            guard !configWriteFailed else {
+                throw ProxyError.networkError("CPA 8 全局代理配置更新失败，请检查 config.yaml 的字段结构")
+            }
             
             NSLog("[CLIProxyManager] Proxy started on port \(proxyStatus.port)")
             
@@ -899,18 +1069,60 @@ final class CLIProxyManager {
             startHealthMonitor()
             
         } catch {
-            if error is CancellationError {
-                // 调用方取消启动但还未进入 stop 时，也要回收本轮已创建的进程。
-                if self.process === process {
-                    markExpectedTermination(process)
-                    if process.isRunning { process.terminate() }
-                    self.process = nil
-                    proxyStatus.running = false
-                }
-            } else if runtimeSessionID == startingSession {
+            // 迁移或健康检查失败也必须清理本轮进程，避免界面显示已停止但端口仍被占用。
+            if self.process === process {
+                markExpectedTermination(process)
+                if process.isRunning { process.terminate() }
+                self.process = nil
+                proxyStatus.running = false
+            }
+            if !(error is CancellationError) && runtimeSessionID == startingSession {
                 lastError = error.localizedDescription
             }
             throw error
+        }
+    }
+
+    /// 只借助 CPA 官方迁移器改写配置。保留原文件副本直到新布局及 v8 管理接口都通过检查。
+    private func migrateLegacyConfigToV8() async throws {
+        let configURL = URL(fileURLWithPath: configPath)
+        let legacyYAML = try String(contentsOf: configURL, encoding: .utf8)
+        let legacyOwnedProviderIDs = CustomProviderService.shared.legacyOwnedProviderIDs(in: legacyYAML)
+        let backupURL = configURL.deletingLastPathComponent()
+            .appendingPathComponent("config.pre-v8-\(UUID().uuidString).yaml")
+        try FileManager.default.copyItem(at: configURL, to: backupURL)
+        let client = ManagementAPIClient(baseURL: "\(baseURL)/v8/management", authKey: managementKey)
+        defer { Task { await client.invalidate() } }
+        do {
+            try await client.migrateLegacyConfigToV8()
+            guard usesV8Config,
+                  await compatibilityChecker.isHealthy(port: proxyStatus.port, managementKey: managementKey) else {
+                throw ProxyError.networkError("CPA 8 配置迁移后校验失败")
+            }
+            // 完成结构转换后仅 PATCH 受管理的凭据族，CPA 会校验并保留其余注释。
+            try await applyV8ProviderPatch(using: client, legacyOwnedProviderIDs: legacyOwnedProviderIDs)
+            // 首次迁移成功后仍保留原文件；只有实机运行和凭据行为都验证过才适合清理。
+            // 备份仅在旧布局迁移时创建一次，后续 v8 启动不会重复生成。
+            NSLog("[CLIProxyManager] CPA 8 migration backup retained at \(backupURL.path)")
+        } catch {
+            // 先复制备份到同目录临时文件，确认副本完整后才原子替换；恢复失败绝不能先删除主配置。
+            let migrationError = error
+            let restoreURL = configURL.deletingLastPathComponent()
+                .appendingPathComponent(".config-restore-\(UUID().uuidString).yaml")
+            do {
+                try FileManager.default.copyItem(at: backupURL, to: restoreURL)
+                let backupData = try Data(contentsOf: backupURL)
+                guard try Data(contentsOf: restoreURL) == backupData else {
+                    throw ProxyError.networkError("CPA 配置备份副本校验失败")
+                }
+                guard Darwin.rename(restoreURL.path, configURL.path) == 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: restoreURL)
+                throw ProxyError.networkError("CPA 8 迁移失败，且原配置自动恢复失败；备份仍在 \(backupURL.path)：\(error.localizedDescription)")
+            }
+            throw migrationError
         }
     }
     
@@ -1421,7 +1633,9 @@ extension CLIProxyManager {
     
     /// List all installed versions.
     var installedVersions: [InstalledProxyVersion] {
-        storageManager.listInstalledVersions()
+        storageManager.listInstalledVersions().filter {
+            ProxyVersionInfo(version: $0.version, sha256: "").isSupportedMajorVersion
+        }
     }
     
     // MARK: - Upgrade Flow
@@ -1443,9 +1657,15 @@ extension CLIProxyManager {
             return
         }
 
+        guard ProxyVersionInfo(version: latestTag, sha256: "").isSupportedMajorVersion else {
+            upgradeAvailable = false
+            availableUpgrade = nil
+            return
+        }
+
         // New version available - fetch release details from GitHub API for download URL
         do {
-            let release = try await fetchGitHubRelease(tag: latestTag)
+            let release = try await fetchGitHubRelease(tag: latestTag.hasPrefix("v") ? latestTag : "v\(latestTag)")
 
             guard let asset = findCompatibleAsset(from: release) else {
                 upgradeAvailable = false
@@ -1493,7 +1713,9 @@ extension CLIProxyManager {
     /// Fetch all available releases from GitHub.
     /// Used by Advanced Mode to allow users to select a specific version.
     private func fetchAvailableUpstreamVersions(limit: Int) async throws -> [ProxyVersionInfo] {
-        let urlString = "https://api.github.com/repos/\(Self.upstreamRepository)/releases?per_page=\(limit)"
+        // v7 与 v8 同时发布，需要在过滤后再限制数量，否则列表可能只剩几条甚至为空。
+        let pageSize = min(max(limit * 3, 30), 100)
+        let urlString = "https://api.github.com/repos/\(Self.upstreamRepository)/releases?per_page=\(pageSize)"
         guard let url = URL(string: urlString) else {
             throw ProxyError.networkError("Invalid URL")
         }
@@ -1511,11 +1733,13 @@ extension CLIProxyManager {
         }
 
         let releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
-        return releases.compactMap { versionInfo(from: $0) }
+        return Array(releases.compactMap { versionInfo(from: $0) }.prefix(limit))
     }
     
     /// Convert a GitHubRelease to ProxyVersionInfo for a compatible asset.
     func versionInfo(from release: GitHubRelease) -> ProxyVersionInfo? {
+        // 官方仍发布 7.x，但应用的安装列表只能提供 8.x，避免用户重新激活旧内核。
+        guard ProxyVersionInfo(version: release.versionString, sha256: "").isSupportedMajorVersion else { return nil }
         guard let asset = findCompatibleAsset(from: release) else { return nil }
         return ProxyVersionInfo(from: release, asset: asset)
     }
@@ -1574,6 +1798,9 @@ extension CLIProxyManager {
     /// 3. Validate compatibility via /meta
     /// 4. If valid: promote to active; if not: rollback
     func performManagedUpgrade(to version: ProxyVersionInfo) async throws {
+        guard version.isSupportedMajorVersion else {
+            throw ProxyUpgradeError.dryRunFailed("QuotioPlus 现在仅支持 CLIProxyAPI 8.x")
+        }
         guard managerState == .active || managerState == .idle else {
             throw ProxyUpgradeError.dryRunFailed("Cannot upgrade while in \(managerState) state")
         }
@@ -1938,21 +2165,24 @@ extension CLIProxyManager {
         let testConfigPath = tempDir.appendingPathComponent("quotio-test-config-\(port).yaml").path
         
         let testConfig = """
-        host: "127.0.0.1"
-        port: \(port)
-        auth-dir: "\(authDir)"
-        
-        api-keys:
-          - "quotio-test-\(UUID().uuidString.prefix(8))"
-        
-        remote-management:
+        config-version: 8
+        server:
+          host: "127.0.0.1"
+          port: \(port)
+        oauth:
+          auth-dir: "\(authDir)"
+        access:
+          api-keys:
+            - "quotio-test-\(UUID().uuidString.prefix(8))"
+        management:
           allow-remote: false
           secret-key: "\(managementKey)"
-        
-        debug: false
-        logging-to-file: false
-        usage-statistics-enabled: false
-        
+        observability:
+          logs:
+            debug: false
+            logging-to-file: false
+          usage:
+            usage-statistics-enabled: false
         routing:
           strategy: "round-robin"
         """
@@ -2010,7 +2240,7 @@ extension CLIProxyManager {
         
         // Find the most recent version that isn't current
         return versions
-            .filter { $0.version != current }
+            .filter { $0.version != current && ProxyVersionInfo(version: $0.version, sha256: "").isSupportedMajorVersion }
             .sorted { $0.installedAt > $1.installedAt }
             .first?.version
     }

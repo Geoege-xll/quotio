@@ -398,6 +398,37 @@ actor ManagementAPIClient {
         return text
     }
 
+    /// 官方 v8 的空 PATCH 会把仍可读取的旧版配置规范化并写回 v8 布局。
+    /// 调用方负责先备份原文件，并在响应后核对文件和管理接口状态。
+    func migrateLegacyConfigToV8() async throws {
+        _ = try await makeRequest("/config", method: "PATCH", body: Data("{}".utf8))
+    }
+
+    /// 对 v8 配置做局部更新，由 CPA 校验并保留未触及区块的注释。
+    func patchV8Config(_ patch: Data) async throws {
+        _ = try await makeRequest("/config", method: "PATCH", body: patch)
+    }
+
+    /// v8 配置树的局部 PUT/DELETE 用于模型别名，避免整份 YAML 序列化清除手工注释。
+    /// 列表需要整体替换；缺失的旧字段在回滚时使用 DELETE，而不是写入 null。
+    func putV8Config(path: [String], body: Data?) async throws {
+        guard !path.isEmpty,
+              path.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } }) else {
+            throw APIError.invalidURL
+        }
+        let endpoint = "/config/" + path.joined(separator: "/")
+        let method = body == nil ? "DELETE" : "PUT"
+        if baseURL.hasSuffix("/v8/management") {
+            _ = try await makeRequest(endpoint, method: method, body: body)
+            return
+        }
+        guard baseURL.hasSuffix("/v0/management") else { throw APIError.invalidURL }
+        let v8URL = baseURL.replacingOccurrences(of: "/v0/management", with: "/v8/management")
+        let v8Client = ManagementAPIClient(baseURL: v8URL, authKey: authKey)
+        defer { Task { await v8Client.invalidate() } }
+        _ = try await v8Client.makeRequest(endpoint, method: method, body: body)
+    }
+
     func saveModelAliasYAML(_ text: String) async throws {
         _ = try await makeRequest("/config.yaml", method: "PUT", body: Data(text.utf8), contentType: "application/yaml")
     }

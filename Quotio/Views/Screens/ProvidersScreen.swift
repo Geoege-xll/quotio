@@ -668,9 +668,11 @@ struct ProvidersScreen: View {
     }
 
     private func syncCustomProvidersToConfig() {
-        // Silent failure - custom provider sync is non-critical
-        // Config will be synced on next proxy start
-        try? customProviderService.syncToConfigFile(configPath: viewModel.proxyManager.configPath)
+        // 服务运行时使用 CPA 8 的局部配置接口；停止时由下一次启动统一同步。
+        Task { @MainActor in
+            do { try await viewModel.proxyManager.syncCustomProvidersToConfig() }
+            catch { viewModel.errorMessage = error.localizedDescription }
+        }
     }
 }
 

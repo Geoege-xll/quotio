@@ -54,7 +54,8 @@ final class AtomFeedUpdateService {
 
     // MARK: - Cache Keys
 
-    private static let cliProxyCacheKey = "atomFeedCache_cliproxy"
+    // v8 独立缓存：旧缓存可能把最新的 7.x 标签当成目标版本，迁移后必须重新拉取。
+    private static let cliProxyCacheKey = "atomFeedCache_cliproxy_v8"
     // 仓库切换后不复用原上游的 ETag 和版本，防止旧缓存继续提示安装上游发行版。
     private static let quotioCacheKey = "atomFeedCache_app_" + AppReleaseConfiguration.repository
 
@@ -117,7 +118,10 @@ final class AtomFeedUpdateService {
 
         switch result {
         case .updated(let entries, let etag):
-            guard let latest = entries.first else {
+            // 官方目前仍同时发布 7.x 和 8.x，按时间取第一条可能得到不受支持的 7.x。
+            guard let latest = entries.first(where: {
+                ProxyVersionInfo(version: $0.version, sha256: "").isSupportedMajorVersion
+            }) else {
                 return (nil, false)
             }
 
@@ -139,7 +143,8 @@ final class AtomFeedUpdateService {
 
         case .notModified:
             // Feed hasn't changed, check cached version
-            if let cached = loadCacheState(cacheKey: Self.cliProxyCacheKey) {
+            if let cached = loadCacheState(cacheKey: Self.cliProxyCacheKey),
+               ProxyVersionInfo(version: cached.latestVersion, sha256: "").isSupportedMajorVersion {
                 let isNewer: Bool
                 if let current = currentVersion {
                     isNewer = isNewerVersion(cached.latestVersion, than: current)

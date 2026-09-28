@@ -95,7 +95,8 @@ actor CompatibilityChecker {
         managementKey: String,
         timeoutInterval: TimeInterval = 3
     ) -> URLRequest? {
-        guard let url = URL(string: "\(baseURL)/v0/management/debug") else {
+        // v8 配置接口只在 CPA 8 系列存在；以此探测能避免把仍支持旧接口的 v7 误判为兼容。
+        guard let url = URL(string: "\(baseURL)/v8/management/config") else {
             return nil
         }
         

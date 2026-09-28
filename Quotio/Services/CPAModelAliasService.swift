@@ -28,6 +28,69 @@ actor CPAModelAliasService {
         ("gemini-api-key", "Gemini API", "gemini-api", "gemini")
     ]
 
+    private func usesV8(_ root: [String: Any]) -> Bool {
+        CPAConfigLayout.isMigratedV8(root)
+    }
+
+    /// v8 的 API 密钥分组位于 api-keys 下，旧字段只供尚未迁移的配置读取。
+    /// 来源 ID 保留完整路径，创建和删除时不会把新别名写回失效的顶层旧字段。
+    private func sectionPath(_ legacy: String, in root: [String: Any]) -> String {
+        guard usesV8(root) else { return legacy }
+        let family: String
+        switch legacy {
+        case "codex-api-key": family = "codex"
+        case "claude-api-key": family = "claude"
+        case "gemini-api-key": family = "gemini"
+        default: family = legacy
+        }
+        return "api-keys.\(family)"
+    }
+
+    private func providers(_ section: String, in root: [String: Any]) -> [[String: Any]] {
+        guard section.hasPrefix("api-keys.") else { return root[section] as? [[String: Any]] ?? [] }
+        let families = root["api-keys"] as? [String: Any] ?? [:]
+        return families[String(section.dropFirst("api-keys.".count))] as? [[String: Any]] ?? []
+    }
+
+    private func setProviders(_ groups: [[String: Any]], section: String, in root: inout [String: Any]) {
+        guard section.hasPrefix("api-keys.") else { root[section] = groups; return }
+        var families = root["api-keys"] as? [String: Any] ?? [:]
+        families[String(section.dropFirst("api-keys.".count))] = groups
+        root["api-keys"] = families
+    }
+
+    private func oauthAliases(in root: [String: Any]) -> [String: Any] {
+        if usesV8(root) {
+            let oauth = root["oauth"] as? [String: Any] ?? [:]
+            return oauth["model-alias"] as? [String: Any] ?? [:]
+        }
+        return root["oauth-model-alias"] as? [String: Any] ?? [:]
+    }
+
+    private func setOAuthAliases(_ aliases: [String: Any], in root: inout [String: Any]) {
+        if usesV8(root) {
+            var oauth = root["oauth"] as? [String: Any] ?? [:]
+            oauth["model-alias"] = aliases
+            root["oauth"] = oauth
+        } else { root["oauth-model-alias"] = aliases }
+    }
+
+    private func payload(in root: [String: Any]) -> [String: Any] {
+        if usesV8(root) {
+            let requests = root["requests"] as? [String: Any] ?? [:]
+            return requests["payload"] as? [String: Any] ?? [:]
+        }
+        return root["payload"] as? [String: Any] ?? [:]
+    }
+
+    private func setPayload(_ payload: [String: Any], in root: inout [String: Any]) {
+        if usesV8(root) {
+            var requests = root["requests"] as? [String: Any] ?? [:]
+            requests["payload"] = payload
+            root["requests"] = requests
+        } else { root["payload"] = payload }
+    }
+
     private func failure(_ key: String) -> NSError {
         NSError(domain: "CPAModelAliases", code: 1, userInfo: [NSLocalizedDescriptionKey: key.localizedStatic()])
     }
@@ -72,8 +135,9 @@ actor CPAModelAliasService {
         let root = try parse(yaml)
         let catalog = Set(try await client.fetchModelAliasCatalog().map { $0.lowercased() })
         var sources: [CPAModelAliasSource] = []
-        for (section, fallback, kind, protocolName) in sections {
-            for (providerIndex, rawProvider) in (root[section] as? [[String: Any]] ?? []).enumerated() {
+        for (legacySection, fallback, kind, protocolName) in sections {
+            let section = sectionPath(legacySection, in: root)
+            for (providerIndex, rawProvider) in providers(section, in: root).enumerated() {
                 guard rawProvider["disabled"] as? Bool != true else { continue }
                 let provider = text(rawProvider["name"]) ?? "\(fallback) \(providerIndex + 1)"
                 for (modelIndex, rawModel) in (rawProvider["models"] as? [Any] ?? []).enumerated() {
@@ -131,7 +195,7 @@ actor CPAModelAliasService {
     }
 
     private func effort(_ root: [String: Any], alias: String, protocolName: String) -> String? {
-        let payload = root["payload"] as? [String: Any] ?? [:]
+        let payload = payload(in: root)
         for rule in payload["override"] as? [[String: Any]] ?? [] {
             let models = rule["models"] as? [[String: Any]] ?? []
             guard models.contains(where: {
@@ -149,7 +213,7 @@ actor CPAModelAliasService {
 
     private func aliases(_ root: [String: Any]) -> [CPAModelAlias] {
         var result: [CPAModelAlias] = []
-        for (channel, raw) in root["oauth-model-alias"] as? [String: Any] ?? [:] {
+        for (channel, raw) in oauthAliases(in: root) {
             let protocolName = channels.first { $0.key == channel }?.protocolName ?? channel
             for (index, value) in (raw as? [[String: Any]] ?? []).enumerated() {
                 guard let model = identity(value), model.alias != model.name else { continue }
@@ -159,8 +223,9 @@ actor CPAModelAliasService {
                                     channel: channel, section: nil, providerIndex: nil, modelIndex: index))
             }
         }
-        for (section, fallback, _, protocolName) in sections {
-            for (providerIndex, provider) in (root[section] as? [[String: Any]] ?? []).enumerated() {
+        for (legacySection, fallback, _, protocolName) in sections {
+            let section = sectionPath(legacySection, in: root)
+            for (providerIndex, provider) in providers(section, in: root).enumerated() {
                 for (index, value) in (provider["models"] as? [Any] ?? []).enumerated() {
                     guard let model = identity(value), model.alias != model.name else { continue }
                     result.append(.init(id: "\(section):\(providerIndex):\(index)", model: model.name, alias: model.alias,
@@ -192,32 +257,35 @@ actor CPAModelAliasService {
         guard revision(yaml) == expectedRevision else { throw failure("cpaAliases.changed") }
         var root = try parse(yaml)
         if let channel = source.channel {
-            var oauth = root["oauth-model-alias"] as? [String: Any] ?? [:]
+            var oauth = oauthAliases(in: root)
             var entries = oauth[channel] as? [[String: Any]] ?? []
             var entry: [String: Any] = ["name": source.model, "alias": alias, "fork": true]
             if channel == "antigravity" { entry["force-mapping"] = true }
             entries.append(entry)
             oauth[channel] = entries
-            root["oauth-model-alias"] = oauth
+            setOAuthAliases(oauth, in: &root)
         } else {
-            guard let section = source.section, let p = source.providerIndex, let m = source.modelIndex,
-                  var providers = root[section] as? [[String: Any]], providers.indices.contains(p),
-                  var models = providers[p]["models"] as? [Any], models.indices.contains(m),
+            guard let section = source.section, let p = source.providerIndex, let m = source.modelIndex else {
+                throw failure("cpaAliases.changed")
+            }
+            var groups = providers(section, in: root)
+            guard groups.indices.contains(p),
+                  var models = groups[p]["models"] as? [Any], models.indices.contains(m),
                   let original = identity(models[m]), original.alias == source.model else { throw failure("cpaAliases.changed") }
             var entry = models[m] as? [String: Any] ?? ["name": original.name]
             entry["alias"] = alias
             if !selectedEffort.isEmpty, let display = text(entry["display-name"]) { entry["display-name"] = "\(display) (\(selectedEffort))" }
             models.append(entry)
-            providers[p]["models"] = models
-            root[section] = providers
+            groups[p]["models"] = models
+            setProviders(groups, section: section, in: &root)
         }
         if !selectedEffort.isEmpty {
-            var payload = root["payload"] as? [String: Any] ?? [:]
+            var payload = payload(in: root)
             var rules = payload["override"] as? [[String: Any]] ?? []
             rules.append(["models": [["name": alias, "protocol": source.protocolName]],
                           "params": params(source: source, effort: selectedEffort)])
             payload["override"] = rules
-            root["payload"] = payload
+            setPayload(payload, in: &root)
         }
         try await persist(root, previousYAML: yaml, oauthChanged: source.channel != nil)
     }
@@ -248,22 +316,23 @@ actor CPAModelAliasService {
         var root = try parse(yaml)
         guard aliases(root).contains(entry) else { throw failure("cpaAliases.changed") }
         if let channel = entry.channel {
-            var oauth = root["oauth-model-alias"] as? [String: Any] ?? [:]
+            var oauth = oauthAliases(in: root)
             var entries = oauth[channel] as? [[String: Any]] ?? []
             entries.remove(at: entry.modelIndex)
             oauth[channel] = entries
-            root["oauth-model-alias"] = oauth
-        } else if let section = entry.section, let p = entry.providerIndex,
-                  var providers = root[section] as? [[String: Any]],
-                  var models = providers[p]["models"] as? [Any] {
+            setOAuthAliases(oauth, in: &root)
+        } else if let section = entry.section, let p = entry.providerIndex {
+            var groups = providers(section, in: root)
+            guard groups.indices.contains(p), var models = groups[p]["models"] as? [Any],
+                  models.indices.contains(entry.modelIndex) else { throw failure("cpaAliases.changed") }
             models.remove(at: entry.modelIndex)
-            providers[p]["models"] = models
-            root[section] = providers
+            groups[p]["models"] = models
+            setProviders(groups, section: section, in: &root)
         }
         // 别名删除后只移除对应的规则目标；共享规则中的其他模型和参数完整保留。
         // 若另一来源仍使用同一别名，不能删除仍在生效的共享 payload 策略。
         if !aliases(root).contains(where: { $0.alias.caseInsensitiveCompare(entry.alias) == .orderedSame }) {
-            var payload = root["payload"] as? [String: Any] ?? [:]
+            var payload = payload(in: root)
             if let rules = payload["override"] as? [[String: Any]] {
                 payload["override"] = rules.compactMap { rule -> [String: Any]? in
                     guard let models = rule["models"] as? [[String: Any]] else { return rule }
@@ -273,24 +342,66 @@ actor CPAModelAliasService {
                     copy["models"] = kept
                     return copy
                 }
-                root["payload"] = payload
+                setPayload(payload, in: &root)
             }
         }
         try await persist(root, previousYAML: yaml, oauthChanged: entry.channel != nil)
     }
 
     private func persist(_ root: [String: Any], previousYAML: String, oauthChanged: Bool) async throws {
-        let updated = try Yams.dump(object: root)
         // 保存前再次检查乐观版本，避免覆盖其他客户端刚写入的配置。
         // CPA 的两个接口不提供跨请求事务；第二步失败必须明确报告部分保存，不能虚报成功。
         guard try await client.fetchModelAliasYAML() == previousYAML else { throw failure("cpaAliases.changed") }
-        if oauthChanged {
-            let data = try JSONSerialization.data(withJSONObject: root["oauth-model-alias"] as? [String: Any] ?? [:])
+        let isV8 = usesV8(root)
+        if isV8 {
+            // v8 只更新发生变化的别名列表和 override 列表；官方接口负责校验、保存与重载。
+            // 整份 Yams.dump 会让无关服务商、密钥和注释失去原来的表示方式。
+            let previous = try parse(previousYAML)
+            typealias Change = (path: [String], before: Data?, after: Data?)
+            func encoded(_ value: Any?) throws -> Data? {
+                guard let value else { return nil }
+                return try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
+            }
+            var changes: [Change] = []
+            func appendIfChanged(_ path: [String], old: Any?, new: Any?) throws {
+                let before = try encoded(old), after = try encoded(new)
+                if before != after { changes.append((path, before, after)) }
+            }
+            try appendIfChanged(["oauth", "model-alias"], old: oauthAliases(in: previous), new: oauthAliases(in: root))
+            for (legacy, _, _, _) in sections {
+                let section = sectionPath(legacy, in: root)
+                let family = String(section.dropFirst("api-keys.".count))
+                try appendIfChanged(["api-keys", family], old: providers(section, in: previous), new: providers(section, in: root))
+            }
+            try appendIfChanged(["requests", "payload", "override"],
+                                old: payload(in: previous)["override"], new: payload(in: root)["override"])
+            var completed: [Change] = []
+            do {
+                for change in changes {
+                    try await client.putV8Config(path: change.path, body: change.after)
+                    completed.append(change)
+                }
+            } catch {
+                let originalError = error
+                // 多个路径写入不是事务；后一步失败时尽力逆序恢复，并明确报告恢复失败。
+                var rollbackFailed = false
+                for change in completed.reversed() {
+                    do { try await client.putV8Config(path: change.path, body: change.before) }
+                    catch { rollbackFailed = true }
+                }
+                if rollbackFailed { throw failure("cpaAliases.partialSave") }
+                throw originalError
+            }
+            return
+        }
+        let updated = try Yams.dump(object: root)
+        if oauthChanged && !isV8 {
+            let data = try JSONSerialization.data(withJSONObject: oauthAliases(in: root))
             try await client.replaceOAuthModelAliases(data)
         }
         do { try await client.saveModelAliasYAML(updated) }
         catch {
-            if oauthChanged { throw failure("cpaAliases.partialSave") }
+            if oauthChanged && !isV8 { throw failure("cpaAliases.partialSave") }
             throw error
         }
     }

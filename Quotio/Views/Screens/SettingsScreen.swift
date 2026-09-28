@@ -1287,6 +1287,11 @@ struct ProxyVersionManagerSheet: View {
     private func activateVersion(_ version: String) {
         Task { @MainActor in
             do {
+                // 设置页的手动切换会绕过升级流程，必须在此再次阻止激活 7.x。
+                guard ProxyVersionInfo(version: version, sha256: "").isSupportedMajorVersion else {
+                    installError = "QuotioPlus 现在仅支持 CLIProxyAPI 8.x"
+                    return
+                }
                 let wasRunning = proxyManager.proxyStatus.running
                 if wasRunning {
                     proxyManager.stop()
