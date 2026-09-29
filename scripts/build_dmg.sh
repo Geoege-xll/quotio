@@ -394,7 +394,8 @@ ARCHIVE_ARGS=(
     # 发布范围已统一为 Apple Silicon，归档不受构建机当前架构或本地配置影响。
     ARCHS=arm64
     SKIP_INSTALL=NO
-    BUILD_LIBRARY_FOR_DISTRIBUTION=YES
+    # 应用目标使用 Objective-C 桥接头；无需生成供外部库使用的 Swift 模块接口。
+    # 开启 BUILD_LIBRARY_FOR_DISTRIBUTION 会使归档在编译阶段直接失败。
     CODE_SIGN_IDENTITY="-"
     CODE_SIGNING_REQUIRED=NO
     CODE_SIGNING_ALLOWED=NO
@@ -469,6 +470,12 @@ fi
 if [ "${GENERATE_APPCAST}" = true ]; then
     generate_appcast "${VERSION}" "${BUILD_NUMBER}" "${ZIP_FILE}"
 fi
+
+# 哈希必须在签名、公证和封装全部完成后计算；发行页与安装时核对的是最终字节。
+(
+    cd "${RELEASE_DIR}"
+    shasum -a 256 "$(basename "${ZIP_FILE}")" "$(basename "${DMG_FILE}")" > SHA256SUMS.txt
+)
 
 log "DMG: ${DMG_FILE}"
 log "ZIP: ${ZIP_FILE}"

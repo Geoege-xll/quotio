@@ -86,15 +86,16 @@ jobs:
           [[ "$(sw_vers -productVersion)" == 15.* ]]
           sw_vers -productVersion
           mkdir -p build
+          # 已删除的纯界面测试不能继续作为发行门槛；改用 CPA 8 配置与管理接口回归验证。
           xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus -configuration Debug \
             -destination 'platform=macOS,arch=arm64' -derivedDataPath build/CompatibilityDerivedData \
             -resultBundlePath build/CompatibilityTests.xcresult -parallel-testing-enabled NO \
-            -only-testing:QuotioPlusTests/CPAUsageDetailLayoutTests \
+            -only-testing:QuotioPlusTests/CPA8ProviderPatchTests \
             -only-testing:QuotioPlusTests/CPAUsageTablePageTests \
             -only-testing:QuotioPlusTests/CPAUsageHistoricalDetailTests \
             -only-testing:QuotioPlusTests/CPAUsageDashboardTests \
             -only-testing:QuotioPlusTests/AppUpdatesTests \
-            -only-testing:QuotioPlusTests/UsageStatisticsChartRenderingTests \
+            -only-testing:QuotioPlusTests/ManagementAPIClientLifecycleTests \
             -only-testing:QuotioPlusTests/UsageTrendPlotDataTests \
             -test-timeouts-enabled YES -default-test-execution-time-allowance 60 \
             -maximum-test-execution-time-allowance 60 CODE_SIGNING_ALLOWED=NO test \
@@ -320,6 +321,7 @@ jobs:
           files: |
             build/release/*.dmg
             build/release/*.zip
+            build/release/SHA256SUMS.txt
             build/release/appcast.xml
           generate_release_notes: false
           body_path: build/release/release-notes.md
