@@ -45,8 +45,8 @@
 - 最终构建日志：`/tmp/quotio-dashboard-refinement-final-build.log`
 - 测试日志：`/tmp/quotio-dashboard-refinement-tests.log`
 - 测试结果：`/tmp/quotio-dashboard-refinement-tests.xcresult`
-- [隔离历史验证输出](../../work/dashboard-refinement-2026-09-07/history-verification.txt)
-- [界面预览与说明](../../work/ui-design/dashboard-refinement-2026-09-07/README.md)
+- 当时隔离历史验证输出：`work/dashboard-refinement-2026-09-07/history-verification.txt`（该临时产物当前未保存在仓库中）。
+- 当时界面预览与说明：`work/ui-design/dashboard-refinement-2026-09-07/README.md`（该临时产物当前未保存在仓库中）。
 
 构建命令：
 

@@ -109,7 +109,30 @@
 
 ---
 
-## 6. Prohibited Anti-Patterns (禁用模式)
+## 6. Inline Input Commit & Group Apply Standards (行内输入提交与分组应用规范)
+
+- `[des-commit-001] [hard]` **Inline Field with Apply Action (行内单字段提交与应用规范)**:
+  - **布局与对齐**: 在表单 (`Form` / `Section` / `LabeledContent`) 或卡片中，当单个文本/数值输入需要用户显式确认生效（如上游代理地址、自定义端口、端点地址）时，**“应用”按钮必须紧随输入框右侧在同一水平行呈现**（`[Label] -------- [TextField] [应用胶囊按钮]`），严禁将应用按钮孤立放置在下一行开头。
+  - **统一控件封装**: 推荐优先使用通用控件 `QuotioInlineApplyField`。
+  - **几何外形与尺寸**: 应用按钮必须采用微胶囊几何（`.buttonStyle(.quotioPrimaryMicroCapsule(height: 24))` 或 `height: 26`），与 macOS 原生 `.roundedBorder` 输入框高度视觉协同。严禁在行内使用直角灰底的系统 `.bordered` 按钮。
+  - **状态机与基线感知 (Dirty Tracking)**:
+    - 控件必须持有并对比持久化基线（`savedValue`）。仅当当前输入发生修改（`text != savedText`）且输入内容合法（`isValid`）时启用应用按钮；未修改或内容非法时必须保持 `.disabled(true)`。
+    - 键盘回车提交（`.onSubmit`）与点击应用按钮必须触发完全相同的异步保存闭包。
+    - 异步保存期间，按钮内呈现微型进度环（`ProgressView().controlSize(.small)`）并暂时禁用交互，防止高频连击。
+    - 保存成功后立即将基线更新为最新值，按钮自动平滑回退至禁用状态，给用户明确的“已应用/已同步”反馈。
+  - **占位符与行内即时校验 (Placeholder & Validation Feedback)**:
+    - 输入格式指引必须纯粹通过输入框内部的原生 `placeholder` 占位呈现（如 `socks5://host:port 或 http://host:port`），告诉用户应当填写什么。
+    - **禁止在输入框外部、后方或 Section footer 处重复堆砌静态示例文本**，避免无谓的视觉噪音。
+    - 仅当用户输入了非法内容时，才以橙色警告图标加说明文字在输入框下方动态呈现错误提示。未输入或内容合法时不展示多余的辅助说明文本。
+
+- `[des-commit-002] [hard]` **Group / Section Batch Apply Standards (分组与折叠区批量应用规范)**:
+  - **对齐规范**: 在折叠面板 (`DisclosureGroup`) 或多字段复杂配置区（如 CPA 高级请求策略、日志配置），批量“应用”按钮**必须右对齐放置在组底部**（`HStack { Spacer(); Button(...) }`）。
+  - **样式规范**: 统一采用高 26pt 胶囊按钮 `.buttonStyle(.quotioPrimaryMicroCapsule(height: 26))`。
+  - **修改感知**: 必须通过对比当前草稿与持久化基线（`draft.hasChanges(comparedTo:baseline, scope:)`）驱动按钮的激活状态，全量相同保持禁用，避免无效的网络回写。
+
+---
+
+## 7. Prohibited Anti-Patterns (禁用模式)
 
 - Native separators are expected in system forms and lists. Only custom inset card decks should prefer spacing over unnecessary table-style separators.
 - ❌ **Rectangle with 4–8px radius on buttons or tabs**: Violates the macOS 26 capsule design rule.

@@ -154,7 +154,7 @@ sign_app_for_distribution() {
         --sign "${SIGNING_IDENTITY}" \
         --options runtime \
         --timestamp \
-        --entitlements "${PROJECT_DIR}/Quotio/Quotio.entitlements" \
+        --entitlements "${PROJECT_DIR}/Quotio/App/Configuration/Quotio.entitlements" \
         "${APP_PATH}"
     codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
 

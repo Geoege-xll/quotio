@@ -34,7 +34,7 @@
 		78D386962EFBF30400C40FB7 /* Exceptions for "Quotio" folder in "QuotioPlus" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				Info.plist,
+				App/Configuration/Info.plist,
 			);
 			target = 78D386932EFBF30400C40FB6 /* QuotioPlus */;
 		};
@@ -372,15 +372,15 @@
 			buildSettings = {
 				APP_INTENTS_METADATA_BUILD_ENABLED = NO;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Quotio/Quotio.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Quotio/App/Configuration/Quotio.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 81;
+				CURRENT_PROJECT_VERSION = 1.1.01.1;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				EXCLUDED_SOURCE_FILE_NAMES = AGENTS.md;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Quotio/Info.plist;
+				INFOPLIST_FILE = Quotio/App/Configuration/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = QuotioPlus;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025 Quotio. All rights reserved.";
@@ -398,7 +398,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0.04;
+				MARKETING_VERSION = 1.1.01;
 				PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -406,10 +406,10 @@
 				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Quotio/Quotio-Bridging-Header.h";
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_APP_INTENTS_METADATA = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Quotio/App/Configuration/Quotio-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				XROS_DEPLOYMENT_TARGET = 26.2;
@@ -423,15 +423,15 @@
 				APP_INTENTS_METADATA_BUILD_ENABLED = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Quotio/Quotio.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Quotio/App/Configuration/Quotio.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 81;
+				CURRENT_PROJECT_VERSION = 1.1.01.1;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				EXCLUDED_SOURCE_FILE_NAMES = AGENTS.md;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Quotio/Info.plist;
+				INFOPLIST_FILE = Quotio/App/Configuration/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = QuotioPlus;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025 Quotio. All rights reserved.";
@@ -449,7 +449,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0.04;
+				MARKETING_VERSION = 1.1.01;
 				PRODUCT_BUNDLE_IDENTIFIER = com.app.george.quotioplus;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -458,10 +458,10 @@
 				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Quotio/Quotio-Bridging-Header.h";
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_APP_INTENTS_METADATA = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Quotio/App/Configuration/Quotio-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 				XROS_DEPLOYMENT_TARGET = 26.2;

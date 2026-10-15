@@ -1,5 +1,6 @@
 DEVELOPMENT_PLAN.md
 build/
+.build/
 
 # Sparkle private key - NEVER COMMIT
 .sparkle_private_key

@@ -1,4 +1,4 @@
-# Standards — MyProject
+# Standards — QuotioPlus
 
 > Canonical directory for enforceable engineering and design rules. Keep this file as a concise
 > index; detailed rules live in the linked leaf documents, while approved prototype evidence lives
@@ -23,6 +23,7 @@
 
 ## Engineering standards
 
+- [Code architecture standards](ARCHITECTURE_STANDARDS.md)
 - [General engineering rules](standards/GENERAL.md)
 - [Upstream and second-development boundaries](standards/UPSTREAM.md)
 
@@ -33,6 +34,7 @@
 
 ## Related controlled truth
 
-- Current project and feature index: `docs/PROJECT.md`
+- Current project and feature index: [PROJECT](PROJECT.md)
+- 源码目录、模块边界与测试归属：[SOURCE_LAYOUT](SOURCE_LAYOUT.md)
 - Current functional and architectural rationale: `docs/features/`
 - Prototype evidence, when configured: `docs/standards/prototype/`

@@ -6,7 +6,8 @@ set -euo pipefail
 ICON_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ICON_PROJECT_ROOT="$(cd "${ICON_SCRIPT_DIR}/.." && pwd)"
 ICON_SOURCE_PATH="${1:-${ICON_PROJECT_ROOT}/docs/branding/quotio-plus-icon.png}"
-ICON_ASSET_ROOT="${ICON_PROJECT_ROOT}/Quotio/Assets.xcassets"
+# 图标源随其他编译资源归入 Resources；资产名称和最终 AppIcon 编译输出保持不变。
+ICON_ASSET_ROOT="${ICON_PROJECT_ROOT}/Quotio/Resources/Assets.xcassets"
 
 [[ -f "${ICON_SOURCE_PATH}" ]] || { echo "找不到图标母版：${ICON_SOURCE_PATH}" >&2; exit 1; }
 

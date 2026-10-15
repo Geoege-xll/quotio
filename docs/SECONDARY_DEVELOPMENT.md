@@ -8,6 +8,10 @@
 
 ## 1. 上游与参考项目分别是谁
 
+2026-10-15 的[专项复审](features/appkit-layout-reentry-and-followup-audit-2026-10-15.md)补齐原生 Sheet 的显式 fitted 尺寸策略；同步时保留严格 Copilot 主机元数据、gh users 多账号、同主机占位收尾及历史发布的别名比较基线。CLI 渠道不能仅凭 Homebrew 前缀或 npm 发行名猜测；卸载不提前删配置，终端不能混合解释不同 Shell 的配置或覆盖用户 PATH。非 Pi 静态候选已按用户明确要求恢复，实时目录与 Pi 的动态目录语义保持独立。
+
+2026-10-15 对 PR #558 的[全模型弹窗适配](features/antigravity-models-sheet-layout-2026-10-15.md)采用显式展示值注入：合并上游时不要恢复弹窗内部的隐式设置环境或 `.shared` 读取。原显示状态由账号卡片持有，Sheet 挂在稳定根节点，避免加载和空模型分支卸载宿主。上游 PR 核对时已关闭但未合并，具体 head 与本地定向范围见适配记录。
+
 | 角色 | 仓库 | 在本项目中的作用 | 更新方式 |
 |---|---|---|---|
 | Quotio 原项目／主要代码上游 | [nguyenphutrong/quotio](https://github.com/nguyenphutrong/quotio) | 原生 macOS 应用主体，包含界面、代理管理、OAuth、配额和 CLI 配置 | 拉取到 `upstream`，通过 Git 三方合并整合应用代码 |
@@ -18,7 +22,7 @@
 
 **Quotio 才是整仓 Git 合并的主要上游。AIUsage、cc-switch 和 CLIProxyAPI 不应作为无共同历史的整仓分支合并进来。** 当前没有把这些参考仓库作为 Git submodule 或 vendored 源码目录管理；它们的更新不会随 `git pull origin` 自动进入 Quotio。
 
-证据入口：原项目地址见根目录 `README.md`、`README.zh.md`；运行时代理仓库常量见 `Quotio/Services/Proxy/CLIProxyManager.swift`；AIUsage 移植记录见[许可证与来源说明](licenses/AIUsage-attribution.md)。`origin` 地址来自当前本地 Git 配置；本文不依赖 GitHub 页面是否显示 Fork 标识。
+证据入口：原项目地址见根目录 `README.md`、`README.zh.md`；运行时代理仓库常量见 `Quotio/Infrastructure/CPA/Runtime/CLIProxyManager.swift`；AIUsage 移植记录见[许可证与来源说明](licenses/AIUsage-attribution.md)。`origin` 地址来自当前本地 Git 配置；本文不依赖 GitHub 页面是否显示 Fork 标识。
 
 ## 2. 当前基线：哪些事实已经确定
 
@@ -32,7 +36,7 @@
 | 二开状态 | 大量已修改文件和新增文件仍在工作区，尚未形成覆盖本轮成果的二开提交 |
 | AIUsage 参考提交 | `bdb83bbe077879855c03e656cbc2fe5890bd27e9` |
 | cc-switch 参考提交 | `db41d701879592b8eca938cbe5c5ac28dd732b9f` |
-| 本轮 CPA 兼容问题基线 | 7.2.151 的管理用量 API 变化；这是本轮验证版本，不是永久锁定版本 |
+| CPA 兼容基线 | 最低 8.0.0；当前支持经验证的 8.x 管理契约，真实隔离核验版本为 8.0.28 |
 
 这里的 Quotio HEAD 是**本地当前已提交基线**，不是“刚刚拉取并确认的最新上游”。本次文档编写没有执行 `git fetch`，也没有创建基线标签。当前 `HEAD` 上没有指向它的本地标签，不能只凭提交说明就假定本地存在 `v0.31.0` 标签。
 
@@ -42,16 +46,16 @@
 
 ### 3.1 保留 Quotio 原生架构
 
-本项目继续使用 Swift 6、SwiftUI、Observation 和现有 MVVM 分工，最低支持 macOS 14：
+本项目继续使用 Swift 6、SwiftUI、Observation 和现有 MVVM 分工，最低支持 macOS 15：
 
-- `Quotio/Views/` 渲染状态、响应交互。
-- `Quotio/ViewModels/` 协调页面状态与异步流程。
-- `Quotio/Services/` 负责配置读写、网络、扫描、进程和持久化。
-- `Quotio/Models/` 定义模型、协议数据和纯统计规则。
-- `QuotioTests/` 覆盖配置、解析、去重、时序、持久化与筛选回归。
-- `Quotio/Localizable.xcstrings` 统一维护 `en`、`fr`、`vi`、`zh-Hans` 四种语言。
+- `Quotio/App/` 负责应用生命周期、导航、菜单栏、首次使用与配置装配。
+- `Quotio/BusinessModules/` 按业务聚合视图、状态、专用模型和服务；账号、仪表盘、统计、客户端配置及工作区分别维护。
+- `Quotio/Shared/` 保存实际跨业务使用的公共 UI、账号协调、模型管理与统计规则；CPA 唯一队列消费者及账本位于 `Shared/Analytics/CPA/`。
+- `Quotio/Infrastructure/` 接入 CPA v8、提供商、客户端配置文件、进程、网络、安全、系统和通用存储能力。
+- `QuotioTests/` 按 `App / BusinessModules / Shared / Infrastructure` 映射测试，跨类离线夹具放在 `Support/`。
+- `Quotio/Resources/Localizable.xcstrings` 统一维护 `en`、`fr`、`vi`、`zh-Hans`、`zh-Hant` 五种语言。
 
-新增统计能力尽量放在独立模块中，再通过 `QuotioApp`、`OperatingMode`、`QuotaViewModel` 等现有入口接入。原生工程由 `Quotio.xcodeproj` 管理，根目录不是 Swift Package；使用 Xcode 的 `Quotio` scheme 构建、测试。
+目录规范、主要入口、已归位的公共模型与独立视图、`QuotaViewModel` 扩展及原状态宿主见[源码目录与归属规范](SOURCE_LAYOUT.md)。新增统计能力放在对应业务或共享目录中，再通过 `QuotioApp`、`OperatingMode`、`QuotaViewModel` 等现有入口接入。原生工程由 `Quotio.xcodeproj` 管理，根目录不是 Swift Package；使用 Xcode 的 `QuotioPlus` scheme 构建，并只运行与改动相关的定向测试。
 
 ### 3.2 二开功能及冲突热点
 
@@ -59,24 +63,59 @@
 
 | 二开范围 | 主要文件／目录 | 合并后必须保留的行为 |
 |---|---|---|
-| Claude Code 模型映射与默认模型 | `Models/AgentModels.swift`、`Services/AgentConfigurationService.swift`、`ViewModels/AgentSetupViewModel.swift`、`Views/Components/ClaudeModelMappingView.swift`、`AgentDefaultModelPicker.swift`、`AgentConfigSheet.swift` | 模型角色 → 实际请求模型 → 可编辑显示名；默认启动模型独立配置；显示名不能覆盖实际模型 ID |
-| Codex CLI 配置 | `Services/AgentConfigurationService.swift`、`Models/AgentModels.swift`、`ViewModels/AgentSetupViewModel.swift` | 顶层模型和 provider 的读取不能被 profiles／MCP 子表混淆；保留用户自有配置内容 |
-| 备份管理 | `Services/AgentConfigurationService.swift`、`Views/Components/AgentBackupSection.swift` | 备份不重名覆盖；删除目标经过验证，不能误删配置或越界路径 |
-| Antigravity 配额 | `Services/Antigravity/AntigravityQuotaFetcher.swift`、`AntigravityQuotaParser.swift`、`Models/AntigravityQuotaPresentation.swift`、`Services/StatusBarMenuBuilder.swift`、`Views/Screens/QuotaScreen.swift` | 剩余／已用方向正确；不同额度池不随意平均；窗口和菜单栏使用一致的额度、周期和重置时间 |
-| 仪表盘与提供商布局 | `Views/Screens/DashboardScreen.swift`、`ProvidersScreen.swift`、`Views/Components/ProxyRuntimeCard.swift`、`DashboardUsageSummary.swift`、`ProviderConnectionSummary.swift`、`AvailableModelsSection.swift` | 顶部 CPA 运行卡、弱化摘要、提供商摘要迁移；模型完整展示，展开入口在右下，无搜索 |
-| 首次启动模型目录 | `Services/DashboardModelCatalogLoader.swift`、`ViewModels/QuotaViewModel.swift`、`Models/ModelCatalog.swift` | 同一次加载先取得当前客户端 API key，再请求本机模型目录；启动后自动加载，旧会话响应不能覆盖新会话 |
-| CPA 仪表盘用量 | `Models/UsageStatistics/`、`Services/UsageStatistics/`、`Services/ManagementAPIClient.swift`、`ViewModels/QuotaViewModel.swift` | 新队列唯一消费者，跟随应用／代理生命周期；兼容旧累计接口，真实零与未知分开 |
-| 客户端 Token 用量 | `Models/ClientUsage/`、`Services/ClientUsage/`、`ViewModels/ClientUsageViewModel.swift`、`Views/Screens/UsageStatisticsScreen.swift`、`Views/Components/UsageStatistics/` | 综合／Claude Code／Codex／OpenCode；只统计 Token；Codex 检查点重算、消息去重，客户端数据不与 CPA 双计 |
-| 调用分析 | `Models/CallAnalytics/`、`Services/CallAnalytics/`、`ViewModels/CallAnalyticsViewModel.swift`、`Views/Screens/CallAnalyticsScreen.swift`、`Views/Components/CallAnalytics/` | 来源与时间筛选、工具／MCP／技能分析、代理按会话计数；纯文本代理计入，未知日期不编造 |
-| 共用外观与导航 | `Views/Components/Analytics/`、`QuotioTheme.swift`、`SidebarSquircleIcon.swift`、`QuotioApp.swift`、`Models/OperatingMode.swift` | 保留当前主题与导航；客户端统计在监控模式也可用 |
-| 工程与本地化 | `Quotio.xcodeproj/project.pbxproj`、`Quotio/Localizable.xcstrings` | 保留新增资源与实际构建设置；按文案键和语言合并，避免整文件覆盖 |
+| Claude Code 模型映射与默认模型 | `Quotio/Shared/AgentClients/Models/AgentConfiguration.swift`、`Quotio/Shared/AgentClients/Models/CLIAgent.swift`、`Quotio/Infrastructure/AgentClients/AgentConfigurationService.swift`、`Quotio/BusinessModules/AgentConfiguration/ViewModels/AgentSetupViewModel.swift`、`Quotio/BusinessModules/AgentConfiguration/Views/ClaudeModelMappingView.swift`、`Quotio/BusinessModules/AgentConfiguration/Views/AgentDefaultModelPicker.swift`、`Quotio/BusinessModules/AgentConfiguration/Views/AgentConfigSheet.swift` | 保留角色到实际请求模型的映射、存量菜单与显示名兼容；默认启动模型独立配置；显示名不能覆盖实际模型 ID |
+| Codex CLI 配置 | `Quotio/Infrastructure/AgentClients/AgentConfigurationService.swift`、`Quotio/Shared/AgentClients/Models/AgentConfiguration.swift`、`Quotio/Shared/AgentClients/Models/CLIAgent.swift`、`Quotio/BusinessModules/AgentConfiguration/ViewModels/AgentSetupViewModel.swift` | 顶层模型和 provider 的读取不能被 profiles／MCP 子表混淆；保留用户自有配置内容 |
+| 备份管理 | `Quotio/Infrastructure/AgentClients/AgentConfigurationService.swift`、`Quotio/BusinessModules/AgentConfiguration/Views/AgentBackupSection.swift` | 备份不重名覆盖；删除目标经过验证，不能误删配置或越界路径 |
+| Antigravity 配额 | `Quotio/Infrastructure/Providers/Antigravity/AntigravityQuotaFetcher.swift`、`Quotio/Infrastructure/Providers/Antigravity/AntigravityQuotaParser.swift`、`Quotio/Shared/Accounts/Models/AntigravityQuotaPresentation.swift`、`Quotio/App/MenuBar/Views/MenuQuotaLayouts.swift`、`Quotio/BusinessModules/Accounts/Views/AntigravityQuotaLayouts.swift`、`Quotio/BusinessModules/Accounts/Views/AccountQuotaContent.swift` | 剩余／已用方向正确；不同额度池不随意平均；窗口和菜单栏使用一致的额度、周期和重置时间 |
+| 仪表盘与提供商布局 | `Quotio/BusinessModules/Dashboard/Views/DashboardScreen.swift`、`Quotio/BusinessModules/Accounts/Views/ProvidersScreen.swift`、`Quotio/BusinessModules/Dashboard/Views/ProxyRuntimeCard.swift`、`Quotio/BusinessModules/Accounts/Views/AccountProviderGroups.swift`、`Quotio/BusinessModules/Accounts/Views/AccountProviderFilter.swift`、`Quotio/BusinessModules/Dashboard/Views/AvailableModelsSection.swift` | 顶部 CPA 运行卡与路由中心；账号页复用统一筛选和账号分组；模型完整展示，展开入口在右下，无搜索 |
+| 首次启动与共享模型目录 | `Quotio/Shared/ModelManagement/Services/DashboardModelCatalogLoader.swift`、`AgentModelCatalogService.swift`、`Quotio/Infrastructure/Networking/ModelCatalogClient.swift`、`Quotio/Shared/Accounts/ViewModels/QuotaViewModel.swift`、`Quotio/Shared/ModelManagement/Models/ModelCatalog.swift` | 同一次加载先取得当前客户端 API key，再请求本机模型目录；启动后自动加载，旧会话响应不能覆盖新会话；实时目录、候选筛选和连接测试各保留原语义 |
+| CPA 仪表盘用量 | `Quotio/Shared/Analytics/CPA/`、`Quotio/BusinessModules/Analytics/CPAUsage/`、`Quotio/Infrastructure/CPA/API/ManagementAPIClient.swift`、`Quotio/Shared/Accounts/ViewModels/QuotaViewModel.swift` | 新队列唯一消费者，跟随应用／代理生命周期；保留历史累计数据、不请求旧累计接口，真实零与未知分开 |
+| 本地客户端分析（用量与调用二合一） | `Quotio/BusinessModules/Analytics/ClientCalls/`、`Quotio/Shared/Analytics/Models/`、`Quotio/Shared/UI/Analytics/` | 综合／Claude Code／Codex／OpenCode／Pi；Token用量账本与工具/MCP/Skill调用合并为统一看板；各客户端本地数据不与 CPA 网关双计 |
+| 共用外观与导航 | `Quotio/Shared/UI/Analytics/`、`Quotio/Shared/UI/Theme/QuotioTheme.swift`、`Quotio/App/Navigation/SidebarSquircleIcon.swift`、`Quotio/App/QuotioApp.swift`、`Quotio/Shared/AppSettings/OperatingMode.swift`、`Quotio/App/Navigation/OperatingMode+Navigation.swift` | 保留当前主题与导航；客户端统计在监控模式也可用；模式状态归原 manager，导航只读扩展不改偏好 |
+| 工程与本地化 | `Quotio.xcodeproj/project.pbxproj`、`Quotio/Resources/Localizable.xcstrings` | 保留新增资源与实际构建设置；按文案键和语言合并，避免整文件覆盖 |
 
 统计模块的详细计算与参考源码对照见[用量统计与调用分析](features/usage-statistics-and-call-analytics.md)。视图和统计规则并非对参考项目原文件的无差别覆盖：AIUsage 使用其自己的 Claude Gateway 归档，本项目使用 Claude Code 本地记录；参考项目的 Codex 代理／非代理轨道尚未在本项目实现。
 
 2026-09-08 客户端统计已改为 SQL 日汇总展示、按变化文件与会话处理，不再让全历史账本和检查点常驻页面。新增「诊断与维护 → 维护入口 → 存储与数据」，区分缓存释放、数据库空间回收和按模块删除统计；合并时必须保留应用级维护屏障、CPA 已消费批次落盘以及多模块失败后缓存失效。详见 [统计内存优化与存储维护](features/analytics-memory-optimization-and-storage-maintenance-2026-09-08.md)。
 
+
+第二轮第一批公共模型已按完整声明归位：客户端配置模型见 `Quotio/Shared/AgentClients/Models/`，Claude 菜单与显示规则见其 `Claude/` 子目录；账号模型见 `Quotio/Shared/Accounts/Models/`，额度百分比规则见 `Quotio/Shared/Accounts/Presentation/`。外观、刷新及菜单栏设置分别位于 `Quotio/Shared/AppSettings/`，格式化规则位于 `Quotio/Shared/Formatting/`。原 `Models.swift`、`MenuBarSettings.swift`、`AgentModels.swift` 已移除，不能再作为当前冲突定位入口；上游仍使用合集时，按类型与职责逐项对照，保留原有 Codable 字段、偏好键、单例与异步所有权。详见[公共模型及纯规则拆分](features/public-model-split-2026-10-15.md)。
+
+第二轮第二批将独立视图按完整声明归位：`SettingsScreen.swift` 只保留设置导航状态，设置分区、独立控件与版本弹窗分别见 `Settings/Views/Sections`、`Components`、`Sheets`；关于页继续使用原 `ProxyVersionManagerSheet`。`QuotaScreen.swift` 保留旧导航兼容壳，额度内容展示入口为 `AccountQuotaContent.swift`，额度布局、徽标及模型详情在账号模块内分文件维护。`StatusBarMenuBuilder.swift` 继续负责原生菜单装配和缓存，控制器与回调对象位于 `App/MenuBar`，菜单视图位于其 `Views` 子目录。上游仍使用大文件时按类型名逐项比对；保留原视图的状态宿主、Task、单例、偏好键、布局和交互，不因文件移动复制状态或重新注册任务。详见[独立视图拆分记录](features/independent-view-split-2026-10-15.md)。
+
+第二轮第三批仅将 `QuotaViewModel` 的模型、菜单投影、凭据传输和 OAuth 四组分文件维护。主类仍持有全部存储属性、初始化、任务句柄、刷新世代与生命周期；同目录的 `QuotaViewModel+Models.swift` 保留原嵌套模型全名，`+MenuBar.swift` 维护菜单投影，`+AuthFileTransfer.swift` 维护原批次来源检查，`+OAuth.swift` 维护授权入口和回调。原顶层授权状态位于 `Shared/Accounts/Models/OAuthState.swift`。上游大文件变更需同时比对主类和四个扩展；只允许既定跨文件访问白名单，不扩大 `private(set)`，不拆出第二份授权会话或账号状态。详见[QuotaViewModel 分文件维护记录](features/quota-viewmodel-split-2026-10-15.md)。
+
+第二轮第四批新增 `Shared/Accounts/ViewModels/QuotaViewModel+IDEQuotas.swift` 与 `QuotaViewModel+AccountMutations.swift`，分别维护原 IDE 额度和账号变更方法。主类继续持有全部存储、Task、上下文校验、刷新槽位与统一收尾；不新增协调器或存储服务。比对上游时同步核对显式扫描同意、只刷新已导入账号、持久化键、禁用与删除清理范围、模式／管理客户端／运行会话检查，以及删除后不被旧响应恢复。只有 20 项必要跨文件访问调整，原可变私有属性、私有 setter 和上一批四个扩展保持原样。详见[IDE 额度与账号变更拆分记录](features/quota-viewmodel-ide-account-split-2026-10-15.md)。
+
+第二轮第五批将 16 个原提供商取数方法完整迁入 `QuotaViewModel+LocalQuotaFetching.swift`、`QuotaViewModel+CPAQuotaRefresh.swift`、`QuotaViewModel+MonitorQuotaRefresh.swift`。主类继续唯一持有获取器、状态及任务，刷新协调和受保护的状态写入入口不迁移。比对上游时同时核对三个扩展：保留 CPA 接管失败不使用其他本机账号回退、精确凭据与唯一旧邮箱映射、Kiro 三阶段身份映射、Codex 凭据分组、Copilot 合并后别名归一、原并发及会话校验位置。仅开放 13 个只读获取器和 13 个必要方法，不扩大 `private(set)` 或可变私有存储；局部 Codex CLI 回退和本地测试读取辅助仍为私有。详见[提供商取数拆分记录](features/quota-viewmodel-provider-fetching-split-2026-10-15.md)。
+
+第二轮第六批将 14 个原方法（含一个 Debug 目录读取包装）归位到 `QuotaViewModel+QuotaRefresh.swift`，维护本地／CPA 目录、手动操作、批量与单提供商／单账号刷新、账号发现、失败持久化和统一收尾。主类仍持有全部状态、任务句柄、上下文校验、槽位和私有节流，只新增两个同步方法读取到期状态及记录原开始时间。比对上游时保留槽位申请后的来源复核、原 `defer`、两条批量路径各自的时间写入顺序、原并发与失败回退、挂起后的客户端／账号／模式／运行会话检查，以及原发现／持久化／通知／菜单收尾顺序。仅四个既有方法开放为内部可见，不放宽可变私有存储或 `private(set)`；目录事务与失败持久化辅助继续私有。新增定向测试覆盖真实批量入口的槽位冲突和等待取消，原 104 个测试文件不变。详见[刷新协调拆分记录](features/quota-viewmodel-refresh-coordination-split-2026-10-15.md)。
+
+第二轮第七批将七个原代理相关方法完整迁入 `QuotaViewModel+ProxyLifecycle.swift`，维护启动／切换、完整模式初始化、禁用同步、升级检查、唯一用量会话观察及获取器代理配置更新。主类继续持有全部原状态、启动协调器、客户端和任务句柄；停止事务、三种刷新循环、独立恢复、监控模式客户端切换及初始化注册不拆分或重排。比对上游时核对两次目录刷新与禁用同步、预热、升级 Task、隧道的原顺序，以及每次挂起后的取消／运行会话检查；观察继续弱引用同一实例并在 MainActor 重订阅。仅开放原只读 `proxyStartFlow` 及七个必要方法，私有客户端指针、可变私有存储和 `private(set)` 不变；禁用同步与升级辅助仍私有。详见[代理生命周期拆分记录](features/quota-viewmodel-proxy-lifecycle-split-2026-10-15.md)。
+
+第二轮第八批将八个原预热方法完整迁入 `QuotaViewModel+Warmup.swift`，维护设置、时间计算、精确凭据与模型选择、逐模型执行。主类保留调度 Task、整轮防重、私有单账号防重入口、原八小时模型缓存及状态写回；原方法正文不改，取消、会话校验和失败保留规则不增减。跨文件仅开放两个原只读依赖及六个必要方法，不开放私有存储或 setter。为补充隔离回归，原设置依赖改为默认 `.shared` 的构造注入，`WarmupSettingsManager` 默认仍使用 `.standard`，全部偏好键、解码及回调保持原样；仅 Debug 方法用于放入指定时间的缓存样本，不新增存储。新增 12 项预热测试使用临时偏好和原离线 HTTP 夹具，原 105 个测试文件不改动。详见[预热拆分记录](features/quota-viewmodel-warmup-split-2026-10-15.md)。
+
+第二轮第九批将九个只读展示计算归入 `QuotaViewModel+Presentation.swift`，五个 Antigravity 切换入口归入现有 `QuotaViewModel+AccountMutations.swift`。全部 253 个原成员的正文、属性及 Actor 边界保持一致，仅原 `refreshSettings` 从私有只读引用调整为内部只读引用。刷新集合仍通过主类原同步方法写入，`private(set)`、全部存储与 Task 所有权不变；涉及私有槽位、客户端、预热状态和懒加载写入的读取门面继续留在主类。仪表盘、API Key、通知方法未搬走或改写执行逻辑。收尾审计记录了既有 API Key 回写缺会话／读写世代保护、仪表盘手动刷新完成时间缺末尾会话复核、通知发送与恢复清理的提供商去重键不一致三项风险；这三项当时未混入结构迁移，随后专项修复见下段；不能把模型目录的请求令牌保护当作全部页面流程已隔离。详见[第九批实施与审计记录](features/quota-viewmodel-presentation-final-audit-2026-10-15.md)。
+
+第九批收尾审计的三项风险已在后续[专项修复](features/quota-viewmodel-finalization-fixes-2026-10-15.md)中处理。API Key 页面读取与后台 `refreshData` 共用主类最新请求令牌，所有编辑在成功／失败提交前检查客户端、模式、代理会话和取消；客户端替换同步废弃旧令牌，旧 `defer` 只能释放自身互斥。通知用稳定提供商身份去重，原显示文案及偏好键不变，恢复时兼容清理旧显示名键。仪表盘用 `refreshData` 的明确结果和 `UsageStatisticsStore.refreshForDashboard(sessionID:)` 的同会话完成证据记时间；后者复用原消费者与等待屏障，不把失败、维护、取消、不支持接口或残留 `live` 视为本轮成功。主类及原管理器继续持有全部状态与任务，私有 setter 不开放；测试构造的依赖注入默认仍使用原共享实例和标准偏好。
+
+第三轮第一批将原 `MonitorRuntime.swift` 中的 16 个类型按完整声明迁入 `Shared/Accounts/Monitor` 同名文件，旧合集已移除。账号模型、凭据协议及值、保险库、世代、元数据、快照、发现、协调器与辅助类型均保留原名称；`MonitorCredentialStore` 默认拒绝 CAS 的实现仍与协议同文件。比对上游仍使用合集时，按类型逐项映射，不重新创建共享实例或拆开原 actor 的字段与方法。保留保险库同步 CAS、世代锁临界段、快照连同错误的原子提交、协调器 `Flight` 与共享等待收尾，以及所有私有状态和 `issues private(set)`。唯一辅助调整为文件私有 `String.nilIfBlank` 等价归入 `MonitorIdentity.nilIfBlank(String?)`，账号与发现的六处调用相应替换；不向 String 全局开放接口。详见[监控运行类型拆分记录](features/monitor-runtime-type-split-2026-10-15.md)。
+
+第三轮第二批将 `WorkspaceSessionService.swift` 的协议、`SessionIOUtils` 和 Claude／Codex／OpenCode／Pi／AGY 五个 Provider 归位到原 `BusinessModules/Workspace/Sessions/Services` 目录的同名文件。原文件只保留 `WorkspaceSessionService` actor；装配字典、`shared`、私有依赖、TaskGroup 汇总、排序、消息与删除分发及终端恢复保持原样。上游仍使用合集时按八个完整声明逐项比对，不拆开 Provider 私有解析方法，也不放宽权限或遗漏 `nonisolated`／`@concurrent`。保留数据库与文件来源优先级、关系补全及去重顺序、删除前重扫，以及统一删除引擎的约束复核、暂存、提交和失败回滚顺序；不把可重入 actor 门面当成全局删除锁。详见[工作区会话 Provider 拆分记录](features/workspace-session-provider-split-2026-10-15.md)。
+
+第三轮第三批按实际业务复用纠正 CPA 公共契约归属：`CPAAccountWeight` 与原错误契约成组位于 `Infrastructure/CPA/Configuration/CPAAccountRoutingRules.swift`；设置和路由共用的 `CPARoutingStrategy` 整体位于 `Shared/UI/CPA/CPARoutingPolicy.swift`；共享查询返回的 `CPARoutingSnapshot` 位于 `Shared/Analytics/CPA/Models/CPAUsageRoutingReport.swift`；`CPASettingsNumberRow` 位于 `Shared/UI/Controls`。上游仍使用 Settings／Dashboard 合集时按职责对应，不把 `CPAAdvancedSettingsDraft`、保存基线、路由活动或动画一起下沉；不改原调用类型名、错误行为、查询或任务所有权。详见[CPA 公共业务归位记录](features/cpa-business-boundary-2026-10-15.md)。
+
+第三轮第四批将 MenuBarAccountCatalog 归 `Shared/Accounts/Presentation`，IDE 扫描选项／结果／原 manager 归 `Shared/Accounts/Services/IDEScanSettings.swift`，原 CPAOAuthSessionCoordinator 归同 Services；传输协议与客户端适配保留在 `Infrastructure/CPA/API/CPAOAuthSessionClient.swift`。OAuthSheet 与其私有状态视图同文件归 `Shared/Accounts/Views`，账号页与仪表盘保留原调用。共享 OperatingMode／manager 成组位于 `Shared/AppSettings`，页面集合和可见性查询两个原成员在 `App/Navigation/OperatingMode+Navigation.swift`。比对上游时保留单例、私有 setter、模式 revision、账号歧义拒绝、显式扫描同意、OAuth 世代／期限／回调和弹窗任务，不把文件归位误当状态迁移。详见[账号共享能力归位记录](features/account-business-boundary-2026-10-15.md)。
+
+第三轮第五批将模型读取业务归 `Shared/ModelManagement/Services/AgentModelCatalogService.swift`，共用请求传输归 `Infrastructure/Networking/ModelCatalogClient.swift`；旧 `AgentConfigurationService` 三个读取签名继续兼容，但页面、Pi 保存前查证和完整共享 Loader 不再为只读请求构造配置服务。合并上游时核对原端点、Bearer、十秒超时与代理工厂；保留实时空目录、候选 Copilot 筛选及页面兜底，连接测试允许 HTTP 200 非目录正文。Loader 先取得本轮客户端 key，管理 key 不能回退为模型 key，取消屏障和原 ViewModel 世代提交不动。`PiSessionPaths` 的三个路径方法整体归 `Infrastructure/AgentClients`，timestamp 同名扩展留 Analytics 并显式保持 `nonisolated`；保留原环境变量、扫描目录、安装备份、写后重读和双文件回滚。详见[模型目录与 Pi 路径归位记录](features/model-catalog-business-boundary-2026-10-15.md)。
+
+第三轮第六批将原 AnalyticsMaintenanceCoordinator 与 StorageDataDestination 成组归 `App/Composition/AnalyticsMaintenanceComposition.swift`。QuotioApp 原 State、环境注入和统计实例不变；App 的普通设置与日志兼容入口向 SettingsScreen 注入延迟目的地，设置页不引用 App 协调器或跨业务统计 VM。SettingsScreen 保持原非泛型类型及导航状态，其初始化现在明确接收目的地构造闭包；上游新增调用点须由 App 同样提供，不能在设置业务恢复原跨层装配或另造服务。原 service／Store／Screen 留 `Settings/Storage`；configure 仍在目的地 task 首次执行，不提早到 App 启动。保留 busy、private(set)、在途队列等待、清理事务、全模块失效、恢复与迁移墓碑。原维护生命周期测试内容不变，归 `QuotioTests/App/Composition`。详见[存储维护应用装配归位记录](features/storage-maintenance-composition-2026-10-15.md)。
+
 ### 3.3 合并时的关键约束
 
+整理后审计确认的监控 Claude 授权取消风险已作[专项修复](features/monitor-claude-oauth-session-isolation-2026-10-15.md)：对照上游时保留 `MonitorOAuthCoordinator` 的同步会话失效、浏览器／token 返回校验及按所属会话收尾；保险库和元数据的授权保存重载在实际写入位置校验世代，不能只保留网络返回时的一次检查。原任务需按启动世代分别取消，迟到取消不能整段跳过旧设备任务，也不能取消新 Claude。ViewModel 以原 OAuthState.sessionID 与模式 revision 提交；原网络端点、请求正文、存储格式、CAS 及 shared 默认值不变。
+
+- 后续重构按业务能力及实际耦合制定计划，先说明共同变更原因、依赖方向、状态与任务所有者、事务边界和维护收益，再列文件调整与必要验证。行数只作审计线索；保留内聚类型组，避免仅为缩短文件增加转发或跨文件跳转。此前完整类型归位记录用于映射历史变更，不构成继续按文件大小拆分的依据；规则见[代码架构标准](ARCHITECTURE_STANDARDS.md)。
 - CPA 管理请求直接连接本机 `127.0.0.1`，模型请求使用客户端 key；不能把管理 key 回退为客户端 key。
 - 代理启停保留 Quotio 自进程保护、运行会话标识和取消检查。
 - 版本化代理存储保留 `current` 指向的活动版本。
@@ -178,7 +217,7 @@ git diff
 
 在**本流程的 merge 操作中**，`ours` 是二开分支，`theirs` 是上游。不能对整仓执行“全部保留 ours／theirs”：前者会丢掉上游修复，后者会覆盖二开功能。以共同祖先、当前二开和上游三份文件分别判断每个改动目的，解决后显式 `git add <已解决路径>`。
 
-优先审查 `QuotaViewModel`、`AgentConfigurationService`、`QuotioApp`、`ManagementAPIClient`、`CLIProxyManager`、`Localizable.xcstrings`、`project.pbxproj`，因为它们既是上游活跃入口，也承载多项二开功能。
+优先审查 `QuotaViewModel`、`AgentConfigurationService`、`QuotioApp`、`ManagementAPIClient`、`CLIProxyManager`、`Quotio/Resources/Localizable.xcstrings`、`project.pbxproj`，因为它们既是上游活跃入口，也承载多项二开功能。
 
 新增模块发生“双方都新增”冲突时，也需要整合实现和对应测试，不能只因为文件位于二开目录就保留整份本地文件。上游若已经修复相同问题，应优先复用上游实现，移除被替代的本地重复实现，但保留能保护二开需求的回归测试。
 
@@ -244,11 +283,11 @@ cc-switch 从 `db41d701879592b8eca938cbe5c5ac28dd732b9f` 对比新提交，优�
 
 当前 Quotio 通过 `CLIProxyManager` 从 `router-for-me/CLIProxyAPI` 发布页获取二进制，不在应用工程中编译 CPA 源码。更新时记录实际 CPA 版本，并验证：
 
-2026-09-28 起，QuotioPlus 仅安装、激活和运行 CPA 8.x。官方仍同时发布 7.x，因此 Atom 发布源和版本列表必须先过滤主版本，再选择“最新”版本。既有 7.x 格式的 `config.yaml` 只作为迁移输入：先备份，使用 CPA 的 `/v8/management/config` 空 PATCH 完成官方迁移，验证 v8 配置和管理接口后保留首次迁移备份；失败时恢复原文件。新配置应直接使用 `server`、`management`、`access.api-keys`、`api-keys.<provider>`、`oauth`、`requests` 与 `observability` 结构。当前部分管理功能仍调用 CPA 8 官方保留的 `/v0/management` 兼容接口，后续替换时须逐项核对响应模型与副作用，不能直接全局替换 URL。
+2026-09-28 起，QuotioPlus 仅安装、激活和运行 CPA 8.x。官方仍同时发布 7.x，因此 Atom 发布源和版本列表必须先过滤主版本，再选择“最新”版本。既有 7.x 格式的 `config.yaml` 只作为迁移输入：先备份，使用 CPA 的 `/v8/management/config` 空 PATCH 完成官方迁移，验证 v8 配置和管理接口后保留首次迁移备份；失败时恢复原文件。新配置应直接使用 `server`、`management`、`access.api-keys`、`api-keys.<provider>`、`oauth`、`requests` 与 `observability` 结构。2026-10-14 起，全部现有 CPA 管理调用统一为 `/v8/management`，不再使用 `/v0/management` 或旧 `/usage` 网络回退。路径、原始 JSON 值、配置树、运维确认和副作用按官方 v8 契约处理，模型业务 `/v1` 协议保持独立。最低支持版为 8.0.0；后续大版本需验证契约后再纳入。详细规则与验证见 [CPA v8 API 适配与加固](features/cpa-v8-management-hardening-2026-10-14.md)。
 
 1. 版本化存储和活动 `current` 链接可用，升级／回退不会删除活动版本。
 2. 代理启动、停止、健康检查、授权和模型目录正常。
-3. 管理 API 的路径、鉴权、字段和错误语义；尤其是用量队列的消费式读取，旧 `/usage` 仅用于历史兼容代码。
+3. 管理 API 的 v8 路径、鉴权、原始配置值、字段和错误语义；尤其是用量队列的消费式读取，不再请求旧 `/usage`，历史账本继续保留。
 4. 队列读取不能套用可能重复消费的普通自动重试；同一时段只能由现有单消费者负责。
 5. 请求数／Token 的停止、重启、失败和持久化状态正确。
 
@@ -264,8 +303,8 @@ cc-switch 从 `db41d701879592b8eca938cbe5c5ac28dd732b9f` 对比新提交，优�
 # 构建。
 xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus -configuration Debug -destination 'platform=macOS' build
 
-# 串行完整单元测试，便于避免并行调度对依赖状态测试的干扰。
-xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus -configuration Debug -destination 'platform=macOS' -parallel-testing-enabled NO test
+# 只运行直接相关的测试类；以下为 v8 契约示例，按改动选择 -only-testing，禁止全量测试。
+xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus -configuration Debug -destination 'platform=macOS' -parallel-testing-enabled NO test -only-testing:QuotioPlusTests/CPA8ManagementAPIContractTests
 
 # 构建并启动新应用；该脚本会停止当前正在运行的Quotio实例。
 ./scripts/build_and_run.sh --verify
@@ -273,7 +312,7 @@ xcodebuild -project Quotio.xcodeproj -scheme QuotioPlus -configuration Debug -de
 
 重点关注的回归类包括 `ClaudeCodeConfigTests`、`CodexModelConfigTests`、`AgentBackupDeletionTests`、`AntigravityQuotaTests`、`DashboardModelCatalogLoaderTests`、`ModelCatalogTests`、`UsageStatisticsTests`、`UsageStatisticsStoreTests`、`ClientUsageTests`、`CodexClientUsageTests`、`OpenCodeClientUsageTests`、`CallAnalyticsMigrationTests`、`CallAnalyticsReplicaTests`。
 
-2026-09-05 统计迁移完成时，记录过456项通过的串行回归；该次仅排除了两项已知语言环境基线问题：`AmpQuotaFetcherTests.testParserMapsSubscriptionOtherUsageAndRenewalSuffix`、`MonitorRuntimeTests.testCountMetricUnitsUseEnglishSingularAndPluralForms`。这是历史证据，**不代表未来同步可永久跳过它们，也不代表之后新增改动自动获得验证**。未来先运行完整测试，区分本次回归与已复现的环境问题，记录实际结果。
+2026-09-05 统计迁移完成时，记录过456项通过的串行回归；该次仅排除了两项已知语言环境基线问题：`AmpQuotaFetcherTests.testParserMapsSubscriptionOtherUsageAndRenewalSuffix`、`MonitorRuntimeTests.testCountMetricUnitsUseEnglishSingularAndPluralForms`。这是历史证据，**不代表未来同步可永久跳过它们，也不代表之后新增改动自动获得验证**。后续只运行与改动直接相关的定向测试，区分本次回归与已复现的环境问题，并记录实际结果；历史全量执行方式不再沿用。
 
 当前用户负责界面人工验收。每次涉及 UI 的同步至少检查：启动 CPA 自动加载模型、模型展开入口、Claude 映射和默认项、Antigravity 窗口／菜单栏一致性、统计来源／日期筛选、模型明细、调用分析以及亮暗色和窄窗口。用户表示“会检查”只代表验收分工，不等于已经验收通过。
 
@@ -309,3 +348,5 @@ Bundle ID 已改为 `com.app.george.quotioplus`。首次启动按原迁移机制
 - 参考项目来源与许可证变化，二开发布地址是否仍正确。
 
 维护文档入口为本文；功能计算规则归入 `docs/features/`，上游来源归入 `docs/licenses/`，实际同步记录建议归入 `docs/upstream-sync/`。不要把“当前临时目录还在”或“上次聊天提到过”作为后续合并的唯一依据。
+
+2026-10-15 代码清理后，测试按有效断言保留：纯截图导出、PNG 大小及空泛宽度验收已删除；原生菜单跟踪、滚动位置、图表联动、光流定点像素，以及显示界面不改配置的回归继续保留。这些验证实际行为，不作为主题样式的自动验收基线。已有配置迁移、历史账本解码和旧导航归一仍是生产兼容职责，不按“老代码”删除。

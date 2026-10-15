@@ -1,4 +1,4 @@
-> **QuotioPlus 二开版说明**：本仓库基于 [Trong Nguyen 的 Quotio](https://github.com/nguyenphutrong/quotio) 二次开发，感谢原作者与贡献者。以下保留上游语言文档；QuotioPlus 1.0.0 的功能、安装与更新以[本仓库首页](README.md)和[本仓库 Releases](https://github.com/Geoege-xll/quotio/releases)为准。上游 Homebrew tap 安装的是原版 Quotio。
+> **QuotioPlus 二开版说明**：本仓库基于 [Trong Nguyen 的 Quotio](https://github.com/nguyenphutrong/quotio) 二次开发，感谢原作者与贡献者。以下保留上游语言文档；QuotioPlus 1.1.01 的功能、安装与更新以[本仓库首页](README.md)和[本仓库 Releases](https://github.com/Geoege-xll/quotio/releases)为准。上游 Homebrew tap 安装的是原版 Quotio。
 
 # Quotio
 
@@ -11,6 +11,8 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Geoege-xll/quotio/releases"><img src="https://img.shields.io/badge/release-v1.1.01-blue.svg?style=flat" alt="Release" /></a>
+  <a href="https://linux.do"><img src="https://img.shields.io/badge/LINUX_DO-Công_nhận-f0b23d.svg?style=flat&labelColor=1c1c1e" alt="LINUX DO Công nhận" /></a>
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg?style=flat" alt="Platform macOS" />
   <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat" alt="Language Swift" />
   <img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat" alt="License MIT" />

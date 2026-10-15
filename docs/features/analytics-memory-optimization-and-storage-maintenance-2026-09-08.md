@@ -67,7 +67,7 @@ Debug 构建成功，整合回归 **178 项通过、0 失败、0 跳过**。覆�
 - 三模块清理范围、价格与迁移墓碑保留、事务回滚、缓存保留事实、磁盘整理。
 - 清理期间进入／离开页面、取消的日历重建、CPA 已消费响应正常返回、多模块删除后单模块重载故障。
 
-大规模手动基准单独运行 **1 项通过**，普通测试未显式提供隔离目录时自动跳过。实现位于 `QuotioTests/ClientUsageMemoryBenchmarkTests.swift`，要求临时路径前缀 `/tmp/quotio-memory-benchmark-`，不会自动读取生产数据库。
+大规模手动基准单独运行 **1 项通过**，普通测试未显式提供隔离目录时自动跳过。实现位于 `QuotioTests/BusinessModules/Analytics/ClientCalls/ClientUsageMemoryBenchmarkTests.swift`，要求临时路径前缀 `/tmp/quotio-memory-benchmark-`，不会自动读取生产数据库。
 
 验收目录：
 

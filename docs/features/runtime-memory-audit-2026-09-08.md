@@ -1,5 +1,7 @@
 # 运行内存检测：客户端用量全量历史常驻
 
+> 目录说明（2026-10-15）：仍存在的本地文件已更新为当前目录；下文行号及已移除的 `UsageStatisticsScreen.swift` 属于当时审计证据，保留原记录。现行维护入口见[源码目录规范](../SOURCE_LAYOUT.md)。
+
 检测日期：2026-09-08，约 09:03–09:07（Asia/Shanghai）。
 
 ## 结论
@@ -53,10 +55,10 @@
 
 ## 根因与代码位置
 
-1. **完整账本长期常驻。** `ClientUsageEngine.load()` 调用 `loadLedger()`，将所有用量记录与账本检查点保存到 `cached`；`loadPresentation()` 又把含明细的快照传给视图模型。位置：`Quotio/Services/ClientUsage/ClientUsageEngine.swift:35`、`Quotio/Services/ClientUsage/ClientUsageSQLiteStore.swift:74`。
-2. **扫描器再保留全部文件检查点。** `loadCodexCaches()` 为每个文件读取完整检查点数组，最终将整个字典保存到 `codexCaches`。实际堆中存在对应的检查点数组与文件缓存字典。位置：`Quotio/Services/ClientUsage/ClientUsageSQLiteScanStore.swift:143`。
-3. **应用生命周期使大数据不随页面退出释放。** `QuotioApp` 持有 `ClientUsageViewModel`，离开用量页面只停止自动刷新；引擎与扫描器中的全量缓存继续存活。这原本用于避免切页重扫，代价是长期保留大数据。位置：`Quotio/QuotioApp.swift:173`、`Quotio/Views/Screens/UsageStatisticsScreen.swift:35`。
-4. **刷新存在放大临时峰值的路径。** 每个来源完成后，`merge()` 都会遍历历史，构造记录字典与检查点字典。Codex 变更后还对全历史进行会话分组、去重、排序和投影，期间有旧快照、新数组及临时索引并存。位置：`Quotio/Services/ClientUsage/ClientUsageEngine.swift:97`、`Quotio/Services/ClientUsage/CodexClientUsageSource.swift:180`。这在源码上构成峰值风险；本轮未捕获 3.1 GiB 峰值发生时的分配堆栈，不能将峰值全部归因于某一行。
+1. **完整账本长期常驻。** `ClientUsageEngine.load()` 调用 `loadLedger()`，将所有用量记录与账本检查点保存到 `cached`；`loadPresentation()` 又把含明细的快照传给视图模型。位置：`Quotio/BusinessModules/Analytics/ClientCalls/Services/ClientUsage/ClientUsageEngine.swift:35`、`Quotio/BusinessModules/Analytics/ClientCalls/Services/ClientUsage/ClientUsageSQLiteStore.swift:74`。
+2. **扫描器再保留全部文件检查点。** `loadCodexCaches()` 为每个文件读取完整检查点数组，最终将整个字典保存到 `codexCaches`。实际堆中存在对应的检查点数组与文件缓存字典。位置：`Quotio/BusinessModules/Analytics/ClientCalls/Services/ClientUsage/ClientUsageSQLiteScanStore.swift:143`。
+3. **应用生命周期使大数据不随页面退出释放。** `QuotioApp` 持有 `ClientUsageViewModel`，离开用量页面只停止自动刷新；引擎与扫描器中的全量缓存继续存活。这原本用于避免切页重扫，代价是长期保留大数据。位置：`Quotio/App/QuotioApp.swift:173`、`Quotio/Views/Screens/UsageStatisticsScreen.swift:35`。
+4. **刷新存在放大临时峰值的路径。** 每个来源完成后，`merge()` 都会遍历历史，构造记录字典与检查点字典。Codex 变更后还对全历史进行会话分组、去重、排序和投影，期间有旧快照、新数组及临时索引并存。位置：`Quotio/BusinessModules/Analytics/ClientCalls/Services/ClientUsage/ClientUsageEngine.swift:97`、`Quotio/BusinessModules/Analytics/ClientCalls/Services/ClientUsage/CodexClientUsageSource.swift:180`。这在源码上构成峰值风险；本轮未捕获 3.1 GiB 峰值发生时的分配堆栈，不能将峰值全部归因于某一行。
 
 当前调用分析只保存 972 条日摘要，堆中占主导的是客户端用量类型，因此应优先改造用量数据流，而非先调整图表样式或更换数据库框架。
 

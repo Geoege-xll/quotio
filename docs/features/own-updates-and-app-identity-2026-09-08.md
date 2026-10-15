@@ -48,7 +48,7 @@ xcodebuild -project Quotio.xcodeproj -scheme Quotio -configuration Debug \
 - 实际构建产物中的 `CFBundleDisplayName` 为 `QuotioPlus`，`CFBundleIdentifier` 为 `com.app.george.quotioplus`，appcast 为自有仓库地址。
 - 使用仅存在于临时夹具中的密钥完成离线验签：匹配公钥通过，错误公钥和被修改的归档均被拒绝；未访问生产私钥。
 - 缺少密钥的 appcast 命令在修改版本、清理产物或启动构建前被拒绝。
-- `bash -n scripts/build_dmg.sh scripts/build_and_run.sh`、Info.plist 语法及改动空白检查通过。
+- `bash -n scripts/build_dmg.sh scripts/build_and_run.sh`、Quotio/App/Configuration/Info.plist 语法及改动空白检查通过。
 - 独立只读复核发现的完成回调和自动检查偏好问题已修复，并补充上述回归测试。
 
 尚未验证的边界：自有首次发布后的真实更新下载和安装、Developer ID 签名与公证、用户现有安装的系统权限和登录项迁移。本轮测试使用未签名 Debug 构建，不代表上述分发流程已验收。

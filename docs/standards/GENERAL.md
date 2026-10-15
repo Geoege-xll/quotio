@@ -33,7 +33,8 @@ These observations guide routing and verification; they are not upgrade targets 
 
 ## Contracts and changes
 
-- Current project and feature index: `docs/PROJECT.md`
+- Current project and feature index: [PROJECT](../PROJECT.md)
+- 源码目录与维护归属：[SOURCE_LAYOUT](../SOURCE_LAYOUT.md)。新文件按业务、公共能力或基础设施的实际职责放置；本轮未拆分的混合职责文件按该页例外说明维护。
 - Detailed feature contracts: `docs/features/`
 - Breaking contract changes use the Full workflow and return cross-module routing to the PM.
 

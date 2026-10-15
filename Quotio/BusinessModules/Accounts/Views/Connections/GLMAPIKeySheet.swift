@@ -1,0 +1,294 @@
+//
+//  GLMAPIKeySheet.swift
+//  Quotio
+//
+//  Simplified API key configuration sheet for GLM (BigModel.cn)
+//  API key configuration sheet
+//
+
+import SwiftUI
+
+struct GLMAPIKeySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(QuotaViewModel.self) private var viewModel
+    @Environment(\.colorScheme) private var colorScheme
+
+    let provider: CustomProvider?
+    let onSave: (CustomProvider) -> Void
+
+    // MARK: - Form State
+
+    @State private var apiKey: String = ""
+    @State private var endpoint: GLMEndpoint = .zai
+    @State private var weightEntries = [CustomAPIKeyEntry(apiKey: "")]
+    @State private var weightDrafts: [UUID: String] = [:]
+    @State private var observedWeights: [UUID: Int] = [:]
+
+    @State private var validationError: String?
+    @State private var showValidationAlert = false
+
+    private var isEditing: Bool {
+        provider != nil
+    }
+
+    // MARK: - Body
+
+    var body: some View {
+        VStack(spacing: 0) {
+            headerView
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    apiKeySection
+                    endpointSection
+                    CPAProviderWeightsSection(keys: weightEntries, observed: observedWeights, drafts: $weightDrafts)
+                }
+                .padding(20)
+            }
+
+            footerView
+        }
+        .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
+        .frame(width: 480, height: 330)
+        .onAppear {
+            loadProviderData()
+        }
+        .alert("glm.validationError".localized(), isPresented: $showValidationAlert) {
+            Button("action.ok".localized(), role: .cancel) {}
+        } message: {
+            if let error = validationError {
+                Text(error)
+            }
+        }
+    }
+
+    // MARK: - Header
+
+    private var headerView: some View {
+        HStack(spacing: 16) {
+            Image("glm")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 32, height: 32)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isEditing ? "glm.edit".localized() : "glm.add".localized())
+                    .font(.headline)
+
+                Text("glm.description".localized())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            QuotioCircularIconButton(systemImage: "xmark") {
+                dismiss()
+            }
+            .accessibilityLabel("action.cancel".localized())
+        }
+        .padding(20)
+    }
+
+    // MARK: - API Key Section
+
+    private var apiKeySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("glm.apiKey".localized())
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("glm.apiKeyHint".localized())
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                QuotioCapsuleSecureField("glm.apiKeyPlaceholder".localized(), text: $apiKey, systemImage: "key")
+            }
+        }
+        .quotioInsetCard()
+    }
+
+    // MARK: - Endpoint Section
+
+    private var endpointSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("glm.endpoint".localized())
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("glm.endpointHint".localized())
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Menu {
+                    ForEach(GLMEndpoint.allCases) { ep in
+                        Button(ep.displayName) {
+                            endpoint = ep
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(endpoint.displayName)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .background(
+                        Capsule().fill(QuotioTheme.Colors.cardInset(for: colorScheme))
+                    )
+                    .overlay(
+                        Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
+                    )
+                }
+                .menuStyle(.borderlessButton)
+            }
+        }
+        .quotioInsetCard()
+    }
+
+    // MARK: - Footer
+
+    private var footerView: some View {
+        HStack {
+            Button("action.cancel".localized()) {
+                dismiss()
+            }
+            .buttonStyle(.quotioSecondaryCapsule)
+            .keyboardShortcut(.escape)
+
+            Spacer()
+
+            Button(isEditing ? "glm.saveChanges".localized() : "glm.addProvider".localized()) {
+                saveProvider()
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .buttonStyle(.quotioPrimaryCapsule)
+        }
+        .padding(20)
+    }
+
+    // MARK: - Actions
+
+    private func loadProviderData() {
+        if let provider {
+            weightEntries = provider.apiKeys.isEmpty ? weightEntries : provider.apiKeys
+            observedWeights = CustomProviderService.shared.routingWeights(for: provider,
+                configPath: viewModel.proxyManager.configPath)
+        }
+        guard let provider = provider else { return }
+
+        // Load API key from first entry
+        if let firstKey = provider.apiKeys.first {
+            apiKey = firstKey.apiKey
+        }
+
+        // Determine endpoint from base URL
+        if provider.baseURL.contains("bigmodel.cn") {
+            endpoint = .bigmodel
+        } else {
+            endpoint = .zai
+        }
+    }
+
+    private func saveProvider() {
+        // Validate
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespaces)
+
+        if trimmedKey.isEmpty {
+            validationError = "glm.error.emptyApiKey".localized()
+            showValidationAlert = true
+            return
+        }
+
+        var newProvider = GLMProviderEditor.updatedProvider(
+            provider,
+            apiKey: trimmedKey,
+            endpoint: endpoint
+        )
+
+        do {
+            let weighted = try CustomAPIKeyEntry.applyingRoutingWeights(weightEntries, drafts: weightDrafts, observed: observedWeights)
+            // 简化 GLM 表单仍只改首个密钥正文；每个已有密钥的权重按 UUID 独立保存，其余功能保留。
+            for index in newProvider.apiKeys.indices {
+                let entry = weighted.first { $0.id == newProvider.apiKeys[index].id }
+                    ?? (index == 0 ? weighted.first : nil)
+                if let entry {
+                    newProvider.apiKeys[index].weight = entry.weight
+                    newProvider.apiKeys[index].weightRevision = entry.weightRevision
+                }
+            }
+        } catch {
+            validationError = error.localizedDescription
+            showValidationAlert = true
+            return
+        }
+
+        onSave(newProvider)
+        dismiss()
+    }
+}
+
+enum GLMProviderEditor {
+    static func updatedProvider(
+        _ existing: CustomProvider?,
+        apiKey: String,
+        endpoint: GLMEndpoint,
+        now: Date = Date()
+    ) -> CustomProvider {
+        guard var provider = existing else {
+            return CustomProvider(
+                name: "Z.ai",
+                type: .glmCompatibility,
+                baseURL: endpoint.baseURL,
+                apiKeys: [CustomAPIKeyEntry(apiKey: apiKey)],
+                createdAt: now,
+                updatedAt: now
+            )
+        }
+
+        provider.baseURL = endpoint.baseURL
+        if provider.apiKeys.isEmpty {
+            provider.apiKeys.append(CustomAPIKeyEntry(apiKey: apiKey))
+        } else {
+            provider.apiKeys[0].apiKey = apiKey
+        }
+        provider.updatedAt = now
+        return provider
+    }
+}
+
+// MARK: - GLM Endpoint
+
+enum GLMEndpoint: String, CaseIterable, Codable, Identifiable, Sendable {
+    case zai
+    case bigmodel
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .zai: return "glm.endpoint.zaiGlobal".localizedStatic()
+        case .bigmodel: return "bigmodel.cn"
+        }
+    }
+
+    var baseURL: String {
+        switch self {
+        case .zai: return "https://api.z.ai"
+        case .bigmodel: return "https://bigmodel.cn"
+        }
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    GLMAPIKeySheet(provider: nil) { provider in
+        print("Saved: \(provider.name)")
+    }
+}

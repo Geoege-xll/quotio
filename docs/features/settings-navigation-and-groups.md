@@ -30,13 +30,14 @@
 | 局域网访问与绑定地址 | CPA 服务与网络 | 保留 NetworkAccessSection、风险说明与原变更回调 |
 | 上游代理 | CPA 服务与网络 | ProxySettingsSection 的 network 范围，保留校验、回车保存与清空逻辑，新增可见的应用按钮 |
 | CPA 模型别名与思考强度 | 模型与请求策略 | 复用 CPAModelAliasManagerSheet 与 CPAModelAliasesViewModel，不新增第二份保存实现 |
-| 账号路由 | 模型与请求策略 | ProxySettingsSection 的 requests 范围，保留轮询与优先填充选项 |
-| 额度耗尽后的账号与预览模型切换 | 模型与请求策略 | 保留两个独立开关及原 CPA 保存函数 |
-| 重试次数与最大间隔 | 模型与请求策略 | 保留原值域、步长、单位和保存函数 |
+| 账号路由 | 模型与请求策略 | ProxySettingsSection 的 requests 范围，保留轮询与优先填充，补充加权轮询；三项使用项目胶囊分段控件，详情共用策略名称映射 |
+| 额度耗尽后的账号与预览模型切换（旧版） | 已移除 | CPA v8 没有对应字段，按 2026-10-14 用户决定移除界面、搜索提示与专用展示逻辑；不主动清理磁盘历史字段，账号故障转移继续由路由和重试控制 |
+| 重试次数与最大间隔 | 模型与请求策略 | 保留原控件和保存功能；新增每轮尝试账号数、流式保活与启动重试，高级区默认收起 |
+| 会话固定账号 | 模型与请求策略 | 主开关常显；保持时间与子代理继承在高级请求区，关闭不清理已有值 |
 | 隐藏敏感信息与匿名使用数据 | 隐私与安全 | 复用 PrivacySettingsSection，不改变遥测偏好 |
 | YubiKey 保护 | 隐私与安全 | 复用完整 YubiKeySettingsSection，保留读取、选择、配置弹窗、缺失设备状态及刷新流程 |
 | 管理密钥 | 隐私与安全 | 复用 ManagementKeyRow，保留脱敏、复制反馈、轮换确认、进度和失败弹窗；原服务组件默认仍可显示此行 |
-| 文件日志、请求日志与调试模式 | 诊断与维护 | ProxySettingsSection 的 logging 范围，保留三个独立配置项 |
+| 文件日志、请求日志与调试模式 | 诊断与维护 | ProxySettingsSection 的 logging 范围，保留三个独立配置项，日志总容量和错误文件数量放在默认收起的高级区 |
 | 兼容性修复与恢复 | 诊断与维护 | 原样调用 applyBaseURLWorkaround 和 removeBaseURLWorkaround |
 | 程序、配置与认证目录 | 诊断与维护 | 复用 LocalPathsSection 和 PathLabel，保留完整路径复制 |
 | 关于与日志入口 | 诊断与维护 | 跳转现有主导航页面，不复制版本或日志管理逻辑 |
