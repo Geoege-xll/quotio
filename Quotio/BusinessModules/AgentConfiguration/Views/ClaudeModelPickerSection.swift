@@ -4,6 +4,8 @@ import SwiftUI
 /// 会话继承通过移除变量实现；指定目标可以是角色或完整模型 ID，保持与 CLI 原生语义一致。
 struct ClaudeSubagentModelSection: View {
     @Bindable var viewModel: AgentSetupViewModel
+    /// 由原配置弹窗传入不可变身份；独立组件调用保留默认参数兼容。
+    var configurationSessionID: UUID? = nil
     var aliases: [CPAModelAlias] = []
     let onChange: () -> Void
 
@@ -27,7 +29,7 @@ struct ClaudeSubagentModelSection: View {
                                            set: { viewModel.updateClaudeSubagentModel($0); onChange() }),
                     availableModels: viewModel.availableModels,
                     isFetchingModels: viewModel.isFetchingModels,
-                    onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
+                    onRefresh: { Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) } },
                     slotModels: config.modelSlots, aliases: aliases, showsHeader: false, isCompact: true,
                     selectionLabelKey: "agents.claudeSubagent.title"
                 )

@@ -143,15 +143,23 @@ private struct ResetCreditsInventoryView: View {
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 6) {
-                ForEach(Array(credits.enumerated()), id: \.element.id) { index, credit in
-                    ResetCreditChip(
-                        label: compactRelativeLabel(credit.value),
-                        tooltip: creditTooltip(credit),
-                        isNext: index == 0
-                    )
+            // 库存数量由接口决定，不能把全部标签放进无边界 HStack：标签会被挤到只剩
+            // 胶囊背景，并把整个原生菜单内容撑出固定宽度。只在库存段内横向滚动，
+            // 每张券保留自然宽度、原次序及到期提示，其余分析与账号布局不变。
+            ScrollView(.horizontal) {
+                HStack(spacing: 6) {
+                    ForEach(Array(credits.enumerated()), id: \.element.id) { index, credit in
+                        ResetCreditChip(
+                            label: compactRelativeLabel(credit.value),
+                            tooltip: creditTooltip(credit),
+                            isNext: index == 0
+                        )
+                        .fixedSize()
+                    }
                 }
             }
+            .frame(height: 32)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)

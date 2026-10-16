@@ -161,6 +161,18 @@ final class AntigravityQuotaTests: XCTestCase {
         XCTAssertEqual(quota.models[0].antigravityWindow, .weekly)
     }
 
+    /// daily 可以只返回 Claude/GPT 且 HTTP 成功；生产汇总才有同账号的 Gemini 周／会话额度。
+    /// 只读线上核对后固定为脱敏样例，同时验证账号页共用投影没有丢失 Gemini。
+    func testFetcherPrefersCompleteProductionSummaryWithoutUsingModelDirectory() async throws {
+        let session = mockSession()
+        defer { session.invalidateAndCancel() }
+        let quota = try await AntigravityQuotaFetcher(session: session).fetchQuota(accessToken: "synthetic-partial-daily")
+        XCTAssertEqual(quota.models.count, 4)
+        let rows = AntigravityDisplayGroup.make(from: quota.models)
+        XCTAssertEqual(rows.filter { $0.name.hasPrefix("Gemini") }.count, 2)
+        XCTAssertEqual(rows.first { $0.name.hasPrefix("Gemini") && $0.model.antigravityWindow == .weekly }?.percentage, 41)
+    }
+
     func testFetcherDoesNotSubstituteFullModelQuotaWhenSummaryIsUnavailable() async throws {
         let session = mockSession()
         defer { session.invalidateAndCancel() }
@@ -195,9 +207,15 @@ nonisolated private final class AntigravityQuotaTestProtocol: URLProtocol, @unch
         if path.hasSuffix(":loadCodeAssist") {
             body = #"{"cloudaicompanionProject":"synthetic-project"}"#
         } else if path.hasSuffix(":retrieveUserQuotaSummary") {
-            body = request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-summary"
-                ? #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":0.76}]}]}"#
-                : #"{"groups":[]}"#
+            if request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-partial-daily" {
+                let claude = #"{"displayName":"Claude and GPT models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":1},{"bucketId":"5h","window":"5h","remainingFraction":1}]}"#
+                let gemini = #"{"displayName":"Gemini Models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":0.41},{"bucketId":"5h","window":"5h","remainingFraction":0.73}]}"#
+                body = "{\"groups\":[" + (request.url?.host == "cloudcode-pa.googleapis.com" ? gemini + "," : "") + claude + "]}"
+            } else {
+                body = request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-summary"
+                    ? #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":0.76}]}]}"#
+                    : #"{"groups":[]}"#
+            }
         } else if path.hasSuffix(":fetchAvailableModels") {
             body = #"{"models":{"gemini-3.1-pro":{"quotaInfo":{"remainingFraction":1}}}}"#
         } else {

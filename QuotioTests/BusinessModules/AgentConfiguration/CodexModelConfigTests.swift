@@ -27,21 +27,27 @@ final class CodexModelConfigTests: XCTestCase {
 
     func testFreshCodexConfigurationNeverUsesClaudeSlotDefaults() {
         let config = AgentConfiguration(agent: .codexCLI, proxyURL: "", apiKey: "")
-        XCTAssertEqual(config.modelSlots, [.sonnet: "gpt-5-codex"])
-        XCTAssertEqual(config.codexModel, "gpt-5-codex")
+        XCTAssertTrue(config.modelSlots.isEmpty)
+        XCTAssertTrue(config.codexModel.isEmpty)
         let restored = AgentConfiguration(agent: .codexCLI, proxyURL: "", apiKey: "", savedModelSlots: [:])
         XCTAssertEqual(restored.codexModel, config.codexModel)
         let claude = AgentConfiguration(agent: .claudeCode, proxyURL: "", apiKey: "")
         XCTAssertEqual(claude.modelSlots[.sonnet], AvailableModel.defaultModels[.sonnet]?.name)
     }
 
-    func testSavedCustomCodexModelAndEmptyFallback() {
-        var config = AgentConfiguration(agent: .codexCLI, proxyURL: "", apiKey: "", savedModelSlots: [.sonnet: "custom/model"])
-        XCTAssertEqual(config.codexModel, "custom/model")
-        config.codexModel = "  "
-        XCTAssertEqual(config.codexModel, AgentConfiguration.defaultCodexModel)
-        config.modelSlots.removeValue(forKey: .sonnet)
-        XCTAssertEqual(config.codexModel, AgentConfiguration.defaultCodexModel)
+    func testSavedCustomCodexModelAndEmptySelection() throws {
+        // 清理内置默认不能成为配置迁移：旧 ID 可能仍是自建代理的有效别名，
+        // 初始化与 Codable 往返必须原样保留；用户明确清空后保持待选择，不补入其他型号。
+        for savedModel in ["custom/model", "gpt-5-codex"] {
+            var config = AgentConfiguration(agent: .codexCLI, proxyURL: "", apiKey: "", savedModelSlots: [.sonnet: savedModel])
+            XCTAssertEqual(config.codexModel, savedModel)
+            let decoded = try JSONDecoder().decode(AgentConfiguration.self, from: JSONEncoder().encode(config))
+            XCTAssertEqual(decoded.codexModel, savedModel)
+            config.codexModel = "  "
+            XCTAssertTrue(config.codexModel.isEmpty)
+            config.modelSlots.removeValue(forKey: .sonnet)
+            XCTAssertTrue(config.codexModel.isEmpty)
+        }
     }
 
     func testReadsOnlyTopLevelModelAndSelectedProvider() async throws {

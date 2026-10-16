@@ -13,6 +13,9 @@ Quotio 是原生 macOS 菜单栏与窗口应用，用于管理本机 CLIProxyAPI
 | client-usage-chart-responsiveness | 客户端用量统计隔离悬停更新、限制趋势绘制点数，简化圆环及模型行图表布局 | [用量图表响应修复](features/client-usage-chart-hang-2026-09-08.md) |
 | antigravity-models-sheet | 全模型弹窗显式注入展示偏好，保持空列表和加载期间的呈现，验证不同窗口尺寸及滚动关闭 | [PR #558 适配与布局回归](features/antigravity-models-sheet-layout-2026-10-15.md) |
 | upstream-followup-audit | AppKit 重入取证、Copilot 与 CLI 兼容收尾、菜单历史来源和期限修复 | [近期同步改动专项复审](features/appkit-layout-reentry-and-followup-audit-2026-10-15.md) |
+| menubar-native-cascade | 真实三级菜单刷新与模式隔离、Codex 悬停及库存滚动、Antigravity Gemini 汇总主机修复 | [级联审计与额度修复](features/menubar-native-cascade-and-antigravity-quota-2026-10-16.md) |
+| built-in-model-candidates | 历史静态候选清理记录；默认行为已由下方动态目录方案替代 | [候选与默认值清理](features/built-in-model-candidates-2026-10-16.md) |
+| dynamic-model-defaults | 动态目录、首次配置与失败重试、旧配置合并、认证与会话隔离、并发提交 | [实施记录](features/dynamic-model-defaults-2026-10-16.md) |
 
 ## Controlled documents
 

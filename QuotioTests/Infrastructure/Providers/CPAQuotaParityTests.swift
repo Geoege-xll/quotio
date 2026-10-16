@@ -111,9 +111,35 @@ final class CPAQuotaParityTests: XCTestCase {
         let requests = await log.requests
         // 并发套餐请求没有固定完成顺序，只对顺序回退的额度请求验证主机顺序。
         let summaries = requests.filter { $0.url.hasSuffix(":retrieveUserQuotaSummary") }
-        XCTAssertEqual(summaries.count, 2)
-        XCTAssertTrue(summaries[0].url.hasPrefix("https://daily-cloudcode-pa.googleapis.com/"))
+        XCTAssertEqual(summaries.count, 3)
+        XCTAssertTrue(summaries[0].url.hasPrefix("https://cloudcode-pa.googleapis.com/"))
+        XCTAssertTrue(summaries[1].url.hasPrefix("https://daily-cloudcode-pa.googleapis.com/"))
         XCTAssertEqual(requests.filter { $0.url.hasSuffix(":loadCodeAssist") }.count, 1)
+        XCTAssertFalse(requests.contains { $0.url.contains("fetchAvailableModels") })
+    }
+
+    func testCPAAntigravityPrefersProductionSummaryWithGeminiAndClaudeForExactCredential() async throws {
+        let log = RequestLog()
+        let fetcher = CPAQuotaFetcher(call: { request in
+            await log.append(request)
+            XCTAssertEqual(request.authIndex, "gemini-account")
+            XCTAssertEqual(request.header?["Authorization"], "Bearer $TOKEN$")
+            if request.url.hasSuffix(":loadCodeAssist") {
+                return APICallResponse(statusCode: 200, header: nil, body: #"{"cloudaicompanionProject":"fixture-project"}"#)
+            }
+            XCTAssertEqual(request.url, "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
+            XCTAssertTrue(request.data?.contains("fixture-project") == true)
+            return APICallResponse(statusCode: 200, header: nil, body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.41},{"window":"5h","remainingFraction":0.73}]},{"displayName":"Claude and GPT models","buckets":[{"window":"weekly","remainingFraction":1},{"window":"5h","remainingFraction":1}]}]}"#)
+        }, download: { _ in
+            XCTFail("已有同一账号的项目元数据，不应下载或读取本地凭据")
+            throw QuotaFetchError.invalidResponse
+        })
+        let file = try JSONDecoder().decode(AuthFile.self, from: data(#"{"name":"fixture.json","provider":"antigravity","auth_index":"gemini-account","metadata":{"project_id":"fixture-project"}}"#))
+        let quota = try await fetcher.fetch(file: file)
+        XCTAssertEqual(quota.models.count, 4)
+        XCTAssertEqual(AntigravityDisplayGroup.make(from: quota.models).filter { $0.name.hasPrefix("Gemini") }.count, 2)
+        let requests = await log.requests
+        XCTAssertEqual(requests.filter { $0.url.hasSuffix(":retrieveUserQuotaSummary") }.count, 1)
         XCTAssertFalse(requests.contains { $0.url.contains("fetchAvailableModels") })
     }
 

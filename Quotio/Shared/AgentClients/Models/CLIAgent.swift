@@ -37,7 +37,8 @@ nonisolated enum CLIAgent: String, CaseIterable, Identifiable, Codable, Sendable
         switch self {
         case .pi: return "Pi coding agent with the official CLIProxyAPI provider"
         case .claudeCode: return "Anthropic's official CLI for Claude models"
-        case .codexCLI: return "OpenAI's Codex CLI for GPT-5 models"
+        // 客户端能力不绑定某一代 GPT，避免模型升级后简介仍暗示只能使用旧代模型。
+        case .codexCLI: return "OpenAI's official coding agent"
         case .ampCLI: return "Sourcegraph's Amp coding assistant"
         case .openCode: return "The open source AI coding agent"
         case .factoryDroid: return "Factory's AI coding agent"

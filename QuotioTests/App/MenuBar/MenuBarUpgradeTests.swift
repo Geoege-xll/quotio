@@ -8,6 +8,13 @@ import Vision
 /// 不读取用户凭据、不启停代理、不注册全局动作宿主；刷新测试只预约原内存槽位。
 @MainActor
 final class MenuBarUpgradeTests: XCTestCase {
+    @Observable final class TrendFixture {
+        var points = [
+            QuotaAnalyticsPoint(date: "2026-10-13", value: 777, label: "", valueLabel: "777 tokens"),
+            QuotaAnalyticsPoint(date: "2026-10-14", value: 1313, label: "", valueLabel: "1313 tokens")
+        ]
+    }
+
     private struct Fixture {
         let model: QuotaViewModel
         let settings: MenuBarSettingsManager
@@ -51,6 +58,187 @@ final class MenuBarUpgradeTests: XCTestCase {
 
     private func card(_ f: Fixture, provider: AIProvider = .claude) throws -> NSMenuItem {
         try XCTUnwrap(f.menu.items.first { $0.title == provider.displayName && $0.submenu != nil })
+    }
+
+    private func scrollViews(in view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
+    }
+
+    /// 同批次前面的普通窗口用例可能尚在完成激活／关闭通知。
+    /// 先让测试应用完成激活再启动同步菜单跟踪，避免迟到的窗口事件把菜单提前关闭。
+    private func prepareNativeTracking() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    }
+
+    func testNativeCascadeRefreshAndModeSwitchKeepExactAccountAndWindows() throws {
+        let f = try fixture(providers: [.codex])
+        prepareNativeTracking()
+        var account: NSMenuItem?, detail: NSMenu?, analyticsMenu: NSMenu?
+        var cardHost: NSView?, detailHost: NSView?, analyticsHost: NSView?
+        var completed = false
+        var timers: [Timer] = []
+        defer { timers.forEach { $0.invalidate() }; f.menu.cancelTracking() }
+        func schedule(_ delay: TimeInterval, _ action: @escaping @MainActor @Sendable () -> Void) {
+            let timer = Timer(timeInterval: delay, repeats: false) { _ in MainActor.assumeIsolated { action() } }
+            RunLoop.main.add(timer, forMode: .common)
+            timers.append(timer)
+        }
+        schedule(0.15) {
+            guard let item = try? self.card(f, provider: .codex), let submenu = item.submenu else {
+                XCTFail("缺少 Codex 账号菜单"); return
+            }
+            account = item; detail = submenu; cardHost = item.view; detailHost = submenu.items.first?.view
+            analyticsMenu = submenu.items.first { $0.submenu != nil }?.submenu
+            analyticsHost = analyticsMenu?.items.first?.view
+        }
+        schedule(0.35) {
+            // 在已跟踪的根菜单中执行 AppKit 的真实辅助功能动作，不直接调用子菜单 popUp。
+            // 此入口不依赖测试宿主抢到键盘焦点，也不会向用户正在使用的应用发送全局事件。
+            // 当前 AppKit 对带 submenu 的项可能返回 false 却已展开；以下一拍实际窗口为准。
+            _ = account?.accessibilityPerformPress()
+        }
+        schedule(0.65) {
+            XCTAssertTrue(detailHost?.window?.isVisible == true, "原生动作应实际展开账号额度明细")
+            XCTAssertTrue(detail?.supermenu === f.menu)
+            _ = detail?.items.first { $0.submenu != nil }?.accessibilityPerformPress()
+        }
+        schedule(1.15) {
+            XCTAssertTrue(analyticsHost?.window?.isVisible == true, "必须实际展开第三级 Codex 分析窗口")
+            XCTAssertNotEqual(detailHost?.window?.windowNumber, analyticsHost?.window?.windowNumber)
+            XCTAssertTrue(analyticsMenu?.supermenu === detail)
+            let rows = [QuotaAnalyticsRow(id: "fixture-analysis", title: "Fixture analysis", value: "321"),
+                QuotaAnalyticsRow(id: "codex-rate-limit-resets", title: "Resets", value: "20 available")]
+                + (1...20).map { QuotaAnalyticsRow(id: "codex-rate-limit-reset-\($0)", title: "2030-01-\($0)", value: "in \($0) days") }
+            f.model.providerQuotas[.codex]?["fixture"] = self.quota(73, count: 8, analytics: QuotaAnalytics(rows: rows))
+            f.manager.rebuildMenuInPlace()
+        }
+        schedule(1.55) {
+            guard let host = analyticsHost, let quotaHost = detailHost else { XCTFail("缺少级联承载视图"); return }
+            XCTAssertTrue(host.window?.isVisible == true && quotaHost.window?.isVisible == true)
+            XCTAssertTrue(self.text(host).contains("321"), "晚到分析应在已展开的第三级菜单绘制")
+            XCTAssertTrue(self.text(quotaHost).contains("73%"))
+            XCTAssertGreaterThan(quotaHost.frame.height, 280, "额度桶增加后原生明细必须原位增高")
+            XCTAssertGreaterThanOrEqual(quotaHost.visibleRect.height, quotaHost.bounds.height - 1,
+                "真实菜单窗口必须显示增高后的完整额度项，不能只改变承载视图而被旧窗口裁剪")
+            XCTAssertGreaterThanOrEqual(host.visibleRect.width, host.bounds.width - 1)
+            XCTAssertLessThanOrEqual(host.window?.frame.height ?? .infinity,
+                host.window?.screen?.visibleFrame.height ?? 0)
+            XCTAssertTrue(account?.view === cardHost && account?.submenu === detail)
+            XCTAssertTrue(analyticsMenu?.items.first?.view === host)
+            for (name, view) in [("Native-root", cardHost), ("Native-quota-details", detailHost), ("Native-Codex-analysis", analyticsHost)] {
+                if let view, let data = try? self.capture(view) {
+                    let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+                    attachment.name = name; attachment.lifetime = .keepAlways; self.add(attachment)
+                }
+            }
+            // 库存很多时，真实第三级菜单必须仍限制为原有宽度，并能滚动到最后一张券。
+            XCTAssertEqual(host.frame.width, 640, accuracy: 1)
+            guard let scroll = self.scrollViews(in: host).first(where: {
+                ($0.documentView?.bounds.width ?? 0) > $0.contentSize.width + 10
+            }), let document = scroll.documentView else { XCTFail("库存标签应提供局部横向滚动"); return }
+            // 从库存起点滚到末尾；首部小号 d/数字存在 OCR 混淆，保留实际截图目视核对，
+            // 可达性用真实文档宽度、起点和下方末张券实际读数共同验证。
+            XCTAssertEqual(scroll.contentView.bounds.minX, 0, accuracy: 1)
+            scroll.contentView.scroll(to: NSPoint(x: document.bounds.maxX - scroll.contentSize.width,
+                y: scroll.contentView.bounds.minY))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        schedule(1.75) {
+            if let host = analyticsHost {
+                XCTAssertTrue(self.text(host).contains("20d"), "真实级联中最后一张券必须可达")
+                if let data = try? self.capture(host) {
+                    let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+                    attachment.name = "Native-Codex-inventory-tail"; attachment.lifetime = .keepAlways; self.add(attachment)
+                }
+            }
+            f.model.modeManager.setMode(.localProxy)
+            f.model.providerQuotas[.codex]?["fixture"] = self.quota(91, analytics: QuotaAnalytics(rows: [
+                QuotaAnalyticsRow(id: "fixture-analysis", title: "Fixture analysis", value: "742")]))
+        }
+        schedule(1.95) {
+            guard let host = analyticsHost, let quotaHost = detailHost, let rootHost = cardHost else { return }
+            XCTAssertTrue(host.window?.isVisible == true && quotaHost.window?.isVisible == true,
+                "模式切换只更新内容，不能关闭或替换正在跟踪的级联窗口")
+            XCTAssertFalse(self.text(host).contains("321") || self.text(host).contains("742"))
+            XCTAssertFalse(self.text(quotaHost).contains("73%") || self.text(quotaHost).contains("91%"))
+            XCTAssertFalse(self.text(rootHost).contains("91%"))
+            f.model.modeManager.setMode(.monitor)
+        }
+        schedule(2.25) {
+            if let host = analyticsHost { XCTAssertFalse(self.text(host).contains("742"), "返回原模式也不能复活旧菜单") }
+            XCTAssertTrue(account?.submenu === detail && analyticsMenu?.items.first?.view === analyticsHost)
+            completed = true
+            f.menu.cancelTracking()
+        }
+        let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        f.menu.popUp(positioning: nil, at: NSPoint(x: frame.minX + 30, y: frame.maxY - 60), in: nil)
+        XCTAssertTrue(completed, "必须完成真实三级菜单跟踪，不能提前关闭后跳过验证")
+    }
+
+    /// 鼠标只进入测试菜单一次；随后原位替换分析数据，不再发送 hover 事件。
+    /// 验证提示来自当前格子，避免用手工改 State 或重建图表掩盖真实的悬停缓存问题。
+    func testNativeHeatmapHoverReadsRefreshedDataWithoutMouseMovement() throws {
+        let state = TrendFixture()
+        // 根闭包的 Observable 读取必须发生在 body，复用实际 SwiftUI 的刷新订阅。
+        struct LiveTrend: View {
+            let state: TrendFixture
+            var body: some View { UsageTrendHeatmap(points: state.points, mode: .daily).frame(width: 640) }
+        }
+        let liveHost = makeMenuItemHostingView(rootView: LiveTrend(state: state), resizesToFitContent: true)
+        liveHost.setFrameSize(liveHost.intrinsicContentSize)
+        let item = NSMenuItem()
+        item.view = liveHost
+        let menu = NSMenu(); menu.autoenablesItems = false; menu.addItem(item)
+        prepareNativeTracking()
+        let pointer = CGEvent(source: nil)?.location
+        var timers: [Timer] = [], completed = false
+        defer {
+            timers.forEach { $0.invalidate() }; menu.cancelTracking()
+            if let pointer { CGWarpMouseCursorPosition(pointer) }
+        }
+        func schedule(_ delay: TimeInterval, _ action: @escaping @MainActor @Sendable () -> Void) {
+            let timer = Timer(timeInterval: delay, repeats: false) { _ in MainActor.assumeIsolated { action() } }
+            RunLoop.main.add(timer, forMode: .common); timers.append(timer)
+        }
+        schedule(0.25) {
+            guard let window = liveHost.window else { XCTFail("必须在真实菜单窗口内测试悬停"); return }
+            // 54 周布局末列的周三格子，坐标由现有 9pt 格子、2.4pt 间距和标题行组成。
+            let local = NSPoint(x: 53 * 11.4 + 4.5,
+                y: liveHost.isFlipped ? 58.7 : liveHost.bounds.height - 58.7)
+            let location = liveHost.convert(local, to: nil)
+            let screen = window.convertPoint(toScreen: location)
+            let global = CGPoint(x: screen.x, y: (NSScreen.screens.first?.frame.maxY ?? 900) - screen.y)
+            XCTAssertEqual(CGWarpMouseCursorPosition(global), .success)
+            window.acceptsMouseMovedEvents = true
+            if let event = NSEvent.mouseEvent(with: .mouseMoved, location: location, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 0, pressure: 0) { window.sendEvent(event) }
+        }
+        schedule(0.65) {
+            XCTAssertTrue(self.text(liveHost).contains("1313"), "必须先真实悬停读到旧值")
+            if let data = try? self.capture(liveHost) {
+                let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+                attachment.name = "Native-hover-before"; attachment.lifetime = .keepAlways; self.add(attachment)
+            }
+            state.points[1].value = 4242; state.points[1].valueLabel = "4242 tokens"
+        }
+        schedule(0.95) {
+            XCTAssertTrue(self.text(liveHost).contains("4242"), "鼠标不动也应读取本轮值")
+            XCTAssertFalse(self.text(liveHost).contains("1313"))
+            if let data = try? self.capture(liveHost) {
+                let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+                attachment.name = "Native-hover-after"; attachment.lifetime = .keepAlways; self.add(attachment)
+            }
+            state.points.removeLast()
+        }
+        schedule(1.25) {
+            XCTAssertFalse(self.text(liveHost).contains("4242"), "被悬停日期删除后旧提示消失")
+            completed = true; menu.cancelTracking()
+        }
+        let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        menu.popUp(positioning: nil, at: NSPoint(x: frame.minX + 30, y: frame.maxY - 60), in: nil)
+        XCTAssertTrue(completed)
     }
 
     func testTrackedAccountAndHistoryKeepOriginalModeGeneration() async throws {
@@ -179,6 +367,7 @@ final class MenuBarUpgradeTests: XCTestCase {
     /// 固定 lastUpdated，图像和实际读数变化必须来自额度及加载状态，不能由更新时间掩盖冻结内容。
     func testTrackedMenuUpdatesQuotaWithoutReplacingItemsOrSubmenus() throws {
         let f = try fixture()
+        prepareNativeTracking()
         // popUp 会调用真实 menuWillOpen，因此在跟踪开始后记录身份，避免把上一次打开的对象当作本轮。
         var trackedItem: NSMenuItem?, trackedHost: NSView?, trackedDetail: NSMenu?
         var ids: [ObjectIdentifier] = []
@@ -222,10 +411,9 @@ final class MenuBarUpgradeTests: XCTestCase {
             completed = true
             f.menu.cancelTracking()
         }
-        NSApplication.shared.activate(ignoringOtherApps: true)
         let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 800, height: 600)
         f.menu.popUp(positioning: nil, at: NSPoint(x: frame.midX, y: frame.midY), in: nil)
-        if !completed { throw XCTSkip("桌面未保持原生菜单跟踪，需单独验证本用例") }
+        XCTAssertTrue(completed, "原生菜单必须执行到本轮刷新完成，不能以跳过代替交互回归")
         f.manager.menuWillOpen(f.menu)
         XCTAssertEqual(f.menu.items.filter { $0.submenu != nil }.count, 2)
     }
@@ -247,6 +435,39 @@ final class MenuBarUpgradeTests: XCTestCase {
         XCTAssertNotNil(codex.submenu?.items.first(where: { $0.submenu != nil })?.submenu?.items.first?.view)
     }
 
+    /// 正式汇总的四个桶从同一份快照进入两处现有布局；不修改账号页面的卡片结构。
+    func testAntigravityProductionSummaryRendersGeminiInAccountAndMenu() async throws {
+        let f = try fixture(providers: [.antigravity])
+        let body = Data(#"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":0.41},{"bucketId":"5h","window":"5h","remainingFraction":0.73}]},{"displayName":"Claude and GPT models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":1},{"bucketId":"5h","window":"5h","remainingFraction":1}]}]}"#.utf8)
+        let models = try XCTUnwrap(AntigravityQuotaParser.summaryModels(from: body))
+        let quota = ProviderQuotaData(models: models)
+        f.model.providerQuotas[.antigravity] = ["fixture": quota]
+        let accountView = AccountQuotaContent(settings: f.settings, provider: .antigravity,
+            account: AccountQuotaPresentation(key: "fixture", email: email, status: "ready", statusColor: .green,
+                authFile: nil, quotaData: quota, subscriptionInfo: nil), isLoading: false, displayStyle: .card)
+            .environment(f.model).frame(width: 560)
+        let host = NSHostingView(rootView: accountView)
+        host.setFrameSize(host.intrinsicContentSize)
+        let panel = window(host)
+        defer { panel.close() }
+        f.manager.menuWillOpen(f.menu)
+        let menuHost = try XCTUnwrap(try card(f, provider: .antigravity).view)
+        let menuPanel = window(menuHost)
+        defer { menuPanel.close() }
+        try await Task.sleep(for: .milliseconds(120))
+        for (label, view) in [("账号页", host as NSView), ("菜单栏", menuHost)] {
+            let value = text(view)
+            XCTAssertTrue(value.contains("Gemini"), "\(label)应显示正式响应中的 Gemini 额度")
+            // 账号原布局读取既有共享口径；菜单使用隔离偏好。不修改用户显示偏好来凑断言。
+            let expected = label == "账号页" ? MenuBarSettingsManager.shared.quotaDisplayMode.displayValue(from: 41) : 41
+            XCTAssertTrue(value.contains(String(format: "%.0f", expected)), "\(label)应按原显示口径呈现同一 Gemini 桶")
+            let attachment = XCTAttachment(data: try capture(view), uniformTypeIdentifier: "public.png")
+            attachment.name = "Antigravity-" + label
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     /// 额度桶变多时原子菜单项内滚动；账号删除后原视图清空旧数值，下一次打开才删除原生项。
     func testDetailsResizeScrollAndRejectRemovedAccountSnapshot() async throws {
         let f = try fixture()
@@ -262,10 +483,7 @@ final class MenuBarUpgradeTests: XCTestCase {
         XCTAssertTrue(row.view === host)
         XCTAssertGreaterThan(host.frame.height, beforeHeight + 50)
         XCTAssertLessThan(host.frame.height, 500, "30 桶明细不能超出普通屏幕可用高度")
-        func scrolls(_ view: NSView) -> [NSScrollView] {
-            ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrolls)
-        }
-        let scroll = try XCTUnwrap(scrolls(host).first)
+        let scroll = try XCTUnwrap(scrollViews(in: host).first)
         XCTAssertGreaterThan(scroll.documentView?.frame.height ?? 0, scroll.contentSize.height)
         scroll.documentView?.scroll(NSPoint(x: 0, y: 600))
         scroll.reflectScrolledClipView(scroll.contentView)

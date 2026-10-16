@@ -341,30 +341,14 @@ struct CustomProviderSheet: View {
     
     // MARK: - Model Mapping Section
     
-    private var filteredModels: [AvailableModel] {
-        if modelSearchText.isEmpty {
-            return availableModels
-        }
-        return availableModels.filter { 
-            $0.name.localizedCaseInsensitiveContains(modelSearchText) ||
-            $0.id.localizedCaseInsensitiveContains(modelSearchText)
+    /// 只搜索当前接口实际返回的目录，不再维护“热门型号”白名单或注入静态候选。
+    /// 保留服务返回的自定义／历史别名及所有条目；搜索覆盖完整目录，不会因热门区而隐藏剩余模型。
+    nonisolated static func matchingModels(from models: [AvailableModel], search: String) -> [AvailableModel] {
+        models.filter {
+            search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.id.localizedCaseInsensitiveContains(search)
         }
     }
-    
-    private var topModels: [AvailableModel] {
-        // Return top 5 most popular models
-        let popularModelIds = [
-            "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "claude-3-opus", "claude-3-sonnet",
-            "claude-3-haiku", "claude-3-5-sonnet", "gemini-pro", "gemini-1.5-pro", "llama-3"
-        ]
-        return availableModels.filter { model in
-            popularModelIds.contains { popularId in
-                model.name.lowercased().contains(popularId.lowercased()) || 
-                model.id.lowercased().contains(popularId.lowercased())
-            }
-        }
-    }
-    
+
     private var modelMappingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -446,25 +430,13 @@ struct CustomProviderSheet: View {
     }
 
     private var modelSelectionList: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let models = Self.matchingModels(from: availableModels, search: modelSearchText)
+        return VStack(alignment: .leading, spacing: 8) {
             // Search box
             QuotioCapsuleTextField("customProviders.searchModels".localized(), text: $modelSearchText, systemImage: "magnifyingglass")
             
-            // Top 5 popular models
-            if modelSearchText.isEmpty && !topModels.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("customProviders.popularModels".localized())
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    
-                    ForEach(topModels.prefix(5)) { model in
-                        modelSelectionRow(model: model)
-                    }
-                }
-            }
-            
             // All models (searchable)
-            if !modelSearchText.isEmpty || topModels.isEmpty {
+            if !models.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     if modelSearchText.isEmpty {
                         Text("customProviders.allModels".localized())
@@ -474,7 +446,7 @@ struct CustomProviderSheet: View {
                     
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 2) {
-                            ForEach(filteredModels) { model in
+                            ForEach(models) { model in
                                 modelSelectionRow(model: model)
                             }
                         }

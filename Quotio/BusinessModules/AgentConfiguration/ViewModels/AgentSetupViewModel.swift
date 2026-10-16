@@ -11,7 +11,7 @@ import os.log
 @MainActor
 @Observable
 final class AgentSetupViewModel {
-    private let detectionService = AgentDetectionService()
+    private let detectionService: AgentDetectionService
     private let configurationService: AgentConfigurationService
     /// 只读终端依赖默认仍使用原启动器；离线回归可模拟拉起失败，不新增操作状态或 Task 宿主。
     private let launchCommand: @MainActor (String) async throws -> Void
@@ -32,6 +32,21 @@ final class AgentSetupViewModel {
 
     var availableModels: [AvailableModel] = []
     var isFetchingModels = false
+    /// 仅描述本次目录读取结果，不与保存错误共用弹窗，也不把旧候选伪装成当前可用目录。
+    private(set) var modelLoadMessage: String?
+    /// 原 ViewModel 持有请求世代；不创建第二个任务宿主。关闭、重开和并行刷新都会使旧结果失效。
+    private var modelLoadGeneration = UUID()
+    private let fetchModels: @Sendable (String, String) async throws -> [AvailableModel]
+    /// 弹窗身份与单次目录请求分别计数：同一客户端关闭重开也必须是不同会话。
+    /// 身份、操作令牌仍归原 ViewModel；页面仅捕获不可变 UUID，不持有第二份业务状态或 Task。
+    private(set) var configurationSessionID = UUID()
+    private var configurationReadGeneration = UUID()
+    private var configurationOperationID = UUID()
+    private var connectionRequestID = UUID()
+    private let configurationEndpoint: (@MainActor () -> String?)?
+    private let readConfiguration: @Sendable (CLIAgent) async -> AgentConfigurationService.SavedAgentConfig?
+    private let probeConnection: @Sendable (String, String) async -> ConnectionTestResult
+    private let generateConfiguration: @Sendable (CLIAgent, AgentConfiguration, ConfigurationMode, ConfigStorageOption, [AvailableModel]) async throws -> AgentConfigResult
 
     var currentConfiguration: AgentConfiguration?
     var detectedShell: ShellType = .zsh
@@ -65,8 +80,28 @@ final class AgentSetupViewModel {
 
     /// 可注入临时目录中的配置服务，用于验证备份操作不会影响未保存的表单状态。
     init(configurationService: AgentConfigurationService = AgentConfigurationService(),
+         fetchModels: @escaping @Sendable (String, String) async throws -> [AvailableModel] = { url, key in
+             try await AgentModelCatalogService.fetchAvailableModels(proxyURL: url, apiKey: key)
+         },
+         configurationEndpoint: (@MainActor () -> String?)? = nil,
+         readConfiguration: (@Sendable (CLIAgent) async -> AgentConfigurationService.SavedAgentConfig?)? = nil,
+         probeConnection: @escaping @Sendable (String, String) async -> ConnectionTestResult = { url, key in
+             await AgentModelCatalogService.testConnection(proxyURL: url, apiKey: key)
+         },
+         generateConfiguration: (@Sendable (CLIAgent, AgentConfiguration, ConfigurationMode, ConfigStorageOption, [AvailableModel]) async throws -> AgentConfigResult)? = nil,
          launchCommand: @escaping @MainActor (String) async throws -> Void = { try await TerminalLauncher.shared.launch(command: $0) }) {
+        let detector = AgentDetectionService()
+        self.detectionService = detector
         self.configurationService = configurationService
+        self.fetchModels = fetchModels
+        self.configurationEndpoint = configurationEndpoint
+        // 只读／执行依赖默认仍复用原 actor 与检测器；注入仅用于显式挂起迟到响应的离线验证。
+        self.readConfiguration = readConfiguration ?? { await configurationService.readConfiguration(agent: $0) }
+        self.probeConnection = probeConnection
+        self.generateConfiguration = generateConfiguration ?? { agent, config, mode, storage, models in
+            try await configurationService.generateConfiguration(agent: agent, config: config, mode: mode,
+                storageOption: storage, detectionService: detector, availableModels: models)
+        }
         self.launchCommand = launchCommand
     }
 
@@ -87,7 +122,21 @@ final class AgentSetupViewModel {
         agentStatuses.first { $0.agent == agent }
     }
 
-    func startConfiguration(for agent: CLIAgent, apiKey: String) {
+    @discardableResult
+    func startConfiguration(for agent: CLIAgent, apiKey: String) -> UUID {
+        configurationSessionID = UUID()
+        let sessionID = configurationSessionID
+        configurationReadGeneration = UUID()
+        let readID = configurationReadGeneration
+        configurationLoadTask?.cancel()
+        isDeletingBackups = false
+        errorMessage = nil
+        isLoadingConfiguration = false
+        selectedAgent = nil
+        currentConfiguration = nil
+        availableModels = []
+        modelLoadMessage = nil
+        isFetchingModels = false
         configResult = nil
         testResult = nil
         selectedRawConfigIndex = 0
@@ -99,21 +148,22 @@ final class AgentSetupViewModel {
         availableBackups = []
         selectedSetupMode = .proxy  // Reset to default
 
-        guard let proxyManager = proxyManager else {
+        // 正常入口仍读取原代理与隧道；离线回归只注入地址，不创建真实 CPA manager 或访问钥匙串。
+        let endpoint = configurationEndpoint?() ?? proxyManager.map { manager in
+            TunnelManager.shared.tunnelState.publicURL ?? manager.baseURL
+        }
+        guard let endpoint else {
             errorMessage = "Proxy manager not available"
-            return
+            return sessionID
         }
 
         selectedAgent = agent
+        // 新页面不能复用上一提供商／密钥的目录；已保存模型稍后按原回填顺序恢复。
+        modelLoadGeneration = UUID()
+        availableModels = []
+        modelLoadMessage = nil
+        isFetchingModels = false
         isLoadingConfiguration = true
-
-        // Use tunnel URL if active, otherwise use local proxy endpoint
-        let endpoint: String
-        if let tunnelURL = TunnelManager.shared.tunnelState.publicURL {
-            endpoint = tunnelURL
-        } else {
-            endpoint = proxyManager.baseURL
-        }
 
         // Create configuration with defaults first
         currentConfiguration = AgentConfiguration(
@@ -123,29 +173,38 @@ final class AgentSetupViewModel {
             setupMode: selectedSetupMode
         )
 
-        // Cancel any previous configuration load task to prevent race conditions
-        configurationLoadTask?.cancel()
-        
-        // Then load existing config, apply saved values, and load models - all in sequence
+        // 仍由原唯一回填 Task 顺序读取磁盘和模型目录；会话切换时已同步取消旧 Task。
         configurationLoadTask = Task { [weak self] in
             guard let self else { return }
             
-            await self.loadExistingConfiguration(for: agent)
+            await self.loadExistingConfiguration(for: agent, sessionID: sessionID, readID: readID)
             
             // Guard that selectedAgent still matches after async work
-            guard !Task.isCancelled, self.selectedAgent == agent else { return }
+            guard !Task.isCancelled, self.isCurrentConfigurationSession(sessionID), self.selectedAgent == agent,
+                  self.configurationReadGeneration == readID else { return }
             self.isLoadingConfiguration = false
-            await self.loadModels()
+            await self.loadModels(sessionID: sessionID)
         }
+        return sessionID
+    }
+
+    /// 可选身份只为既有程序调用兼容；生产页面始终传入展示时捕获的 UUID。
+    /// 必须在任何补 key、清目录、加锁和写错误之前校验，不能等请求返回才判断。
+    func isCurrentConfigurationSession(_ sessionID: UUID?) -> Bool {
+        sessionID == nil || configurationSessionID == sessionID
     }
     
     /// Load existing configuration from agent's config files and apply to current configuration
-    private func loadExistingConfiguration(for agent: CLIAgent) async {
-        // Read saved configuration
-        let loadedConfig = await configurationService.readConfiguration(agent: agent)
+    private func loadExistingConfiguration(for agent: CLIAgent, sessionID: UUID, readID: UUID) async {
+        func isCurrentRead() -> Bool {
+            !Task.isCancelled && isCurrentConfigurationSession(sessionID) && selectedAgent == agent && configurationReadGeneration == readID
+        }
+        guard isCurrentRead() else { return }
+        let loadedConfig = await readConfiguration(agent)
+        guard isCurrentRead() else { return }
         let loadedBackups = await configurationService.listBackups(agent: agent)
-        // 每次挂起后确认仍在配置原代理，避免关闭或切换页面后的结果污染新表单。
-        guard !Task.isCancelled, selectedAgent == agent else { return }
+        // 相同客户端也可能已经重开；恢复备份不属于初次回填 Task，不能只依赖任务取消或客户端名称。
+        guard isCurrentRead() else { return }
         savedConfig = loadedConfig
         availableBackups = loadedBackups
         
@@ -189,16 +248,21 @@ final class AgentSetupViewModel {
     }
 
     /// Restore configuration from a backup file
-    func restoreFromBackup(_ backup: AgentConfigurationService.BackupFile) async {
+    func restoreFromBackup(_ backup: AgentConfigurationService.BackupFile, sessionID expectedSessionID: UUID? = nil) async {
+        guard !Task.isCancelled, isCurrentConfigurationSession(expectedSessionID), selectedAgent == backup.agent else { return }
+        let sessionID = configurationSessionID
+        let agent = backup.agent
+        let readID = UUID()
+        configurationReadGeneration = readID
         do {
+            // 已确认的文件恢复仍交给原 actor；恢复完成后只能回填发起它的页面，不选取此时的新客户端。
             try await configurationService.restoreFromBackup(backup)
-            
-            // Reload configuration after restore
-            if let agent = selectedAgent {
-                await loadExistingConfiguration(for: agent)
-                await refreshAgentStatuses()
-            }
+            guard !Task.isCancelled, isCurrentConfigurationSession(sessionID), configurationReadGeneration == readID else { return }
+            await loadExistingConfiguration(for: agent, sessionID: sessionID, readID: readID)
+            guard !Task.isCancelled, isCurrentConfigurationSession(sessionID), configurationReadGeneration == readID else { return }
+            await refreshAgentStatuses()
         } catch {
+            guard !Task.isCancelled, isCurrentConfigurationSession(sessionID), configurationReadGeneration == readID else { return }
             errorMessage = "Failed to restore backup: \(error.localizedDescription)"
         }
     }
@@ -326,6 +390,28 @@ final class AgentSetupViewModel {
         currentConfiguration?.claudeSubagentModel = model
     }
 
+    /// Codex 需要具体模型；目录为空不再补固定型号。已保存或手填的别名无需出现在目录中，
+    /// 保留离线编辑和代理自定义路由。原 Claude 菜单／版本校验继续由原属性负责。
+    var configurationValidationMessage: String? {
+        // 去除管理密钥兜底后，客户端 key 未就绪的草稿不可覆盖磁盘上已有的有效认证。
+        // 非代理默认模式只负责恢复客户端自己的设置，不要求代理密钥。
+        if selectedSetupMode == .proxy, let config = currentConfiguration,
+           config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "agents.models.clientKeyRequired".localized()
+        }
+        // 目录型客户端首次配置依赖真实目录；加载未结束前不能用空集合提交并跳到失败结果页。
+        // Claude 原生角色和 Codex 的明确模型不受此等待影响，目录 Task 与加载状态仍由本 ViewModel 持有。
+        if selectedSetupMode == .proxy, selectedAgent == .openCode || selectedAgent == .factoryDroid,
+           isFetchingModels {
+            return "agents.models.loading".localized()
+        }
+        if selectedSetupMode == .proxy, selectedAgent == .codexCLI,
+           let config = currentConfiguration, config.codexModel.isEmpty {
+            return "agents.models.selectRequired".localized()
+        }
+        return claudeConfigurationValidationMessage
+    }
+
     /// 验证在提交之前完成，避免写了 Shell 后才发现菜单必须存入 JSON。
     /// 旧版 CLI 仍可使用原生模式；不支持的菜单字段不会被当作已生效功能展示。
     var claudeConfigurationValidationMessage: String? {
@@ -370,21 +456,24 @@ final class AgentSetupViewModel {
 
     /// 批量移到废纸篓；中途失败也重新读取列表，准确反映已完成的删除。
     /// 这里不能调用配置回填，否则会覆盖用户尚未保存的模型与名称编辑。
-    func deleteBackups(_ backups: [AgentConfigurationService.BackupFile]) async {
-        guard let agent = selectedAgent, !isDeletingBackups,
+    func deleteBackups(_ backups: [AgentConfigurationService.BackupFile], sessionID expectedSessionID: UUID? = nil) async {
+        guard !Task.isCancelled, isCurrentConfigurationSession(expectedSessionID), let agent = selectedAgent, !isDeletingBackups,
               backups.allSatisfy({ $0.agent == agent }) else { return }
+        let sessionID = configurationSessionID
         isDeletingBackups = true
         errorMessage = nil
-        defer { isDeletingBackups = false }
+        defer { if isCurrentConfigurationSession(sessionID) { isDeletingBackups = false } }
         do {
             for backup in backups {
                 try await configurationService.deleteBackup(backup)
             }
         } catch {
+            guard !Task.isCancelled, isCurrentConfigurationSession(sessionID) else { return }
             errorMessage = String(format: "agents.backups.deleteFailed".localized(), error.localizedDescription)
         }
+        guard !Task.isCancelled, isCurrentConfigurationSession(sessionID) else { return }
         let remaining = await configurationService.listBackups(agent: agent)
-        guard selectedAgent == agent else { return }
+        guard !Task.isCancelled, isCurrentConfigurationSession(sessionID), selectedAgent == agent else { return }
         availableBackups = remaining
     }
 
@@ -404,8 +493,9 @@ final class AgentSetupViewModel {
         currentConfiguration?.codexReasoningEffort = effort
     }
 
-    func applyConfiguration() async {
-        if let validation = claudeConfigurationValidationMessage {
+    func applyConfiguration(sessionID expectedSessionID: UUID? = nil) async {
+        guard !Task.isCancelled, isCurrentConfigurationSession(expectedSessionID), !isConfiguring else { return }
+        if let validation = configurationValidationMessage {
             errorMessage = validation
             return
         }
@@ -423,48 +513,54 @@ final class AgentSetupViewModel {
             }
         }
 
+        let sessionID = configurationSessionID
+        let operationID = UUID()
+        configurationOperationID = operationID
+        // 保存副作用使用点击时的同一组输入，不能在网络／安装返回后重新读取另一页面的模式或 Shell。
+        let mode = configurationMode
+        let storage = configStorageOption
+        let shell = detectedShell
+        let models = availableModels
+        func ownsOperation() -> Bool {
+            isCurrentConfigurationSession(sessionID) && configurationOperationID == operationID
+        }
         isConfiguring = true
-        defer { isConfiguring = false }
+        defer { if ownsOperation() { isConfiguring = false } }
 
         do {
-            let result = try await configurationService.generateConfiguration(
-                agent: agent,
-                config: config,
-                mode: configurationMode,
-                storageOption: agent == .claudeCode ? configStorageOption : .jsonOnly,
-                detectionService: detectionService,
-                availableModels: availableModels
-            )
-
-            if configurationMode == .automatic && result.success {
+            let result = try await generateConfiguration(agent, config, mode,
+                agent == .claudeCode ? storage : .jsonOnly, models)
+            // 已授权的保存事务保持原文件→Shell→检测顺序；旧页面消失不把它改造成半途写入。
+            // 页面结果与互斥的提交则必须再次核对会话，不能把旧事务结果显示在新表单。
+            if mode == .automatic && result.success {
                 let shouldUpdateShell = agent.configType == .both
-                    ? (configStorageOption == .shellOnly || configStorageOption == .both)
+                    ? (storage == .shellOnly || storage == .both)
                     : agent.configType != .file
-
                 if let shellConfig = result.shellConfig, shouldUpdateShell {
-                    try await shellManager.addToProfile(
-                        shell: detectedShell,
-                        configuration: shellConfig,
-                        agent: agent
-                    )
+                    try await shellManager.addToProfile(shell: shell, configuration: shellConfig, agent: agent)
                 }
-
                 await detectionService.markAsConfigured(agent)
                 await refreshAgentStatuses()
             }
-
+            guard !Task.isCancelled, ownsOperation() else { return }
             configResult = result
-
-            if !result.success {
-                errorMessage = result.error
-            }
+            if !result.success { errorMessage = result.error }
         } catch {
+            guard !Task.isCancelled, ownsOperation() else { return }
             errorMessage = error.localizedDescription
             configResult = .failure(error: error.localizedDescription)
         }
     }
 
 
+
+    /// 失败后返回同一份草稿，保留模型选择、目录说明和高级选项；不重新回填磁盘或新建任务。
+    /// 用户可继续刷新目录或修改输入，避免只能关闭弹窗后丢失本轮编辑。
+    func retryConfiguration(sessionID: UUID? = nil) {
+        guard isCurrentConfigurationSession(sessionID) else { return }
+        configResult = nil
+        errorMessage = nil
+    }
 
     func copyRawConfigToClipboard(index: Int) {
         guard let result = configResult,
@@ -492,38 +588,54 @@ final class AgentSetupViewModel {
     }
 
     // 模型读取与连接探测走共享只读业务；本类原表单、回填 Task、加载互斥和失败兜底仍在原入口维护。
-    func testConnection() async {
-        guard selectedAgent != nil,
+    func testConnection(sessionID expectedSessionID: UUID? = nil) async {
+        guard !Task.isCancelled, isCurrentConfigurationSession(expectedSessionID), selectedAgent != nil,
               let config = currentConfiguration else { return }
-
+        let sessionID = configurationSessionID
+        let requestedAgent = selectedAgent
+        let requestID = UUID()
+        connectionRequestID = requestID
+        // 连接探测沿用原状态宿主，连续测试采用最后一次请求；旧 defer 不能释放新请求。
+        defer {
+            if isCurrentConfigurationSession(sessionID), connectionRequestID == requestID { isTesting = false }
+        }
+        guard !config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            testResult = ConnectionTestResult(success: false, message: "agents.models.clientKeyRequired".localized(),
+                latencyMs: nil, modelResponded: nil)
+            return
+        }
         isTesting = true
-        defer { isTesting = false }
-
-        testResult = await AgentModelCatalogService.testConnection(
-            proxyURL: config.proxyURL,
-            apiKey: config.apiKey
-        )
+        let result = await probeConnection(config.proxyURL, config.apiKey)
+        guard !Task.isCancelled, isCurrentConfigurationSession(sessionID), connectionRequestID == requestID,
+              selectedAgent == requestedAgent, currentConfiguration?.proxyURL == config.proxyURL, currentConfiguration?.apiKey == config.apiKey else { return }
+        testResult = result
     }
 
-    func generatePreviewConfig() async -> AgentConfigResult? {
-        guard let agent = selectedAgent,
+    func generatePreviewConfig(sessionID expectedSessionID: UUID? = nil) async -> AgentConfigResult? {
+        guard !Task.isCancelled, isCurrentConfigurationSession(expectedSessionID), let agent = selectedAgent,
               let config = currentConfiguration else { return nil }
 
+        let sessionID = configurationSessionID
         do {
-            return try await configurationService.generateConfiguration(
-                agent: agent,
-                config: config,
-                mode: .manual,
-                detectionService: detectionService,
-                availableModels: availableModels
-            )
+            let result = try await generateConfiguration(agent, config, .manual, .jsonOnly, availableModels)
+            guard !Task.isCancelled, isCurrentConfigurationSession(sessionID) else { return nil }
+            return result
         } catch {
             return nil
         }
     }
 
-    func dismissConfiguration() {
+    func dismissConfiguration(sessionID: UUID? = nil) {
+        guard isCurrentConfigurationSession(sessionID) else { return }
+        configurationSessionID = UUID()
+        configurationReadGeneration = UUID()
         configurationLoadTask?.cancel()
+        isDeletingBackups = false
+        // 关闭后使所有未完成目录读取失效；已保存配置不受影响，下一次打开重新读取当前服务。
+        modelLoadGeneration = UUID()
+        availableModels = []
+        modelLoadMessage = nil
+        isFetchingModels = false
         isLoadingConfiguration = false
         selectedAgent = nil
         configResult = nil
@@ -538,55 +650,71 @@ final class AgentSetupViewModel {
         selectedSetupMode = .proxy
     }
 
-    func resetSheetState() {
+    func resetSheetState(sessionID: UUID? = nil) {
+        guard isCurrentConfigurationSession(sessionID) else { return }
         configResult = nil
         testResult = nil
         selectedRawConfigIndex = 0
         configurationMode = .automatic
         configStorageOption = .jsonOnly
-        isConfiguring = false
-        isTesting = false
-        selectedSetupMode = .proxy
-        // Don't reset availableModels here to allow caching to persist across dismissals
+        // onAppear 不解除正在进行的保存／测试互斥；首次与重开由 startConfiguration 统一初始化。
+        // 模式由 startConfiguration 初始化、磁盘回填恢复；onAppear 不再重置，避免快回填被改回代理模式。
+        // 不清理正在读取的目录；onAppear 只重置表单显示，不能使 startConfiguration 的请求失效。
         // Don't reset savedConfig/availableBackups - they persist while sheet is open
     }
 
-    /// Load available models for agent configuration.
-    ///
-    /// - Parameter forceRefresh: Reserved for future use.
-    /// - Returns: `true` when models were fetched from remote successfully; `false` on fetch error.
+    /// 每次显式读取当前服务实际暴露的目录，不注入内置型号；forceRefresh 保留原调用签名，
+    /// 当前没有额外模型缓存，普通加载与手动刷新都发起真实请求。选择、槽位及凭据不随目录变更。
     @discardableResult
-    func loadModels(forceRefresh: Bool = false) async -> Bool {
-        guard let config = modelRequestConfiguration() else { return false }
+    func loadModels(forceRefresh: Bool = false, sessionID expectedSessionID: UUID? = nil) async -> Bool {
+        // 旧页面排队的 Task 可能尚未启动且从未被取消；先验所属页面，再碰新草稿或请求令牌。
+        guard !Task.isCancelled, isCurrentConfigurationSession(expectedSessionID) else { return false }
+        let sessionID = configurationSessionID
+        // 打开弹窗时客户端 key 可能仍在原刷新流程中；用户重试后补用已就绪的 key，
+        // 同步回原草稿才能保证目录读取与最终写出的认证一致。已有明确 key 不覆盖。
+        if currentConfiguration?.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true,
+           let key = quotaViewModel?.apiKeys.first, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            currentConfiguration?.apiKey = key
+        }
+        guard let config = modelRequestConfiguration() else {
+            // 密钥尚未就绪也必须结束旧加载，不能沿用上一服务目录或发送管理密钥试探。
+            modelLoadGeneration = UUID()
+            availableModels = []
+            isFetchingModels = false
+            modelLoadMessage = "agents.models.failed".localized()
+            return false
+        }
         let requestedAgent = selectedAgent
-
+        let generation = UUID()
+        modelLoadGeneration = generation
         isFetchingModels = true
-        defer { isFetchingModels = false }
-        var loadedFromRemote = false
-
-        do {
-            let fetchedModels = try await AgentModelCatalogService.fetchAvailableModels(proxyURL: config.proxyURL, apiKey: config.apiKey)
-            let processedModels = processModels(fetchedModels)
-            guard selectedAgent == requestedAgent else { return false }
-            self.availableModels = processedModels
-            loadedFromRemote = true
-
-            // Log model list
-            let modelList = processedModels.map { "\($0.id) (provider: \($0.provider))" }.joined(separator: ", ")
-            logger.debug("[AgentSetupViewModel] Loaded \(processedModels.count) models: \(modelList)")
-        } catch {
-            // 实时目录仍如实报错；仅非 Pi 页面沿用原候选兜底，不覆盖已有选择或保存配置。
-            logger.error("[AgentSetupViewModel] Failed to load models: \(error.localizedDescription)")
-            guard selectedAgent == requestedAgent else { return false }
-            if requestedAgent == .pi {
-                availableModels = []
-                errorMessage = "agents.pi.modelsFailed".localized()
-            } else if availableModels.isEmpty {
-                availableModels = AvailableModel.allModels.sorted { $0.displayName < $1.displayName }
-            }
+        availableModels = []
+        modelLoadMessage = nil
+        defer {
+            // 旧请求不得清除新一轮的加载状态，也不能在重新打开同一客户端时回写候选。
+            if isCurrentConfigurationSession(sessionID), modelLoadGeneration == generation { isFetchingModels = false }
         }
 
-        return loadedFromRemote
+        func isCurrentRequest() -> Bool {
+            guard !Task.isCancelled, isCurrentConfigurationSession(sessionID), modelLoadGeneration == generation,
+                  selectedAgent == requestedAgent, let current = modelRequestConfiguration() else { return false }
+            return current.proxyURL == config.proxyURL && current.apiKey == config.apiKey
+        }
+
+        do {
+            let fetchedModels = try await fetchModels(config.proxyURL, config.apiKey)
+            guard isCurrentRequest() else { return false }
+            availableModels = processModels(fetchedModels)
+            if availableModels.isEmpty { modelLoadMessage = "agents.models.empty".localized() }
+            logger.debug("[AgentSetupViewModel] Loaded \(self.availableModels.count) models from current service")
+            return true
+        } catch {
+            guard isCurrentRequest() else { return false }
+            // 保留配置中的旧模型／角色与手填入口；失败不等价于服务提供了一组默认型号。
+            logger.error("[AgentSetupViewModel] Failed to load models: \(error.localizedDescription)")
+            modelLoadMessage = "agents.models.failed".localized()
+            return false
+        }
     }
 
     /// Builds the configuration used to talk to `/v1/models`.
@@ -597,15 +725,18 @@ final class AgentSetupViewModel {
     private func modelRequestConfiguration() -> AgentConfiguration? {
         // Reuse the sheet's configuration when one exists (agent-setup scenarios)
         if let existingConfig = currentConfiguration {
+            guard !existingConfig.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return existingConfig
         }
 
         // Create a config when loading models outside the agent setup sheet.
         guard let proxyManager = proxyManager else { return nil }
 
-        // Use the first API key from the API Keys management interface
-        // If no keys exist, fall back to managementKey
-        let apiKey = quotaViewModel?.apiKeys.first ?? proxyManager.managementKey
+        // 客户端目录与 v8 管理端点的认证边界独立；无客户端密钥时等待原 API Key 加载流程，
+        // 不能拿高权限 managementKey 回退请求 /v1/models。配置弹窗已明确提供的 key 仍优先沿用。
+        guard let apiKey = quotaViewModel?.apiKeys.first, !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
 
         // Use tunnel URL if active, otherwise use local proxy endpoint
         let modelEndpoint: String
@@ -625,8 +756,7 @@ final class AgentSetupViewModel {
     /// Fetches the proxy's `/v1/models` catalog exactly as the endpoint reported it.
     ///
     /// This is the read-only counterpart to `loadModels(forceRefresh:)`.
-    /// 实时目录不使用静态兜底；配置候选的兜底仅由 loadModels 处理，Pi 始终只读实时模型。
-    /// from the proxy or configured by the user.
+    /// 实时目录和配置候选均不使用静态兜底；Pi 保存前仍使用自己的实时查证流程。
     ///
     /// This method performs no fallback, reads and writes no cached state, and does
     /// not touch `availableModels`, so existing `loadModels` consumers are unaffected.
@@ -639,9 +769,8 @@ final class AgentSetupViewModel {
     }
 
     func processModels(_ fetchedModels: [AvailableModel]) -> [AvailableModel] {
-        // 只开放模块内纯映射以便定向回归，不新增状态；Pi 不获得猜测的内置模型。
-        let candidates = fetchedModels.isEmpty && selectedAgent != .pi ? AvailableModel.allModels : fetchedModels
-        return candidates.sorted { $0.displayName < $1.displayName }
+        // 只排序实际返回的候选，空目录如实为空；不以型号白名单过滤历史 ID 或自定义别名。
+        return fetchedModels.sorted { $0.displayName < $1.displayName }
     }
 
 

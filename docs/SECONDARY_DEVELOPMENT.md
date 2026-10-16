@@ -8,7 +8,7 @@
 
 ## 1. 上游与参考项目分别是谁
 
-2026-10-15 的[专项复审](features/appkit-layout-reentry-and-followup-audit-2026-10-15.md)补齐原生 Sheet 的显式 fitted 尺寸策略；同步时保留严格 Copilot 主机元数据、gh users 多账号、同主机占位收尾及历史发布的别名比较基线。CLI 渠道不能仅凭 Homebrew 前缀或 npm 发行名猜测；卸载不提前删配置，终端不能混合解释不同 Shell 的配置或覆盖用户 PATH。非 Pi 静态候选已按用户明确要求恢复，实时目录与 Pi 的动态目录语义保持独立。
+2026-10-15 的[专项复审](features/appkit-layout-reentry-and-followup-audit-2026-10-15.md)补齐原生 Sheet 的显式 fitted 尺寸策略；同步时保留严格 Copilot 主机元数据、gh users 多账号、同主机占位收尾及历史发布的别名比较基线。CLI 渠道不能仅凭 Homebrew 前缀或 npm 发行名猜测；卸载不提前删配置，终端不能混合解释不同 Shell 的配置或覆盖用户 PATH。当时非 Pi 静态候选按用户明确要求恢复；随后用户于 2026-10-16 明确改为[动态目录方案](features/dynamic-model-defaults-2026-10-16.md)，当前所有配置候选均不再注入静态型号。实时目录、候选 Copilot 筛选和宽松连接探测继续保留不同语义。
 
 2026-10-15 对 PR #558 的[全模型弹窗适配](features/antigravity-models-sheet-layout-2026-10-15.md)采用显式展示值注入：合并上游时不要恢复弹窗内部的隐式设置环境或 `.shared` 读取。原显示状态由账号卡片持有，Sheet 挂在稳定根节点，避免加载和空模型分支卸载宿主。上游 PR 核对时已关闭但未合并，具体 head 与本地定向范围见适配记录。
 
@@ -107,7 +107,7 @@
 
 第三轮第四批将 MenuBarAccountCatalog 归 `Shared/Accounts/Presentation`，IDE 扫描选项／结果／原 manager 归 `Shared/Accounts/Services/IDEScanSettings.swift`，原 CPAOAuthSessionCoordinator 归同 Services；传输协议与客户端适配保留在 `Infrastructure/CPA/API/CPAOAuthSessionClient.swift`。OAuthSheet 与其私有状态视图同文件归 `Shared/Accounts/Views`，账号页与仪表盘保留原调用。共享 OperatingMode／manager 成组位于 `Shared/AppSettings`，页面集合和可见性查询两个原成员在 `App/Navigation/OperatingMode+Navigation.swift`。比对上游时保留单例、私有 setter、模式 revision、账号歧义拒绝、显式扫描同意、OAuth 世代／期限／回调和弹窗任务，不把文件归位误当状态迁移。详见[账号共享能力归位记录](features/account-business-boundary-2026-10-15.md)。
 
-第三轮第五批将模型读取业务归 `Shared/ModelManagement/Services/AgentModelCatalogService.swift`，共用请求传输归 `Infrastructure/Networking/ModelCatalogClient.swift`；旧 `AgentConfigurationService` 三个读取签名继续兼容，但页面、Pi 保存前查证和完整共享 Loader 不再为只读请求构造配置服务。合并上游时核对原端点、Bearer、十秒超时与代理工厂；保留实时空目录、候选 Copilot 筛选及页面兜底，连接测试允许 HTTP 200 非目录正文。Loader 先取得本轮客户端 key，管理 key 不能回退为模型 key，取消屏障和原 ViewModel 世代提交不动。`PiSessionPaths` 的三个路径方法整体归 `Infrastructure/AgentClients`，timestamp 同名扩展留 Analytics 并显式保持 `nonisolated`；保留原环境变量、扫描目录、安装备份、写后重读和双文件回滚。详见[模型目录与 Pi 路径归位记录](features/model-catalog-business-boundary-2026-10-15.md)。
+第三轮第五批将模型读取业务归 `Shared/ModelManagement/Services/AgentModelCatalogService.swift`，共用请求传输归 `Infrastructure/Networking/ModelCatalogClient.swift`；旧 `AgentConfigurationService` 三个读取签名继续兼容，但页面、Pi 保存前查证和完整共享 Loader 不再为只读请求构造配置服务。合并上游时核对原端点、Bearer、十秒超时与代理工厂；保留实时空目录及候选 Copilot 筛选，连接测试允许 HTTP 200 非目录正文；当时页面静态兜底已由 2026-10-16 的动态目录方案移除。Loader 先取得本轮客户端 key，管理 key 不能回退为模型 key，取消屏障和原 ViewModel 世代提交不动。`PiSessionPaths` 的三个路径方法整体归 `Infrastructure/AgentClients`，timestamp 同名扩展留 Analytics 并显式保持 `nonisolated`；保留原环境变量、扫描目录、安装备份、写后重读和双文件回滚。详见[模型目录与 Pi 路径归位记录](features/model-catalog-business-boundary-2026-10-15.md)。
 
 第三轮第六批将原 AnalyticsMaintenanceCoordinator 与 StorageDataDestination 成组归 `App/Composition/AnalyticsMaintenanceComposition.swift`。QuotioApp 原 State、环境注入和统计实例不变；App 的普通设置与日志兼容入口向 SettingsScreen 注入延迟目的地，设置页不引用 App 协调器或跨业务统计 VM。SettingsScreen 保持原非泛型类型及导航状态，其初始化现在明确接收目的地构造闭包；上游新增调用点须由 App 同样提供，不能在设置业务恢复原跨层装配或另造服务。原 service／Store／Screen 留 `Settings/Storage`；configure 仍在目的地 task 首次执行，不提早到 App 启动。保留 busy、private(set)、在途队列等待、清理事务、全模块失效、恢复与迁移墓碑。原维护生命周期测试内容不变，归 `QuotioTests/App/Composition`。详见[存储维护应用装配归位记录](features/storage-maintenance-composition-2026-10-15.md)。
 

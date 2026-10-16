@@ -347,7 +347,7 @@ actor AntigravityQuotaFetcher {
         else { resolvedProject = await fetchProjectId(accessToken: accessToken) }
         guard let resolvedProject else { throw QuotaFetchError.invalidResponse }
         var lastError: Error = QuotaFetchError.invalidResponse
-        for host in AntigravityQuotaEndpoints.hosts {
+        for host in AntigravityQuotaEndpoints.summaryHosts {
             try Task.checkCancellation()
             do {
                 let data = try await postCloudCode(urlString: host + "/v1internal:retrieveUserQuotaSummary",

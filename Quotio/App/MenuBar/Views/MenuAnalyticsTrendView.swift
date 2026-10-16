@@ -191,7 +191,6 @@ struct UsageTrendHeatmap: View {
     let mode: AnalyticsTrendMode
 
     @State private var hoveredCellID: String?
-    @State private var hoveredText: String?
 
     private let cellSize: CGFloat = 9
     private let spacing: CGFloat = 2.4
@@ -306,6 +305,16 @@ struct UsageTrendHeatmap: View {
 
     var body: some View {
         let data = heatmapData
+        // 只保存悬停位置，读数始终来自本轮数据。原生菜单会原位刷新且鼠标可能不动，
+        // 若把文案另存为 State，onHover 不再触发时会继续显示旧值，甚至显示已删除日期。
+        let hoveredCell = data.weeks.lazy.flatMap(\.cells).first { $0.id == hoveredCellID }
+        let hoveredText = hoveredCell.flatMap { cell in
+            cell.point.map { point in
+                point.label.isEmpty
+                    ? "\(point.valueLabel) on \(Self.shortDateLabel(for: cell.date))"
+                    : "\(point.valueLabel) \(point.label)"
+            }
+        }
 
         ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 6) {
@@ -375,22 +384,17 @@ struct UsageTrendHeatmap: View {
     }
 
     private func updateHover(_ hovering: Bool, cell: HeatmapCell) {
-        guard let point = cell.point else {
+        guard cell.point != nil else {
             if !hovering, hoveredCellID == cell.id {
                 hoveredCellID = nil
-                hoveredText = nil
             }
             return
         }
 
         if hovering {
             hoveredCellID = cell.id
-            hoveredText = point.label.isEmpty
-                ? "\(point.valueLabel) on \(Self.shortDateLabel(for: cell.date))"
-                : "\(point.valueLabel) \(point.label)"
         } else if hoveredCellID == cell.id {
             hoveredCellID = nil
-            hoveredText = nil
         }
     }
 

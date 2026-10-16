@@ -153,8 +153,7 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertTrue(state.hasCompletedFetch)
         XCTAssertFalse(state.lastFetchFailed)
 
-        let builtInIds = Set(AvailableModel.allModels.map(\.id))
-        XCTAssertTrue(state.entries.allSatisfy { !builtInIds.contains($0.id) })
+
     }
 
     func testFailedFirstFetchReportsFailureWithNothingToShow() {
@@ -255,15 +254,17 @@ final class ModelCatalogTests: XCTestCase {
     }
 
     @MainActor
-    func testCandidateFallbackIsRestoredOnlyForNonPiAndNeverChangesLiveCatalog() {
+    func testCandidateDirectoryNeverInjectsStaticDefaultsOrFiltersSavedAliases() {
         let viewModel = AgentSetupViewModel()
-        viewModel.selectedAgent = .claudeCode
-        XCTAssertFalse(viewModel.processModels([]).isEmpty)
-        let remote = AvailableModel(id: "actual-live-model", name: "actual-live-model", provider: "fixture", isDefault: false)
-        XCTAssertEqual(viewModel.processModels([remote]), [remote])
-        viewModel.selectedAgent = .pi
-        XCTAssertTrue(viewModel.processModels([]).isEmpty)
-        XCTAssertTrue(ModelCatalog.agentSetupModels(from: []).isEmpty, "候选兜底不能污染实时目录映射")
+        // 所有配置页统一使用动态目录；保留各客户端类型及 Pi 实时查证的独立语义。
+        for agent in CLIAgent.allCases {
+            viewModel.selectedAgent = agent
+            XCTAssertTrue(viewModel.processModels([]).isEmpty)
+            let remote = [AvailableModel(id: "gpt-5-codex", name: "gpt-5-codex", provider: "fixture", isDefault: false),
+                AvailableModel(id: "actual-live-model", name: "actual-live-model", provider: "fixture", isDefault: false)]
+            XCTAssertEqual(Set(viewModel.processModels(remote)), Set(remote))
+        }
+        XCTAssertTrue(ModelCatalog.agentSetupModels(from: []).isEmpty)
     }
 
     @MainActor

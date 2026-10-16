@@ -4,6 +4,8 @@ import SwiftUI
 /// 表单状态由原配置 ViewModel 持有，刷新目录不会丢失自定义模型或存量名称。
 struct ClaudeModelMappingView: View {
     @Bindable var viewModel: AgentSetupViewModel
+    /// 由原配置弹窗传入不可变身份；独立组件调用保留默认参数兼容。
+    var configurationSessionID: UUID? = nil
     var aliases: [CPAModelAlias] = []
     var onManageAliases: () -> Void = {}
     let onOneMillionChange: () -> Void
@@ -46,7 +48,7 @@ struct ClaudeModelMappingView: View {
             // 子代理属于模型选择：放在同一张卡片底部，仅用分隔线分组，不再嵌套另一张卡片。
             // 复用原状态与回调，移动位置不会重置已有固定模型或“跟随会话”的选择。
             Divider()
-            ClaudeSubagentModelSection(viewModel: viewModel, aliases: aliases, onChange: onOneMillionChange)
+            ClaudeSubagentModelSection(viewModel: viewModel, configurationSessionID: configurationSessionID, aliases: aliases, onChange: onOneMillionChange)
         }
         .quotioInsetCard()
     }
@@ -72,7 +74,7 @@ struct ClaudeModelMappingView: View {
                 .buttonStyle(.quotioMicroCapsule)
 
             Button {
-                Task { await viewModel.loadModels(forceRefresh: true) }
+                Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) }
             } label: {
                 if viewModel.isFetchingModels {
                     SmallProgressView()
@@ -102,7 +104,7 @@ struct ClaudeModelMappingView: View {
                 ),
                 availableModels: viewModel.availableModels,
                 isFetchingModels: viewModel.isFetchingModels,
-                onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
+                onRefresh: { Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) } },
                 slotModels: viewModel.currentConfiguration?.modelSlots ?? [:],
                 aliases: aliases,
                 showsHeader: false,
@@ -174,7 +176,7 @@ struct ClaudeModelMappingView: View {
                                                set: { viewModel.updateModelSlot(slot, model: $0); onOneMillionChange() }),
                         availableModels: viewModel.availableModels,
                         isFetchingModels: viewModel.isFetchingModels,
-                        onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
+                        onRefresh: { Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) } },
                         aliases: aliases, showsHeader: false, isCompact: true,
                         allowsRoleSelection: false, selectionLabelKey: "agents.modelMapping.requestModel"
                     )

@@ -63,10 +63,11 @@ struct AgentSetupScreen: View {
             }
         }
         .sheet(item: $selectedAgentForConfig) { (agent: CLIAgent) in
-            AgentConfigSheet(viewModel: viewModel, agent: agent)
-                .id(sheetPresentationID)
+            let sessionID = sheetPresentationID
+            AgentConfigSheet(viewModel: viewModel, agent: agent, configurationSessionID: sessionID)
+                .id(sessionID)
                 .onDisappear {
-                    viewModel.dismissConfiguration()
+                    viewModel.dismissConfiguration(sessionID: sessionID)
                 }
         }
     }
@@ -138,9 +139,9 @@ struct AgentSetupScreen: View {
                         status: status,
                         viewModel: viewModel,
                         onConfigure: {
-                            let apiKey = quotaViewModel.apiKeys.first ?? quotaViewModel.proxyManager.managementKey
-                            viewModel.startConfiguration(for: status.agent, apiKey: apiKey)
-                            sheetPresentationID = UUID()
+                            // 客户端目录和配置只使用客户端 API key，不能以 v8 管理密钥代替。
+                            let apiKey = quotaViewModel.apiKeys.first ?? ""
+                            sheetPresentationID = viewModel.startConfiguration(for: status.agent, apiKey: apiKey)
                             selectedAgentForConfig = status.agent
                         }
                     )

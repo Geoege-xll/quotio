@@ -9,16 +9,24 @@ actor AgentConfigurationService {
     private let fileManager = FileManager.default
     private let homeDirectory: URL
     private let trashBackup: @Sendable (URL) throws -> Void
+    private let fetchPiModels: @Sendable (String, String) async throws -> [AvailableModel]
+    /// Pi 查证与安装会让 actor 可重入；互斥仍归原配置服务，不新增持有 Task 的队列或单例。
+    /// 已开始的文件事务完整完成，新页面的第二次自动写入／恢复必须稍后重试，避免旧事务覆盖新文件。
+    private var isConfiguringPi = false
 
     /// 允许测试注入临时用户目录，覆盖真实的读取、备份和重新配置流程，避免触碰用户凭据。
     /// 正常启动仍使用系统用户目录，现有调用方无需传入额外参数。
     init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        fetchPiModels: @escaping @Sendable (String, String) async throws -> [AvailableModel] = { url, key in
+            try await AgentModelCatalogService.fetchAvailableModels(proxyURL: url, apiKey: key)
+        },
         trashBackup: @escaping @Sendable (URL) throws -> Void = { url in
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         }
     ) {
         self.homeDirectory = homeDirectory
+        self.fetchPiModels = fetchPiModels
         self.trashBackup = trashBackup
     }
     
@@ -141,6 +149,10 @@ actor AgentConfigurationService {
 
     /// Restore configuration from a backup file
     func restoreFromBackup(_ backup: BackupFile) throws {
+        // 恢复也会写 Pi 的两份配置之一，不能与同服务内尚未完成的自动保存交错。
+        if backup.agent == .pi, isConfiguringPi {
+            throw PiAgentSupport.failure("agents.pi.configurationInProgress".localizedStatic())
+        }
         // Determine the original config path from the backup path
         // e.g., ~/.claude/settings.json.backup.123 -> ~/.claude/settings.json
         let originalPath = backup.path
@@ -870,9 +882,22 @@ actor AgentConfigurationService {
         availableModels: [AvailableModel] = []
     ) async throws -> AgentConfigResult {
         
+        // UI 与直接生成调用共享保存屏障：缺客户端密钥时禁止写入空认证，
+        // 检查在任何 Pi 安装、备份或文件修改之前执行；恢复非代理模式仍允许空 key。
+        if config.setupMode == .proxy, config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .failure(error: "agents.models.clientKeyRequired".localizedStatic())
+        }
+
         // Pi 使用官方独立 provider 插件，代理与默认模式均交给同一服务处理。
         if agent == .pi {
-            return try await PiAgentConfigurationService(homeDirectory: homeDirectory).generate(
+            if mode == .automatic {
+                guard !isConfiguringPi else {
+                    return .failure(error: "agents.pi.configurationInProgress".localizedStatic())
+                }
+                isConfiguringPi = true
+            }
+            defer { if mode == .automatic { isConfiguringPi = false } }
+            return try await PiAgentConfigurationService(homeDirectory: homeDirectory, fetchModels: fetchPiModels).generate(
                 config: config, mode: mode, detectionService: detectionService
             )
         }
@@ -1256,7 +1281,7 @@ actor AgentConfigurationService {
         let configDir = "\(home)/.claude"
         let configPath = "\(configDir)/settings.json"
 
-        let baseURL = config.proxyURL.replacingOccurrences(of: "/v1", with: "")
+        let baseURL = clientServiceBaseURL(config.proxyURL)
 
         // Store base IDs in the form model and apply `[1m]` only to the request
         // values emitted for Claude Code. This keeps disabling 1M reversible.
@@ -1435,6 +1460,11 @@ actor AgentConfigurationService {
     }
     
     private func generateCodexConfig(config: AgentConfiguration, mode: ConfigurationMode) async throws -> AgentConfigResult {
+        // 新配置必须由用户从实时目录选择或明确手填；接口失败不能悄悄写入固定型号或空 model。
+        // 此校验同时覆盖手动预览和直接服务调用，并且发生在备份、目录创建与凭据写入之前。
+        guard !config.codexModel.isEmpty else {
+            return .failure(error: "agents.models.selectRequired".localizedStatic())
+        }
         let home = homeDirectory.path
         let codexDir = "\(home)/.codex"
         let configPath = "\(codexDir)/config.toml"
@@ -1531,7 +1561,7 @@ actor AgentConfigurationService {
         let dataDir = "\(home)/.local/share/amp"
         let settingsPath = "\(configDir)/settings.json"
         let secretsPath = "\(dataDir)/secrets.json"
-        let baseURL = config.proxyURL.replacingOccurrences(of: "/v1", with: "")
+        let baseURL = clientServiceBaseURL(config.proxyURL)
         
         let settingsData = try Self.mergedAmpJSON(existing: nil, updates: ["amp.url": baseURL])
         let secretsData = try Self.mergedAmpJSON(existing: nil, updates: ["apiKey@\(baseURL)": config.apiKey])
@@ -1720,43 +1750,61 @@ actor AgentConfigurationService {
         return backupPath
     }
     
+    /// 只移除末尾的兼容版本段，不能全局替换 /v1：例如 https://v1.example.com/prefix/v1
+    /// 的主机名和中间路径都属于用户服务地址。各生成器继续按原协议添加自己的请求路径。
+    private func clientServiceBaseURL(_ apiBaseURL: String) -> String {
+        var value = apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while value.hasSuffix("/") { value.removeLast() }
+        if value.hasSuffix("/v1") { value.removeLast(3) }
+        return value
+    }
+
     private func generateOpenCodeConfig(config: AgentConfiguration, mode: ConfigurationMode, availableModels: [AvailableModel]) -> AgentConfigResult {
         let home = homeDirectory.path
         let configDir = "\(home)/.config/opencode"
         let configPath = "\(configDir)/opencode.json"
-        let baseURL = config.proxyURL.replacingOccurrences(of: "/v1", with: "")
+        let baseURL = clientServiceBaseURL(config.proxyURL)
+        let existingData = fileManager.contents(atPath: configPath)
 
-        // Convert available models to OpenCode format dynamically
-        var quotioModels: [String: [String: Any]] = [:]
-        let modelsToUse: [AvailableModel]
-        if !availableModels.isEmpty {
-            modelsToUse = availableModels
-        } else {
-            // 当动态目录尚未获取或为空时，优先提取用户配置的模型槽，不注入写死伪造的废弃模型列表
-            let activeModelNames = Set(config.modelSlots.values.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-            modelsToUse = activeModelNames.map { name in
-                AvailableModel(id: name, name: name, provider: "quotio", isDefault: true)
+        // 配置文件是用户长期编辑的文档，不是实时目录缓存。即使本轮目录非空，也不能
+        // 删除未返回的旧 ID，或用家族猜测覆盖同 ID 的显示名、能力、上下文和自定义参数。
+        let savedProvider: [String: Any]
+        do {
+            // 原编辑器允许空文件／纯空白作为首次配置；预读取元数据必须遵守同一契约。
+            let blank = existingData.flatMap { String(data: $0, encoding: .utf8) }?
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+            let object = blank ? [:] : try existingData.map { try OpenCodeConfigEditor.parseObject($0) } ?? [:]
+            savedProvider = (object["provider"] as? [String: Any])?["quotio"] as? [String: Any] ?? [:]
+            if let models = savedProvider["models"], !(models is [String: [String: Any]]) {
+                return .failure(error: "OpenCode provider.quotio.models must be an object. Existing configuration was preserved.")
             }
+            if let options = savedProvider["options"], !(options is [String: Any]) {
+                return .failure(error: "OpenCode provider.quotio.options must be an object. Existing configuration was preserved.")
+            }
+        } catch {
+            return .failure(error: String(format: "agents.opencode.parseFailed".localizedStatic(), configPath, error.localizedDescription))
+        }
+        var quotioModels = savedProvider["models"] as? [String: [String: Any]] ?? [:]
+        let explicitModels = config.modelSlots.values.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        for model in availableModels.map(\.name) + explicitModels.sorted() where quotioModels[model] == nil {
+            quotioModels[model] = buildOpenCodeModelConfig(for: model)
+        }
+        guard !quotioModels.isEmpty else {
+            return .failure(error: "agents.models.empty".localizedStatic())
         }
 
-        for model in modelsToUse {
-            quotioModels[model.name] = buildOpenCodeModelConfig(for: model.name)
-        }
-
-        let quotioProvider: [String: Any] = [
-            "models": quotioModels,
-            "name": "Quotio",
-            "npm": "@ai-sdk/anthropic",
-            "options": [
-                "apiKey": config.apiKey,
-                "baseURL": "\(baseURL)/v1",
-                "litellmProxy": true
-            ]
-        ]
+        // 仅更新本功能负责的连接键；未知 provider/options 元数据属于已有配置，不能被重建清空。
+        var quotioProvider = savedProvider
+        quotioProvider["models"] = quotioModels
+        if quotioProvider["name"] == nil { quotioProvider["name"] = "Quotio" }
+        if quotioProvider["npm"] == nil { quotioProvider["npm"] = "@ai-sdk/anthropic" }
+        var options = savedProvider["options"] as? [String: Any] ?? [:]
+        options["apiKey"] = config.apiKey
+        options["baseURL"] = "\(baseURL)/v1"
+        options["litellmProxy"] = true
+        quotioProvider["options"] = options
 
         do {
-            let existingData = fileManager.contents(atPath: configPath)
-
             let jsonData: Data
             do {
                 jsonData = try OpenCodeConfigEditor.merging(
@@ -1802,7 +1850,7 @@ actor AgentConfigurationService {
                     mode: mode,
                     configPath: configPath,
                     rawConfigs: rawConfigs,
-                    instructions: "Configuration updated. Run 'opencode' and use /models to select a model (e.g., quotio/\(modelsToUse.first?.name ?? "model")).",
+                    instructions: "Configuration updated. Run 'opencode' and use /models to select a model (e.g., quotio/\(quotioModels.keys.sorted().first ?? "model")).",
                     modelsConfigured: quotioModels.count,
                     backupPath: backupPath
                 )
@@ -1885,30 +1933,53 @@ actor AgentConfigurationService {
         let configDir = "\(home)/.factory"
         let configPath = "\(configDir)/config.json"
 
-        let openaiBaseURL = "\(config.proxyURL.replacingOccurrences(of: "/v1", with: ""))/v1"
+        let openaiBaseURL = "\(clientServiceBaseURL(config.proxyURL))/v1"
 
-        // Convert available models to Factory Droid format dynamically
-        let modelsToUse: [AvailableModel]
-        if !availableModels.isEmpty {
-            modelsToUse = availableModels
-        } else {
-            // 当动态目录尚未获取或为空时，优先提取用户配置的模型槽，不注入写死伪造的废弃模型列表
-            let activeModelNames = Set(config.modelSlots.values.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-            modelsToUse = activeModelNames.map { name in
-                AvailableModel(id: name, name: name, provider: "openai", isDefault: true)
+        // 严格读取并合并旧文档：实时目录成功同样不能清空用户其他设置、旧模型或同 ID 的自定义参数。
+        // 解析失败必须停止，不能用“有新目录”作为覆盖损坏文件的理由。
+        var factoryConfig: [String: Any]
+        do {
+            if fileManager.fileExists(atPath: configPath) {
+                let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
+                // 尚未写入内容的初始文件与不存在等价；有实际内容但格式错误时仍禁止覆盖。
+                if String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                    factoryConfig = [:]
+                } else {
+                    guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        return .failure(error: "Factory configuration must be a JSON object. Existing file was preserved.")
+                    }
+                    factoryConfig = object
+                }
+            } else {
+                factoryConfig = [:]
             }
+            if let models = factoryConfig["custom_models"], !(models is [[String: Any]]) {
+                return .failure(error: "Factory custom_models must be an array. Existing configuration was preserved.")
+            }
+        } catch {
+            return .failure(error: "Failed to read Factory configuration: \(error.localizedDescription)")
         }
-        let customModels: [[String: Any]] = modelsToUse.map { model in
-            [
-                "model": model.name,
-                "model_display_name": model.name,
-                "base_url": openaiBaseURL,
-                "api_key": config.apiKey,
-                "provider": "openai"
-            ]
+        var customModels = factoryConfig["custom_models"] as? [[String: Any]] ?? []
+        var managedNames = Set<String>()
+        for index in customModels.indices {
+            // base_url 缺失的旧记录沿用前轮回填；显式属于其他服务的记录必须保留其连接与认证，
+            // 不能因为模型名相同就把用户另一个提供商改接到 CPA。
+            let previousBase = customModels[index]["base_url"] as? String
+            guard previousBase == nil || previousBase?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == openaiBaseURL,
+                  let name = customModels[index]["model"] as? String, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            customModels[index]["base_url"] = openaiBaseURL
+            customModels[index]["api_key"] = config.apiKey
+            managedNames.insert(name)
         }
-
-        let factoryConfig: [String: Any] = ["custom_models": customModels]
+        let explicitModels = config.modelSlots.values.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        for name in availableModels.map(\.name) + explicitModels.sorted() where managedNames.insert(name).inserted {
+            customModels.append(["model": name, "model_display_name": name, "base_url": openaiBaseURL,
+                                 "api_key": config.apiKey, "provider": "openai"])
+        }
+        guard !managedNames.isEmpty else {
+            return .failure(error: "agents.models.empty".localizedStatic())
+        }
+        factoryConfig["custom_models"] = customModels
 
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: factoryConfig, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
@@ -1927,13 +1998,9 @@ actor AgentConfigurationService {
             if mode == .automatic {
                 try fileManager.createDirectory(atPath: configDir, withIntermediateDirectories: true)
 
-                var backupPath: String? = nil
-                if fileManager.fileExists(atPath: configPath) {
-                    backupPath = "\(configPath).backup.\(Int(Date().timeIntervalSince1970))"
-                    try? fileManager.copyItem(atPath: configPath, toPath: backupPath!)
-                }
-
-                try jsonData.write(to: URL(fileURLWithPath: configPath))
+                // 备份失败时不继续覆盖；复用同一套防重名备份规则，再原子替换本次合并结果。
+                let backupPath = try backupIfPresent(configPath)
+                try jsonData.write(to: URL(fileURLWithPath: configPath), options: .atomic)
 
                 return .success(
                     type: .file,

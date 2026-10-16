@@ -4,6 +4,8 @@ import SwiftUI
 /// 删除模式与恢复模式明确区分，确认时冻结目标列表，避免目录变化引起误删。
 struct AgentBackupSection: View {
     @Bindable var viewModel: AgentSetupViewModel
+    /// 由原配置弹窗传入不可变身份；独立组件调用保留默认参数兼容。
+    var configurationSessionID: UUID? = nil
     @State private var showRestoreConfirm = false
     @State private var backupToRestore: AgentConfigurationService.BackupFile?
     @State private var isSelectingBackups = false
@@ -79,7 +81,7 @@ struct AgentBackupSection: View {
             Button("agents.backups.moveToTrash".localized(), role: .destructive) {
                 let selected = backupsToDelete
                 Task {
-                    await viewModel.deleteBackups(selected)
+                    await viewModel.deleteBackups(selected, sessionID: configurationSessionID)
                     selectedBackupIDs.removeAll()
                     backupsToDelete = []
                     isSelectingBackups = false
@@ -95,7 +97,7 @@ struct AgentBackupSection: View {
             }
             if let backup = backupToRestore {
                 Button("agents.restoreAction".localized(), role: .destructive) {
-                    Task { await viewModel.restoreFromBackup(backup) }
+                    Task { await viewModel.restoreFromBackup(backup, sessionID: configurationSessionID) }
                 }
             }
         } message: {

@@ -61,6 +61,9 @@ actor WarmupService {
         throw WarmupError.invalidResponse
     }
 
+    /// 兼容已有预热选择和 CPA 返回的历史别名，不是默认候选或退役模型推荐表。
+    /// 调用前仍取用户选择与该账号实时目录的交集；Google 公共 API 的下线日期不能
+    /// 直接套用于 Antigravity 的内部名称，因此不删除旧映射，也不把显式选择改成新模型。
     private func mapAntigravityModelAlias(_ model: String) -> String {
         switch model.lowercased() {
         case "gemini-3-pro-preview":

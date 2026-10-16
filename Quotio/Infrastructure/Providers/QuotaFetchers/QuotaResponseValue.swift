@@ -56,13 +56,19 @@ nonisolated enum QuotaResponseValue {
     }
 }
 
-/// 与 EasyCLIProxyAPI 的请求顺序一致；这里只共享接口地址，不共享或记录任何账号令牌。
+/// 共享 Antigravity 接口地址，不共享或记录任何账号令牌。
 nonisolated enum AntigravityQuotaEndpoints {
-    static let hosts = [
+    private static let productionHost = "https://cloudcode-pa.googleapis.com"
+    private static let dailyHosts = [
         "https://daily-cloudcode-pa.googleapis.com",
-        "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        "https://cloudcode-pa.googleapis.com"
+        "https://daily-cloudcode-pa.sandbox.googleapis.com"
     ]
+    // 订阅／项目发现沿用原顺序，避免本次额度修复改变辅助信息的读取语义。
+    static let hosts = dailyHosts + [productionHost]
+    /// 额度汇总先读正式主机：daily 可能成功返回 HTTP 200，却只有 Claude/GPT，
+    /// 而同一凭据的正式响应同时含 Gemini。不能把“任意桶有效”误当作所有主机数据一致。
+    /// 正式接口不可用时仍按原规则逐个回退，不拼接不同响应、不以模型目录冒充周期额度。
+    static let summaryHosts = [productionHost] + dailyHosts
     static let userAgent = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)"
 }
 

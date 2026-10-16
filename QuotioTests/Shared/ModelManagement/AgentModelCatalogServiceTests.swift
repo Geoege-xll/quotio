@@ -50,7 +50,7 @@ final class AgentModelCatalogServiceTests: XCTestCase {
         let candidates = try await AgentModelCatalogService.fetchAvailableModels(
             proxyURL: http.url, apiKey: "", session: http.session, fetchCopilotModelIDs: { [] })
         XCTAssertTrue(entries.isEmpty)
-        XCTAssertTrue(candidates.isEmpty, "页面兜底留在原 ViewModel，读取业务不能补内置模型")
+        XCTAssertTrue(candidates.isEmpty, "读取业务与配置候选均不得补入内置模型")
         XCTAssertEqual(http.state.requests.map(\.authorization), ["Bearer ", "Bearer "])
     }
 

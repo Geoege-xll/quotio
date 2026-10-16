@@ -23,9 +23,6 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
     /// Only used when `agent == .codexCLI`.
     var codexReasoningEffort: CodexReasoningEffort
 
-    /// Codex 的独立备用模型沿用原生成器的取值，不再借用 Claude 的 Sonnet 默认槽。
-    /// 已保存的模型和用户在界面中的选择始终优先，不因刷新模型列表而被替换。
-    static let defaultCodexModel = "gpt-5-codex"
     static let defaultClaudeMaxContextTokens = 200_000
     static let defaultClaudeAutoCompactPercentage = 90
 
@@ -217,11 +214,12 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
     }
 
     /// 为兼容已保存的 AgentConfiguration，单模型仍存放在原来的 sonnet 字段中。
-    /// 通过专用属性统一处理空值，避免界面显示的模型与生成器的备用值不一致。
+    /// 空值表示尚未选择，不能补入固定版本；由页面提示从实时目录选择或手动输入。
+    /// 已保存的旧 ID、自定义别名仍原样读取，既不按目录迁移也不按新白名单清理。
     var codexModel: String {
         get {
             let model = modelSlots[.sonnet]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return model.isEmpty ? Self.defaultCodexModel : model
+            return model
         }
         set { modelSlots[.sonnet] = newValue }
     }
@@ -247,15 +245,14 @@ nonisolated struct AgentConfiguration: Codable, Sendable {
         self.claudeModelPicker.shouldWrite = false
         // 新配置尊重 Claude 的会话继承；已有文件中的显式变量会在回填时恢复。
         self.claudeSubagentModel = nil
-        // Pi 必须使用 CPA 实际返回的模型，不继承 Claude 槽默认值。
-        if agent == .pi {
-            self.modelSlots = [:]
-        } else if agent == .codexCLI {
-            self.modelSlots = [.sonnet: Self.defaultCodexModel]
-        } else {
+        // 只有 Claude 的角色引用由 CLI 原生解释；其他客户端的新配置不继承 Claude 槽，
+        // 也不预填任何具体型号。目录型客户端使用实际返回的目录，Codex 由用户明确选择。
+        if agent == .claudeCode {
             self.modelSlots = Dictionary(uniqueKeysWithValues: ModelSlot.legacyCases.compactMap { slot in
                 AvailableModel.defaultModels[slot].map { (slot, $0.name) }
             })
+        } else {
+            self.modelSlots = [:]
         }
     }
 

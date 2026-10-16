@@ -3854,6 +3854,91 @@
         }
       }
     },
+    "agents.models.clientKeyRequired" : {
+      "comment" : "客户端 key 未就绪时阻止代理配置覆盖已有认证；管理密钥不能替代。",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "A client API key is required. Load or create one in API Keys, then refresh the model list." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "尚未取得客户端 API Key。请在 API Key 管理中加载或创建密钥，再刷新模型目录。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "尚未取得用戶端 API Key。請在 API Key 管理中載入或建立金鑰，再重新整理模型目錄。" } }
+      }
+    },
+    "agents.models.failed" : {
+      "comment" : "动态目录提示：不得将接口失败或空目录替换成静态型号；模型选择由用户确认。",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unable to load models from the current service. Retry; your selection is preserved."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取当前服务的模型目录。请重试，已有选择会保留。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取目前服務的模型目錄。請重試，既有選擇會保留。"
+          }
+        }
+      }
+    },
+    "agents.models.empty" : {
+      "comment" : "动态目录提示：不得将接口失败或空目录替换成静态型号；模型选择由用户确认。",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current service returned no models. Retry; your selection is preserved."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前服务未返回可用模型。请重试，已有选择会保留。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前服務未回傳可用模型。請重試，既有選擇會保留。"
+          }
+        }
+      }
+    },
+    "agents.models.selectRequired" : {
+      "comment" : "动态目录提示：不得将接口失败或空目录替换成静态型号；模型选择由用户确认。",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select a model from the current service or enter its model ID manually."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请从当前服务目录选择模型，或手动输入模型 ID。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請從目前服務目錄選擇模型，或手動輸入模型 ID。"
+          }
+        }
+      }
+    },
+    "agents.models.loading" : {
+      "comment" : "OpenCode 和 Factory 首次取目录期间阻止空集合提交，不改变目录任务宿主。",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading the current model list. Please wait before saving." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在读取当前模型目录，请等待加载完成后保存。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在讀取目前模型目錄，請等待載入完成後儲存。" } }
+      }
+    },
     "agents.models.refresh" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4263,6 +4348,14 @@
             "value" : "无法解析 %1$@：%2$@ 文件未被修改 — 请修正其语法后重试，或使用手动模式。"
           }
         }
+      }
+    },
+    "agents.pi.configurationInProgress" : {
+      "comment" : "同一配置服务内的 Pi 自动保存仍在查证或安装；保留原事务，新写入／恢复需要重试。",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The previous Pi configuration is still being saved. Please retry when it finishes." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "上一次 Pi 配置仍在保存，请等待完成后重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "上一次 Pi 配置仍在儲存，請等待完成後重試。" } }
       }
     },
     "agents.pi.modelInfo" : {
@@ -13419,25 +13512,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "e.g., claude-sonnet-4(16000) or gemini-2.5-flash(max)"
+            "value" : "e.g., upstream-model(16000) or upstream-model(max)"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ex. claude-sonnet-4(16000) ou gemini-2.5-flash(max)"
+            "value" : "ex. upstream-model(16000) ou upstream-model(max)"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ví dụ: claude-sonnet-4(16000) hoặc gemini-2.5-flash(max)"
+            "value" : "ví dụ: upstream-model(16000) hoặc upstream-model(max)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "例如：claude-sonnet-4(16000) 或 gemini-2.5-flash(max)"
+            "value" : "例如：upstream-model(16000) 或 upstream-model(max)"
           }
         }
       }

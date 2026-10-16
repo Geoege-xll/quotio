@@ -123,7 +123,7 @@ nonisolated struct CPAQuotaFetcher: Sendable {
             }
             let payload = String(decoding: try JSONEncoder().encode(["project": project]), as: UTF8.self)
             var lastError: Error = QuotaFetchError.invalidResponse
-            for host in AntigravityQuotaEndpoints.hosts {
+            for host in AntigravityQuotaEndpoints.summaryHosts {
                 try Task.checkCancellation()
                 do {
                     let body = try await request(index: index, url: host + "/v1internal:retrieveUserQuotaSummary",

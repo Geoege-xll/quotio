@@ -64,9 +64,15 @@ nonisolated enum PiAgentSupport {
 actor PiAgentConfigurationService {
     private let homeDirectory: URL
     private let fileManager = FileManager.default
+    /// 保存前仍逐次读取真实目录；只读依赖可注入离线失败／重试夹具，不新增缓存或任务宿主。
+    private let fetchModels: @Sendable (String, String) async throws -> [AvailableModel]
 
-    init(homeDirectory: URL) {
+    init(homeDirectory: URL,
+         fetchModels: @escaping @Sendable (String, String) async throws -> [AvailableModel] = { url, key in
+             try await AgentModelCatalogService.fetchAvailableModels(proxyURL: url, apiKey: key)
+         }) {
         self.homeDirectory = homeDirectory
+        self.fetchModels = fetchModels
     }
 
     func generate(config: AgentConfiguration, mode: ConfigurationMode, detectionService: AgentDetectionService) async throws -> AgentConfigResult {
@@ -104,7 +110,7 @@ actor PiAgentConfigurationService {
             if mode == .automatic {
                 // 保存前从共享只读业务重新取目录，不再构造配置写入服务；原安装、备份与双文件回滚顺序不变。
                 // 不将其他智能体的静态兜底列表视为模型可用的证据。
-                let models = try await AgentModelCatalogService.fetchAvailableModels(proxyURL: config.proxyURL, apiKey: config.apiKey)
+                let models = try await fetchModels(config.proxyURL, config.apiKey)
                 guard models.contains(where: { $0.name == model }) else {
                     throw PiAgentSupport.failure("CPA 当前未提供模型 \(model)，请刷新模型列表后重新选择。")
                 }

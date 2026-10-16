@@ -8,6 +8,14 @@ import SwiftUI
 struct AgentConfigSheet: View {
     @Bindable var viewModel: AgentSetupViewModel
     let agent: CLIAgent
+    /// 展示时冻结所属会话；迟到的 onDismiss、按钮 Task 和 onDisappear 不得操作重开的同类型页面。
+    let configurationSessionID: UUID
+
+    init(viewModel: AgentSetupViewModel, agent: CLIAgent, configurationSessionID: UUID? = nil) {
+        self._viewModel = Bindable(wrappedValue: viewModel)
+        self.agent = agent
+        self.configurationSessionID = configurationSessionID ?? viewModel.configurationSessionID
+    }
     
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -55,14 +63,16 @@ struct AgentConfigSheet: View {
         .sheet(isPresented: $showModelAliases, onDismiss: {
             // 关闭管理窗口后读取 CPA 最新目录，保留用户尚未保存的槽位和默认模型选择。
             Task {
-                await viewModel.loadModels(forceRefresh: true)
+                guard viewModel.isCurrentConfigurationSession(configurationSessionID) else { return }
+                await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID)
+                guard viewModel.isCurrentConfigurationSession(configurationSessionID) else { return }
                 await aliasStore.load(client: viewModel.quotaViewModel?.apiClient)
             }
         }) {
             CPAModelAliasManagerSheet(store: aliasStore, client: viewModel.quotaViewModel?.apiClient)
         }
         .onAppear {
-            viewModel.resetSheetState()
+            viewModel.resetSheetState(sessionID: configurationSessionID)
             if isManualMode {
                 generatePreview()
             }
@@ -70,6 +80,17 @@ struct AgentConfigSheet: View {
         .onChange(of: viewModel.isLoadingConfiguration) { _, isLoading in
             // 回填完成后重建手动预览，避免把加载前的默认模型展示成已有配置。
             if !isLoading && isManualMode { generatePreview() }
+        }
+        // 目录型客户端的手动预览也必须跟随本次真实目录，不能停留在加载前的空结果。
+        .onChange(of: viewModel.availableModels) {
+            if isManualMode { generatePreview() }
+        }
+        // 重试可能只补入迟到 key 而目录仍为空；凭据与地址都是预览输入，不能仅靠数组变化重建。
+        .onChange(of: viewModel.currentConfiguration?.apiKey) {
+            if isManualMode { generatePreview() }
+        }
+        .onChange(of: viewModel.currentConfiguration?.proxyURL) {
+            if isManualMode { generatePreview() }
         }
         .onChange(of: viewModel.currentConfiguration?.modelSlots) {
             if isManualMode { generatePreview() }
@@ -102,7 +123,7 @@ struct AgentConfigSheet: View {
     private func generatePreview() {
         previewTask?.cancel()
         previewTask = Task {
-            let result = await viewModel.generatePreviewConfig()
+            let result = await viewModel.generatePreviewConfig(sessionID: configurationSessionID)
             guard !Task.isCancelled else { return }
             previewConfig = result
         }
@@ -132,7 +153,7 @@ struct AgentConfigSheet: View {
             Spacer()
             
             QuotioCircularIconButton(systemImage: "xmark") {
-                viewModel.dismissConfiguration()
+                viewModel.dismissConfiguration(sessionID: configurationSessionID)
                 dismiss()
             }
             .focused($isCloseFocused)
@@ -168,6 +189,7 @@ struct AgentConfigSheet: View {
                 if agent == .codexCLI {
                     CodexModelConfigSection(
                         viewModel: viewModel,
+                        configurationSessionID: configurationSessionID,
                         aliases: aliasStore.aliases,
                         onManageAliases: { showModelAliases = true },
                         onModelOrEffortChange: {
@@ -193,7 +215,7 @@ struct AgentConfigSheet: View {
                             ),
                             availableModels: viewModel.availableModels,
                             isFetchingModels: viewModel.isFetchingModels,
-                            onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
+                            onRefresh: { Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) } },
                             aliases: aliasStore.aliases,
                             showsHeader: false
                         )
@@ -202,7 +224,7 @@ struct AgentConfigSheet: View {
                 }
 
                 if agent == .claudeCode {
-                    ClaudeModelMappingView(viewModel: viewModel, aliases: aliasStore.aliases, onManageAliases: { showModelAliases = true }) {
+                    ClaudeModelMappingView(viewModel: viewModel, configurationSessionID: configurationSessionID, aliases: aliasStore.aliases, onManageAliases: { showModelAliases = true }) {
                         if isManualMode { generatePreview() }
                     }
                     ClaudeAdvancedSettingsSection(viewModel: viewModel) {
@@ -215,11 +237,26 @@ struct AgentConfigSheet: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
+                // 失败／空目录仅提示，不替换模型槽；刷新入口与手动输入继续使用原选择器。
+                if let message = viewModel.modelLoadMessage {
+                    HStack(alignment: .top) {
+                        Label(message, systemImage: "info.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        Button("agents.models.refresh".localized()) {
+                            Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) }
+                        }
+                        .buttonStyle(.quotioMicroCapsule)
+                        .disabled(viewModel.isFetchingModels)
+                    }
+                }
+
                 if isManualMode {
                     manualPreviewSection
                 }
                 
-                if let validation = viewModel.claudeConfigurationValidationMessage {
+                if let validation = viewModel.configurationValidationMessage {
                     Label(validation, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -230,7 +267,7 @@ struct AgentConfigSheet: View {
             }
             
             if !viewModel.availableBackups.isEmpty {
-                AgentBackupSection(viewModel: viewModel)
+                AgentBackupSection(viewModel: viewModel, configurationSessionID: configurationSessionID)
             }
         }
     }
@@ -454,6 +491,11 @@ struct AgentConfigSheet: View {
                         copyPreviewToClipboard(index: viewModel.selectedRawConfigIndex)
                     }
                 }
+            } else if let config = previewConfig, !config.success {
+                // 已结束的失败不是“仍在生成”；保留具体错误，用户可修改／重试后重建同一预览。
+                Label(config.error ?? "agents.configFailed".localized(), systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 HStack {
                     SmallProgressView()
@@ -492,7 +534,7 @@ struct AgentConfigSheet: View {
                 Spacer()
 
                 Button {
-                    Task { await viewModel.testConnection() }
+                    Task { await viewModel.testConnection(sessionID: configurationSessionID) }
                 } label: {
                     HStack(spacing: 4) {
                         if viewModel.isTesting {
@@ -646,17 +688,23 @@ struct AgentConfigSheet: View {
     private var footerView: some View {
         HStack {
             if hasResult {
+                if !isSuccess {
+                    Button("action.retry".localized()) {
+                        viewModel.retryConfiguration(sessionID: configurationSessionID)
+                    }
+                    .buttonStyle(.quotioSecondaryCapsule)
+                }
                 Spacer()
                 
                 Button("action.done".localized()) {
-                    viewModel.dismissConfiguration()
+                    viewModel.dismissConfiguration(sessionID: configurationSessionID)
                     dismiss()
                 }
                 .buttonStyle(.quotioPrimaryCapsule)
                 .keyboardShortcut(.return)
             } else {
                 Button("action.cancel".localized(), role: .cancel) {
-                    viewModel.dismissConfiguration()
+                    viewModel.dismissConfiguration(sessionID: configurationSessionID)
                     dismiss()
                 }
                 .buttonStyle(.quotioSecondaryCapsule)
@@ -665,7 +713,7 @@ struct AgentConfigSheet: View {
                 Spacer()
                 
                 Button {
-                    Task { await viewModel.applyConfiguration() }
+                    Task { await viewModel.applyConfiguration(sessionID: configurationSessionID) }
                 } label: {
                     HStack(spacing: 4) {
                         if viewModel.isConfiguring {
@@ -680,7 +728,7 @@ struct AgentConfigSheet: View {
                 .tint(agent.color)
                 .accentColor(agent.color)
                 .disabled(viewModel.isConfiguring || viewModel.isLoadingConfiguration || viewModel.isDeletingBackups
-                          || viewModel.claudeConfigurationValidationMessage != nil)
+                          || viewModel.configurationValidationMessage != nil)
                 .opacity(viewModel.isConfiguring || viewModel.isLoadingConfiguration || viewModel.isDeletingBackups ? 0.5 : 1)
                 .keyboardShortcut(.return)
             }
@@ -1175,6 +1223,7 @@ private struct RawConfigView: View {
 /// 并支持 CPA 思考策略自动继承与受管状态指示。
 struct CodexModelConfigSection: View {
     @Bindable var viewModel: AgentSetupViewModel
+    var configurationSessionID: UUID? = nil
     var aliases: [CPAModelAlias] = []
     var onManageAliases: () -> Void = {}
     let onModelOrEffortChange: () -> Void
@@ -1182,7 +1231,7 @@ struct CodexModelConfigSection: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var selectedModel: String {
-        viewModel.currentConfiguration?.codexModel ?? AgentConfiguration.defaultCodexModel
+        viewModel.currentConfiguration?.codexModel ?? ""
     }
 
     private var matchingAlias: CPAModelAlias? {
@@ -1256,7 +1305,7 @@ struct CodexModelConfigSection: View {
                         ),
                         availableModels: viewModel.availableModels,
                         isFetchingModels: viewModel.isFetchingModels,
-                        onRefresh: { Task { await viewModel.loadModels(forceRefresh: true) } },
+                        onRefresh: { Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) } },
                         aliases: aliases,
                         showsHeader: false
                     )
@@ -1342,7 +1391,7 @@ struct CodexModelConfigSection: View {
                 .buttonStyle(.quotioMicroCapsule)
 
             Button {
-                Task { await viewModel.loadModels(forceRefresh: true) }
+                Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) }
             } label: {
                 if viewModel.isFetchingModels {
                     SmallProgressView()

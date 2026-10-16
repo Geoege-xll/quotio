@@ -99,10 +99,11 @@ struct DashboardScreen: View {
                 .environment(viewModel)
             }
             .sheet(item: $selectedAgentForConfig) { (agent: CLIAgent) in
-                AgentConfigSheet(viewModel: viewModel.agentSetupViewModel, agent: agent)
-                    .id(sheetPresentationID)
+                let sessionID = sheetPresentationID
+                AgentConfigSheet(viewModel: viewModel.agentSetupViewModel, agent: agent, configurationSessionID: sessionID)
+                    .id(sessionID)
                     .onDisappear {
-                        viewModel.agentSetupViewModel.dismissConfiguration()
+                        viewModel.agentSetupViewModel.dismissConfiguration(sessionID: sessionID)
                         Task { await viewModel.agentSetupViewModel.refreshAgentStatuses() }
                     }
             }
@@ -394,9 +395,9 @@ struct DashboardScreen: View {
         let installedAgents = viewModel.agentSetupViewModel.agentStatuses.filter { $0.installed }
         guard let firstAgent = installedAgents.first else { return }
 
-        let apiKey = viewModel.apiKeys.first ?? viewModel.proxyManager.managementKey
-        viewModel.agentSetupViewModel.startConfiguration(for: firstAgent.agent, apiKey: apiKey)
-        sheetPresentationID = UUID()
+        // 客户端目录和配置只使用客户端 API key，不能以 v8 管理密钥代替。
+        let apiKey = viewModel.apiKeys.first ?? ""
+        sheetPresentationID = viewModel.agentSetupViewModel.startConfiguration(for: firstAgent.agent, apiKey: apiKey)
         selectedAgentForConfig = firstAgent.agent
     }
 
