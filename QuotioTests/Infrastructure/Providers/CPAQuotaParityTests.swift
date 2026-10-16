@@ -127,6 +127,11 @@ final class CPAQuotaParityTests: XCTestCase {
             if request.url.hasSuffix(":loadCodeAssist") {
                 return APICallResponse(statusCode: 200, header: nil, body: #"{"cloudaicompanionProject":"fixture-project"}"#)
             }
+            if request.url.hasSuffix(":fetchAvailableModels") {
+                XCTAssertEqual(request.url, "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
+                XCTAssertTrue(request.data?.contains("fixture-project") == true)
+                return APICallResponse(statusCode: 200, header: nil, body: #"{"models":{"gemini-test":{"quotaInfo":{"remainingFraction":0.62,"resetTime":"2099-01-01T03:00:00Z"}},"claude-test":{"quotaInfo":{"remainingFraction":1}}}}"#)
+            }
             XCTAssertEqual(request.url, "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
             XCTAssertTrue(request.data?.contains("fixture-project") == true)
             return APICallResponse(statusCode: 200, header: nil, body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.41},{"window":"5h","remainingFraction":0.73}]},{"displayName":"Claude and GPT models","buckets":[{"window":"weekly","remainingFraction":1},{"window":"5h","remainingFraction":1}]}]}"#)
@@ -138,9 +143,10 @@ final class CPAQuotaParityTests: XCTestCase {
         let quota = try await fetcher.fetch(file: file)
         XCTAssertEqual(quota.models.count, 4)
         XCTAssertEqual(AntigravityDisplayGroup.make(from: quota.models).filter { $0.name.hasPrefix("Gemini") }.count, 2)
+        XCTAssertEqual(quota.models.first { $0.sourceDisplayName?.hasPrefix("Gemini") == true && $0.antigravityWindow == .session }?.percentage, 62)
         let requests = await log.requests
         XCTAssertEqual(requests.filter { $0.url.hasSuffix(":retrieveUserQuotaSummary") }.count, 1)
-        XCTAssertFalse(requests.contains { $0.url.contains("fetchAvailableModels") })
+        XCTAssertEqual(requests.filter { $0.url.hasSuffix(":fetchAvailableModels") }.count, 1)
     }
 
     func testCPAClaudeDoesNotDownloadCredentialsOrUseLocalQuotaCache() async throws {

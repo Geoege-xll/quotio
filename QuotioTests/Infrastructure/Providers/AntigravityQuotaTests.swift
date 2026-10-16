@@ -163,7 +163,7 @@ final class AntigravityQuotaTests: XCTestCase {
 
     /// daily 可以只返回 Claude/GPT 且 HTTP 成功；生产汇总才有同账号的 Gemini 周／会话额度。
     /// 只读线上核对后固定为脱敏样例，同时验证账号页共用投影没有丢失 Gemini。
-    func testFetcherPrefersCompleteProductionSummaryWithoutUsingModelDirectory() async throws {
+    func testFetcherPreservesCompleteProductionWeeklySummaryWhileCalibratingSession() async throws {
         let session = mockSession()
         defer { session.invalidateAndCancel() }
         let quota = try await AntigravityQuotaFetcher(session: session).fetchQuota(accessToken: "synthetic-partial-daily")

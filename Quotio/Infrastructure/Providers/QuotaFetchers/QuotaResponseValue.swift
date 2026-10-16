@@ -67,8 +67,11 @@ nonisolated enum AntigravityQuotaEndpoints {
     static let hosts = dailyHosts + [productionHost]
     /// 额度汇总先读正式主机：daily 可能成功返回 HTTP 200，却只有 Claude/GPT，
     /// 而同一凭据的正式响应同时含 Gemini。不能把“任意桶有效”误当作所有主机数据一致。
-    /// 正式接口不可用时仍按原规则逐个回退，不拼接不同响应、不以模型目录冒充周期额度。
+    /// 汇总自身仍按原规则逐个回退；五小时额度另用同一身份的运行环境校准，不改写周桶。
     static let summaryHosts = [productionHost] + dailyHosts
+    /// 会话额度按实际执行环境读取。production 的模型与会话桶可能同时返回滚动满额占位，
+    /// 因此不能用它给 daily 会话读取“兜底”，否则会重新覆盖真实消耗和固定重置时间。
+    static let sessionHosts = dailyHosts
     static let userAgent = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)"
 }
 

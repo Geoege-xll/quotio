@@ -340,7 +340,8 @@ actor AntigravityQuotaFetcher {
     }
 
     /// 已导入账号使用凭据中明确的项目；本机 IDE 账号才通过 loadCodeAssist 发现项目。
-    /// 汇总接口不可用时报告失败，不能以模型目录的 100% 替代真实会话／周限额。
+    /// 汇总提供周额度，再以同一凭据的运行环境 quotaInfo 校准五小时桶；
+    /// 汇总不可用时仍报告失败，不能用模型目录的满额占位伪造周额度。
     func fetchQuota(accessToken: String, projectId: String? = nil) async throws -> ProviderQuotaData {
         let resolvedProject: String?
         if let project = QuotaResponseValue.string(projectId) { resolvedProject = project }
@@ -352,7 +353,11 @@ actor AntigravityQuotaFetcher {
             do {
                 let data = try await postCloudCode(urlString: host + "/v1internal:retrieveUserQuotaSummary",
                     accessToken: accessToken, payload: ["project": resolvedProject])
-                guard let models = AntigravityQuotaParser.summaryModels(from: data) else { throw QuotaFetchError.invalidResponse }
+                guard let summary = AntigravityQuotaParser.summaryModels(from: data) else { throw QuotaFetchError.invalidResponse }
+                let liveModels = AntigravityQuotaParser.requiresSessionCalibration(from: data)
+                    ? try await fetchSessionModelData(accessToken: accessToken, projectID: resolvedProject) : nil
+                try Task.checkCancellation()
+                let models = AntigravityQuotaParser.calibratedModels(summaryData: data, liveModelData: liveModels) ?? summary
                 return ProviderQuotaData(models: models, lastUpdated: Date())
             } catch is CancellationError { throw CancellationError() }
             catch { lastError = error }
@@ -361,12 +366,31 @@ actor AntigravityQuotaFetcher {
         throw lastError
     }
 
+    /// 补充读取仍属于本次 fetchQuota 调用，不创建缓存或后台任务。
+    /// 失败保留已取得的周额度，会话桶由解析器标为未知；取消必须向上传播，禁止发布旧结果。
+    private func fetchSessionModelData(accessToken: String, projectID: String) async throws -> Data? {
+        for host in AntigravityQuotaEndpoints.sessionHosts {
+            try Task.checkCancellation()
+            do {
+                let data = try await postCloudCode(urlString: host + "/v1internal:fetchAvailableModels",
+                    accessToken: accessToken, payload: ["project": projectID])
+                guard let models = try? AntigravityQuotaParser.models(from: data),
+                      models.contains(where: { $0.percentage >= 0 }) else { continue }
+                return data
+            } catch is CancellationError { throw CancellationError() }
+            catch { continue }
+        }
+        try Task.checkCancellation()
+        return nil
+    }
+
     private func postCloudCode(urlString: String, accessToken: String, payload: [String: Any]) async throws -> Data {
         guard let url = URL(string: urlString) else {
             throw QuotaFetchError.invalidURL
         }
 
         var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpMethod = "POST"
         request.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.addValue(userAgent, forHTTPHeaderField: "User-Agent")
