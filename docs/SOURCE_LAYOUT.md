@@ -329,6 +329,8 @@ Pi 的路径展开、agent 目录和会话根整体归客户端本地环境契�
 
 Copilot 主机路由及原生配置解析集中于 `Infrastructure/Providers/Copilot`，由原 OAuth、额度与账号目录共用；企业主机随凭据保存，不存为全局默认。Claude 原生 NFC／钥匙串服务名归 `Infrastructure/Providers/QuotaFetchers/ClaudeQuotaCredential.swift`，取数与发现共享规则，不修改公共路径展开或其他客户端目录。原授权与刷新任务宿主、API 账号索引及文件安全边界保留。详见[Copilot GHE.com 与 Claude NFC 适配记录](features/copilot-ghe-and-claude-nfc-2026-10-15.md)。
 
+Antigravity 周期取数归 `Infrastructure/Providers/Antigravity/AntigravityQuotaReader.swift`，与原端点契约成组维护；本地获取器和 CPA 转发注入各自原传输，以同一 Hub 汇总读取五小时、周额度和重置时间。解析器只解析实际周期桶，不再拼接 production 与 daily 或通过模型目录校准。认证、项目发现、订阅缓存及 VM 刷新／会话所有权保持原宿主；[2026-10-17 取数重构记录](features/antigravity-hub-quota-contract-2026-10-17.md)取代此前汇总主机与会话校准策略。
+
 ## 测试目录与共享夹具
 
 布局重入与近期同步改动的[专项复审记录](features/appkit-layout-reentry-and-followup-audit-2026-10-15.md)说明了弹窗尺寸、Copilot 主机／占位身份、历史重键和期限、CLI 渠道与终端参数的边界。`Infrastructure/Process/ShellCommand.swift` 由终端和 CLI 渠道复用，不持有运行状态；历史 Timeline 只驱动可见 UI，不增加取数或采集任务。

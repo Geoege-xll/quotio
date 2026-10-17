@@ -1,5 +1,6 @@
 # Antigravity Gemini 五小时额度与重置时间校准
 
+> 2026-10-17 后续核对：本文中 Antigravity 的旧请求标识／production 优先方案已由 [Hub 周期额度统一契约](antigravity-hub-quota-contract-2026-10-17.md)替代。旧缺组现象与当时的 `cli/1.0.13` 请求身份有关，不能据此认为 production 周额度始终权威；以下保留当时现场及实施历史。
 日期：2026-10-16。基线：`f097e4e`，直接在 `master` 实施。本轮源于 build `1.1.01.2` 实际使用时 Gemini 五小时额度一直满额、倒计时随刷新延后的反馈。
 
 ## 官方周期与参考实现

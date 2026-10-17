@@ -435,8 +435,8 @@ final class MenuBarUpgradeTests: XCTestCase {
         XCTAssertNotNil(codex.submenu?.items.first(where: { $0.submenu != nil })?.submenu?.items.first?.view)
     }
 
-    /// 正式汇总的四个桶从同一份快照进入两处现有布局；不修改账号页面的卡片结构。
-    func testAntigravityProductionSummaryRendersGeminiInAccountAndMenu() async throws {
+    /// Hub 汇总的四个桶从同一份快照进入两处现有布局；不修改账号页面的卡片结构。
+    func testAntigravityHubSummaryRendersGeminiInAccountAndMenu() async throws {
         let f = try fixture(providers: [.antigravity])
         let body = Data(#"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":0.41},{"bucketId":"5h","window":"5h","remainingFraction":0.73}]},{"displayName":"Claude and GPT models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":1},{"bucketId":"5h","window":"5h","remainingFraction":1}]}]}"#.utf8)
         let models = try XCTUnwrap(AntigravityQuotaParser.summaryModels(from: body))
@@ -457,7 +457,7 @@ final class MenuBarUpgradeTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(120))
         for (label, view) in [("账号页", host as NSView), ("菜单栏", menuHost)] {
             let value = text(view)
-            XCTAssertTrue(value.contains("Gemini"), "\(label)应显示正式响应中的 Gemini 额度")
+            XCTAssertTrue(value.contains("Gemini"), "\(label)应显示 Hub 响应中的 Gemini 额度")
             // 账号原布局读取既有共享口径；菜单使用隔离偏好。不修改用户显示偏好来凑断言。
             let expected = label == "账号页" ? MenuBarSettingsManager.shared.quotaDisplayMode.displayValue(from: 41) : 41
             XCTAssertTrue(value.contains(String(format: "%.0f", expected)), "\(label)应按原显示口径呈现同一 Gemini 桶")

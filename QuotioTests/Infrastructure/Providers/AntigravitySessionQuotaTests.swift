@@ -1,227 +1,281 @@
 import XCTest
 @testable import QuotioPlus
 
-/// 针对真实接口差异构造脱敏样例：production 汇总的会话桶为滚动满额，daily quotaInfo 已消耗。
-/// 全部网络由只读闭包或 URLProtocol 替代，不接触真实凭据、不调用生成接口或修改用户配置。
+/// 按同账号、同项目的新旧协议对照结果构造离线夹具，不读取真实凭据或线上服务。
+/// 保留原测试类入口；校准拼接已退出生产，回归改为验证完整周期契约和两种传输的一致性。
 final class AntigravitySessionQuotaTests: XCTestCase {
-    private func decoded(_ text: String) -> Data { Data(text.utf8) }
-
-    func testLiveSessionCorrectsPlaceholderWithoutChangingWeeklyQuotaOrBucketIdentity() throws {
-        let baseline = try XCTUnwrap(AntigravityQuotaParser.summaryModels(from: decoded(SessionQuotaFixture.summary)))
-        let models = try XCTUnwrap(AntigravityQuotaParser.calibratedModels(
-            summaryData: decoded(SessionQuotaFixture.summary), liveModelData: decoded(SessionQuotaFixture.live)
-        ))
-        XCTAssertEqual(Set(models.map(\.id)), Set(baseline.map(\.id)))
-        XCTAssertEqual(models.count, 4)
-        let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: models))
-        XCTAssertEqual(pair.top.remainingPercentage, 62)
-        XCTAssertEqual(models.first { $0.antigravityWindow == .session && $0.percentage == pair.top.remainingPercentage }?.resetTime, "2099-01-01T03:00:00Z")
-        XCTAssertEqual(pair.bottom.remainingPercentage, 41)
-        XCTAssertEqual(models.first { $0.antigravityWindow == .weekly && $0.percentage == pair.bottom.remainingPercentage }?.resetTime, "2099-01-07T00:00:00Z")
-        XCTAssertEqual(models.first { $0.sourceDisplayName?.hasPrefix("Claude") == true && $0.antigravityWindow == .session }?.percentage, 80)
-    }
-
-    func testDifferentNativeReadingsAndUnknownModelsAreKeptIndependently() throws {
-        let live = #"{"models":{"gemini-pro":{"displayName":"Gemini Pro","quotaInfo":{"remainingFraction":0.2,"resetTime":"2099-01-01T02:00:00Z"}},"gemini-flash":{"quotaInfo":{"remainingFraction":0.8,"resetTime":"2099-01-01T04:00:00Z"}},"gemini-unknown":{"quotaInfo":{}},"gemini-disabled":{"disabled":true,"quotaInfo":{"remainingFraction":0}},"chat_internal":{"quotaInfo":{"remainingFraction":0}}}}"#
-        let models = try XCTUnwrap(AntigravityQuotaParser.calibratedModels(
-            summaryData: decoded(SessionQuotaFixture.summary), liveModelData: decoded(live)
-        ))
-        XCTAssertEqual(models.first { $0.name == "gemini-pro" }?.percentage, 20)
-        XCTAssertEqual(models.first { $0.name == "gemini-flash" }?.percentage, 80)
-        XCTAssertEqual(models.first { $0.name == "gemini-unknown" }?.percentage, -1)
-        XCTAssertFalse(models.contains { ["gemini-disabled", "chat_internal"].contains($0.name) })
-        XCTAssertEqual(models.filter { $0.sourceDisplayName?.hasPrefix("Gemini") == true && $0.antigravityWindow == .weekly }.count, 1)
-        let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: models))
-        XCTAssertEqual(pair.top.remainingPercentage, 20)
-        XCTAssertEqual(models.first { $0.name == "gemini-pro" }?.resetTime, "2099-01-01T02:00:00Z")
-        XCTAssertEqual(pair.bottom.remainingPercentage, 41)
-    }
-
-    func testUnavailableOrInvalidLiveDataShowsUnknownSessionAndKeepsActualWeeklyData() throws {
-        for live in [nil, decoded("{}"), decoded(#"{"models":{"gemini-test":{"quotaInfo":{"remainingFraction":true}}}}"#)] {
-            let models = try XCTUnwrap(AntigravityQuotaParser.calibratedModels(
-                summaryData: decoded(SessionQuotaFixture.summary), liveModelData: live
-            ))
-            XCTAssertEqual(models.filter { $0.antigravityWindow == .session }.map(\.percentage), [-1, -1])
-            XCTAssertTrue(models.filter { $0.antigravityWindow == .session }.allSatisfy { $0.resetTime.isEmpty })
-            XCTAssertEqual(models.filter { $0.antigravityWindow == .weekly }.map(\.percentage).sorted(), [41, 90])
+    func testHubSummaryKeepsBothPeriodsAndTheirOwnResetTimes() async throws {
+        let reader = AntigravityQuotaReader { url, payload in
+            XCTAssertEqual(url, "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
+            XCTAssertEqual(try JSONDecoder().decode([String: String].self, from: Data(payload.utf8)), ["project": "fixture-project"])
+            return SessionQuotaFixture.summary(weekly: 0.95, session: 0.84)
         }
+        let models = try await reader.fetch(projectID: "fixture-project")
+        let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: models))
+        XCTAssertEqual(models.count, 4)
+        XCTAssertEqual(pair.top.remainingPercentage, 84)
+        XCTAssertEqual(pair.bottom.remainingPercentage, 95)
+        XCTAssertEqual(models.first { $0.percentage == 84 }?.resetTime, "2099-01-01T03:00:00Z")
+        XCTAssertEqual(models.first { $0.percentage == 95 }?.resetTime, "2099-01-07T00:00:00Z")
+        XCTAssertFalse(models.contains { $0.displayName.contains("Remaining") })
     }
 
-    func testExplicitZeroRemainsExhaustedAndLiveModelsCannotInventWeeklyQuota() throws {
-        let live = decoded(#"{"models":{"gemini-test":{"quotaInfo":{"remainingFraction":0,"resetTime":"2099-01-01T02:00:00Z"}}}}"#)
-        let models = try XCTUnwrap(AntigravityQuotaParser.calibratedModels(summaryData: decoded(SessionQuotaFixture.summary), liveModelData: live))
-        XCTAssertEqual(models.first { $0.sourceDisplayName?.hasPrefix("Gemini") == true && $0.antigravityWindow == .session }?.percentage, 0)
-        XCTAssertNil(AntigravityQuotaParser.calibratedModels(summaryData: decoded(#"{"groups":[]}"#), liveModelData: live))
-        XCTAssertNil(AntigravityQuotaParser.calibratedModels(summaryData: decoded("{}"), liveModelData: live))
-    }
-
-    func testOmittedZeroRequiresAnExplicitValidResetAndDoesNotConvertMalformedValues() throws {
-        // 兼容 Magpie 记录的零值省略行为；这些是构造夹具，不声称本次账号恰好耗尽。
-        let live = #"{"models":{"gemini-exhausted":{"quotaInfo":{"resetTime":"2099-01-01T02:00:00Z"}},"gemini-empty":{"quotaInfo":{}},"gemini-bad-reset":{"quotaInfo":{"resetTime":"bad"}},"gemini-null":{"quotaInfo":{"remainingFraction":null,"resetTime":"2099-01-01T02:00:00Z"}},"gemini-boolean":{"quotaInfo":{"remainingFraction":false,"resetTime":"2099-01-01T02:00:00Z"}},"gemini-nan":{"quotaInfo":{"remainingFraction":"NaN","resetTime":"2099-01-01T02:00:00Z"}}}}"#
-        let models = try AntigravityQuotaParser.models(from: decoded(live))
-        XCTAssertEqual(models.first { $0.name == "gemini-exhausted" }?.percentage, 0)
-        XCTAssertTrue(models.filter { $0.name != "gemini-exhausted" }.allSatisfy { $0.percentage == -1 })
-    }
-
-    func testIndependentAndUnknownSummaryGroupsAreNotReassignedToOneNativePool() throws {
-        let summary = #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"a","window":"5h","remainingFraction":0.3},{"bucketId":"b","window":"5h","remainingFraction":0.9}]},{"displayName":"Gemini Pro","buckets":[{"bucketId":"c","window":"5h","remainingFraction":0.5}]}]}"#
-        let models = try XCTUnwrap(AntigravityQuotaParser.calibratedModels(
-            summaryData: decoded(summary), liveModelData: decoded(SessionQuotaFixture.live)
-        ))
-        XCTAssertEqual(models.count, 3)
-        XCTAssertEqual(models.map(\.percentage).sorted(), [30, 50, 90])
-    }
-
-    func testLocalFetcherUsesNativeSessionQuotaAndMatchingReset() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [SessionQuotaProtocol.self]
-        let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
-        let quota = try await AntigravityQuotaFetcher(session: session).fetchQuota(accessToken: "synthetic-live", projectId: "fixture-project")
-        let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: quota.models))
-        XCTAssertEqual(pair.top.remainingPercentage, 62)
-        XCTAssertEqual(quota.models.first { $0.antigravityWindow == .session && $0.percentage == pair.top.remainingPercentage }?.resetTime, "2099-01-01T03:00:00Z")
-        XCTAssertEqual(pair.bottom.remainingPercentage, 41)
-    }
-
-    func testLocalSupplementFailureRetainsWeeklyAndDoesNotReportFullSession() async throws {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [SessionQuotaProtocol.self]
-        let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
-        let quota = try await AntigravityQuotaFetcher(session: session).fetchQuota(accessToken: "synthetic-unavailable", projectId: "fixture-project")
-        XCTAssertEqual(quota.models.filter { $0.antigravityWindow == .session }.map(\.percentage), [-1, -1])
-        XCTAssertEqual(quota.models.filter { $0.antigravityWindow == .weekly }.map(\.percentage).sorted(), [41, 90])
-    }
-
-    func testCPARepeatedRefreshUsesSameCredentialAndPublishesNewSessionAndResetTogether() async throws {
+    func testTwoCredentialsKeepSeparateWeeklyAndSessionQuotaDespiteSameEmail() async throws {
         let log = SessionQuotaCallLog()
         let fetcher = CPAQuotaFetcher(call: { request in
-            let modelRead = await log.append(request)
-            XCTAssertEqual(request.authIndex, "fixture-auth")
+            await log.append(request.url)
             XCTAssertEqual(request.header?["Authorization"], "Bearer $TOKEN$")
+            XCTAssertEqual(request.header?["User-Agent"], "antigravity/hub/2.23.0 darwin/arm64")
+            let first = request.authIndex == "fixture-a"
+            XCTAssertTrue(first || request.authIndex == "fixture-b")
             if request.url.hasSuffix(":loadCodeAssist") {
-                return APICallResponse(statusCode: 200, header: nil, body: #"{"cloudaicompanionProject":"fixture-project"}"#)
+                // 存量列表项目可以与新发现项目不同；保留用户项目，不能拿辅助订阅覆盖本轮身份。
+                return APICallResponse(statusCode: 200, header: nil, body: #"{"cloudaicompanionProject":"different-discovered-project","currentTier":{"id":"g1-pro-tier"}}"#)
             }
-            XCTAssertTrue(request.data?.contains("fixture-project") == true)
-            if request.url.hasSuffix(":retrieveUserQuotaSummary") {
-                XCTAssertEqual(request.url, "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
-                return APICallResponse(statusCode: 200, header: nil, body: SessionQuotaFixture.summary)
-            }
-            XCTAssertEqual(request.url, "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
-            let body = modelRead == 1 ? SessionQuotaFixture.live : #"{"models":{"gemini-next":{"quotaInfo":{"remainingFraction":0.43,"resetTime":"2099-01-01T04:00:00Z"}}}}"#
-            return APICallResponse(statusCode: 200, header: nil, body: body)
+            XCTAssertEqual(request.url, "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
+            let payload = try JSONDecoder().decode([String: String].self, from: Data(try XCTUnwrap(request.data).utf8))
+            XCTAssertEqual(payload["project"], first ? "project-a" : "project-b")
+            let body = SessionQuotaFixture.summary(weekly: first ? 0.95 : 0.91, session: first ? 0.84 : 0.76)
+            return APICallResponse(statusCode: 200, header: nil, body: String(decoding: body, as: UTF8.self))
         }, download: { _ in
-            XCTFail("项目元数据已足够，不得下载凭据或读取本机其他账号")
+            XCTFail("已有项目时不得下载凭据或回退本机其他账号")
             throw QuotaFetchError.invalidResponse
         })
-        let first = try await fetcher.fetch(file: fixtureAuth())
-        let second = try await fetcher.fetch(file: fixtureAuth())
-        let a = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: first.models))
-        let b = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: second.models))
-        XCTAssertEqual(a.top.remainingPercentage, 62)
-        XCTAssertEqual(first.models.first { $0.antigravityWindow == .session && $0.percentage == a.top.remainingPercentage }?.resetTime, "2099-01-01T03:00:00Z")
-        XCTAssertEqual(b.top.remainingPercentage, 43)
-        XCTAssertEqual(second.models.first { $0.antigravityWindow == .session && $0.percentage == b.top.remainingPercentage }?.resetTime, "2099-01-01T04:00:00Z")
-        XCTAssertEqual(b.bottom.remainingPercentage, 41)
+        let fileA = try fixtureAuth(index: "fixture-a", project: "project-a")
+        let fileB = try fixtureAuth(index: "fixture-b", project: "project-b")
+        XCTAssertNotEqual(fileA.quotaLookupKey, fileB.quotaLookupKey)
+        async let first = fetcher.fetch(file: fileA)
+        async let second = fetcher.fetch(file: fileB)
+        let (a, b) = try await (first, second)
+        let pairA = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: a.models))
+        let pairB = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: b.models))
+        XCTAssertEqual(pairA.top.remainingPercentage, 84)
+        XCTAssertEqual(pairA.bottom.remainingPercentage, 95)
+        XCTAssertEqual(pairB.top.remainingPercentage, 76)
+        XCTAssertEqual(pairB.bottom.remainingPercentage, 91)
+        let urls = await log.urls
+        XCTAssertEqual(urls.filter { $0.hasSuffix(":retrieveUserQuotaSummary") }.count, 2)
+        XCTAssertFalse(urls.contains { $0.hasSuffix(":fetchAvailableModels") })
     }
 
-    func testCPASupplementFailureDoesNotFallbackToProductionModelPlaceholder() async throws {
+    func testCPARepeatedRefreshReplacesBothPeriodsAndTheirResetTimesTogether() async throws {
         let log = SessionQuotaCallLog()
         let fetcher = CPAQuotaFetcher(call: { request in
-            _ = await log.append(request)
+            let read = await log.append(request.url)
+            XCTAssertEqual(request.authIndex, "fixture-auth")
             if request.url.hasSuffix(":loadCodeAssist") {
-                return APICallResponse(statusCode: 200, header: nil, body: #"{"cloudaicompanionProject":"fixture-project"}"#)
+                return APICallResponse(statusCode: 200, header: nil, body: #"{"currentTier":{"id":"g1-pro-tier"}}"#)
             }
-            if request.url.hasSuffix(":retrieveUserQuotaSummary") {
-                return APICallResponse(statusCode: 200, header: nil, body: SessionQuotaFixture.summary)
-            }
-            XCTAssertNotEqual(request.url, "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
-            return APICallResponse(statusCode: 503, header: nil, body: "{}")
+            let first = read == 1
+            let body = SessionQuotaFixture.summary(weekly: first ? 0.95 : 0.91, session: first ? 0.84 : 0.76, next: !first)
+            return APICallResponse(statusCode: 200, header: nil, body: String(decoding: body, as: UTF8.self))
         }, download: { _ in throw QuotaFetchError.invalidResponse })
-        let quota = try await fetcher.fetch(file: fixtureAuth())
-        XCTAssertEqual(quota.models.filter { $0.antigravityWindow == .session }.map(\.percentage), [-1, -1])
-        XCTAssertEqual(quota.models.filter { $0.antigravityWindow == .weekly }.map(\.percentage).sorted(), [41, 90])
-        let reads = await log.modelReads
-        XCTAssertEqual(reads, 2)
+        let file = try fixtureAuth()
+        let first = try await fetcher.fetch(file: file)
+        let second = try await fetcher.fetch(file: file)
+        XCTAssertEqual(first.models.first { $0.percentage == 95 }?.resetTime, "2099-01-07T00:00:00Z")
+        XCTAssertEqual(second.models.first { $0.percentage == 91 }?.resetTime, "2099-01-08T00:00:00Z")
+        XCTAssertEqual(second.models.first { $0.percentage == 76 }?.resetTime, "2099-01-01T04:00:00Z")
+        XCTAssertEqual(Set(first.models.map(\.id)), Set(second.models.map(\.id)))
     }
 
-    func testUnknownOrAmbiguousSessionGroupsDoNotStartUnnecessaryNativeRequests() async throws {
-        let fixtures = [
-            #"{"groups":[{"displayName":"Gemini Pro","buckets":[{"window":"5h","remainingFraction":0.3}]}]}"#,
-            #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"a","window":"5h","remainingFraction":0.3},{"bucketId":"b","window":"5h","remainingFraction":0.9}]}]}"#,
-            #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.3}]}]}"#
-        ]
-        for fixture in fixtures {
-            let log = SessionQuotaCallLog()
-            let fetcher = CPAQuotaFetcher(call: { request in
-                _ = await log.append(request)
-                if request.url.hasSuffix(":loadCodeAssist") {
-                    return APICallResponse(statusCode: 200, header: nil, body: #"{"cloudaicompanionProject":"fixture-project"}"#)
-                }
-                XCTAssertTrue(request.url.hasSuffix(":retrieveUserQuotaSummary"), "无法校准时不应等待额外目录请求")
-                return APICallResponse(statusCode: 200, header: nil, body: fixture)
-            }, download: { _ in throw QuotaFetchError.invalidResponse })
-            let quota = try await fetcher.fetch(file: fixtureAuth())
-            XCTAssertFalse(quota.models.isEmpty)
-            let reads = await log.modelReads
-            XCTAssertEqual(reads, 0)
-        }
+    func testLocalFetcherUsesSameHubSummaryContractWithoutModelSupplement() async throws {
+        let session = mockSession()
+        defer { session.invalidateAndCancel() }
+        let quota = try await AntigravityQuotaFetcher(session: session).fetchQuota(accessToken: "fixture-daily", projectId: "fixture-project")
+        let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: quota.models))
+        XCTAssertEqual(pair.top.remainingPercentage, 84)
+        XCTAssertEqual(pair.bottom.remainingPercentage, 95)
+        XCTAssertEqual(quota.models.count, 4)
     }
 
-    func testCancellationDuringNativeSupplementIsNotConvertedToSuccessfulSummary() async throws {
+    func testLocalFallbackStaysInAntigravityExecutionEnvironment() async throws {
+        let session = mockSession()
+        defer { session.invalidateAndCancel() }
+        let quota = try await AntigravityQuotaFetcher(session: session).fetchQuota(accessToken: "fixture-fallback", projectId: "fixture-project")
+        XCTAssertEqual(quota.models.first { $0.percentage == 95 }?.resetTime, "2099-01-07T00:00:00Z")
+    }
+
+    func testUnavailableDailyEndpointsNeverReadProductionPlaceholderOrModelDirectory() async throws {
         let log = SessionQuotaCallLog()
+        let reader = AntigravityQuotaReader { url, _ in
+            await log.append(url)
+            throw QuotaFetchError.httpError(503)
+        }
+        do {
+            _ = try await reader.fetch(projectID: "fixture-project")
+            XCTFail("无法读取真实额度时必须失败，不能用其他环境的 100% 剩余伪造成功")
+        } catch QuotaFetchError.httpError(503) {} catch { XCTFail("应保留真实读取错误：\(error)") }
+        let urls = await log.urls
+        XCTAssertEqual(urls, [
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary"
+        ])
+    }
+
+    func testCPAFailureCannotPublishFalseFullQuota() async throws {
         let fetcher = CPAQuotaFetcher(call: { request in
-            _ = await log.append(request)
             if request.url.hasSuffix(":loadCodeAssist") {
-                return APICallResponse(statusCode: 200, header: nil, body: #"{"cloudaicompanionProject":"fixture-project"}"#)
+                return APICallResponse(statusCode: 200, header: nil, body: #"{"currentTier":{"id":"g1-pro-tier"}}"#)
             }
-            if request.url.hasSuffix(":retrieveUserQuotaSummary") {
-                return APICallResponse(statusCode: 200, header: nil, body: SessionQuotaFixture.summary)
-            }
-            throw CancellationError()
+            XCTAssertTrue(request.url.contains("daily-cloudcode-pa"))
+            XCTAssertTrue(request.url.hasSuffix(":retrieveUserQuotaSummary"))
+            return APICallResponse(statusCode: 503, header: nil, body: "{}")
         }, download: { _ in throw QuotaFetchError.invalidResponse })
         do {
             _ = try await fetcher.fetch(file: fixtureAuth())
-            XCTFail("取消必须传播，不能让旧会话返回成功快照")
-        } catch { XCTAssertTrue(error is CancellationError) }
-        let reads = await log.modelReads
-        XCTAssertEqual(reads, 1)
+            XCTFail("应交由原刷新宿主保留旧值并标记失败")
+        } catch QuotaFetchError.httpError(503) {} catch { XCTFail("应保留真实读取错误：\(error)") }
     }
 
-    private func fixtureAuth() throws -> AuthFile {
-        try JSONDecoder().decode(AuthFile.self, from: decoded(#"{"name":"fixture.json","provider":"antigravity","auth_index":"fixture-auth","metadata":{"project_id":"fixture-project"}}"#))
+    func testUnknownSummaryRetriesAndExplicitZeroRemainsExhausted() async throws {
+        let log = SessionQuotaCallLog()
+        let reader = AntigravityQuotaReader { url, _ in
+            let read = await log.append(url)
+            if read == 1 { return Data(#"{"groups":[{"buckets":[{"window":"weekly","remainingFraction":null}]}]}"#.utf8) }
+            return SessionQuotaFixture.summary(weekly: 0, session: 0.84)
+        }
+        let models = try await reader.fetch(projectID: "fixture-project")
+        XCTAssertEqual(models.first { $0.sourceDisplayName?.hasPrefix("Gemini") == true && $0.antigravityWindow == .weekly }?.percentage, 0)
+        let urls = await log.urls
+        XCTAssertEqual(urls.count, 2)
+    }
+
+    func testIndependentOrPartialBucketsAreNotRebuiltFromModelFamilies() async throws {
+        let fixture = Data(#"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":0.31}]},{"displayName":"Independent","buckets":[{"bucketId":"a","window":"5h","remainingFraction":0.4},{"bucketId":"b","window":"5h","remainingFraction":0.8}]}]}"#.utf8)
+        let reader = AntigravityQuotaReader { _, _ in fixture }
+        let models = try await reader.fetch(projectID: "fixture-project")
+        XCTAssertEqual(models.count, 3)
+        XCTAssertEqual(models.filter { $0.antigravityWindow == .session }.map(\.percentage).sorted(), [40, 80])
+        XCTAssertEqual(models.filter { $0.antigravityWindow == .weekly }.map(\.percentage), [31])
+        XCTAssertFalse(models.contains { $0.sourceDisplayName?.hasPrefix("Gemini") == true && $0.antigravityWindow == .session })
+    }
+
+    func testCancellationStopsFallback() async throws {
+        let log = SessionQuotaCallLog()
+        let reader = AntigravityQuotaReader { url, _ in
+            await log.append(url)
+            throw CancellationError()
+        }
+        do {
+            _ = try await reader.fetch(projectID: "fixture-project")
+            XCTFail("取消不得触发另一个端点或返回成功")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        let urls = await log.urls
+        XCTAssertEqual(urls.count, 1)
+    }
+
+    func testLateResponseAfterCancellationCannotBecomeSuccessfulSnapshot() async throws {
+        let gate = SessionQuotaResponseGate()
+        let reader = AntigravityQuotaReader { _, _ in
+            await gate.suspendResponse()
+            return SessionQuotaFixture.summary(weekly: 0.95, session: 0.84)
+        }
+        let task = Task { try await reader.fetch(projectID: "fixture-project") }
+        await gate.waitForRequest()
+        task.cancel()
+        // 模拟未传播取消的传输层，主动放回旧响应；Reader 必须在解析提交前拒绝它。
+        await gate.resumeResponse()
+        do {
+            _ = try await task.value
+            XCTFail("迟到响应不能成为成功快照")
+        } catch { XCTAssertTrue(error is CancellationError) }
+    }
+
+    func testEmptyProjectDoesNotStartNetworkRequest() async throws {
+        let reader = AntigravityQuotaReader { _, _ in
+            XCTFail("没有明确项目时不得查询其他账号或默认项目")
+            return Data()
+        }
+        do {
+            _ = try await reader.fetch(projectID: " \n ")
+            XCTFail("空项目应失败")
+        } catch { XCTAssertTrue(error is QuotaFetchError) }
+    }
+
+    func testLocalForbiddenPreservesExistingAccountStatus() async throws {
+        let session = mockSession()
+        defer { session.invalidateAndCancel() }
+        let quota = try await AntigravityQuotaFetcher(session: session).fetchQuota(accessToken: "fixture-forbidden", projectId: "fixture-project")
+        XCTAssertTrue(quota.isForbidden)
+        XCTAssertTrue(quota.models.isEmpty)
+    }
+
+    private func mockSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [SessionQuotaProtocol.self]
+        return URLSession(configuration: config)
+    }
+
+    private func fixtureAuth(index: String = "fixture-auth", project: String = "fixture-project") throws -> AuthFile {
+        let object = ["name": index + ".json", "provider": "antigravity", "auth_index": index,
+                      "email": "same@example.com", "metadata": ["project_id": project]] as [String: Any]
+        return try JSONDecoder().decode(AuthFile.self, from: JSONSerialization.data(withJSONObject: object))
     }
 }
 
 nonisolated private enum SessionQuotaFixture {
-    static let summary = #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.41,"resetTime":"2099-01-07T00:00:00Z"},{"bucketId":"gemini-5h","window":"5h","remainingFraction":1,"resetTime":"2099-01-01T05:00:00Z"}]},{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.9,"resetTime":"2099-01-07T01:00:00Z"},{"bucketId":"3p-5h","window":"5h","remainingFraction":1,"resetTime":"2099-01-01T05:00:00Z"}]}]}"#
-    static let live = #"{"models":{"gemini-flash":{"quotaInfo":{"remainingFraction":0.62,"resetTime":"2099-01-01T03:00:00Z"}},"gemini-pro":{"quotaInfo":{"remainingFraction":0.62,"resetTime":"2099-01-01T03:00:00Z"}},"claude-test":{"quotaInfo":{"remainingFraction":0.8,"resetTime":"2099-01-01T02:00:00Z"}},"gpt-oss-test":{"quotaInfo":{"remainingFraction":0.8,"resetTime":"2099-01-01T02:00:00Z"}}}}"#
-}
-
-/// 计数只属于单个测试实例，避免全局可变 handler 让不同账号或用例互相污染。
-private actor SessionQuotaCallLog {
-    private(set) var modelReads = 0
-    func append(_ request: APICallRequest) -> Int {
-        if request.url.hasSuffix(":fetchAvailableModels") { modelReads += 1 }
-        return modelReads
+    /// 两周期故意使用不同数值及重置时间，能发现互换周期、跨响应拼接及连续刷新保留旧值。
+    static func summary(weekly: Double, session: Double, next: Bool = false) -> Data {
+        let weeklyReset = next ? "2099-01-08T00:00:00Z" : "2099-01-07T00:00:00Z"
+        let sessionReset = next ? "2099-01-01T04:00:00Z" : "2099-01-01T03:00:00Z"
+        return Data("""
+        {"groups":[{"displayName":"Gemini Models","buckets":[
+          {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":\(weekly),"resetTime":"\(weeklyReset)"},
+          {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":\(session),"resetTime":"\(sessionReset)"}
+        ]},{"displayName":"Claude and GPT models","buckets":[
+          {"bucketId":"3p-weekly","window":"weekly","remainingFraction":1},
+          {"bucketId":"3p-5h","window":"5h","remainingFraction":1}
+        ]}]}
+        """.utf8)
     }
 }
 
-/// 所有请求都被本地拦截；补查失败时两个 daily 端点返回 503，不允许落到真实网络。
+private actor SessionQuotaCallLog {
+    private(set) var urls: [String] = []
+    @discardableResult
+    func append(_ url: String) -> Int {
+        urls.append(url)
+        return urls.filter { $0.hasSuffix(":retrieveUserQuotaSummary") }.count
+    }
+}
+
+/// 门闩仅属于单个测试；用 continuation 建立确切取消顺序，不使用 sleep 或可变全局 handler。
+private actor SessionQuotaResponseGate {
+    private var response: CheckedContinuation<Void, Never>?
+    private var observer: CheckedContinuation<Void, Never>?
+    func suspendResponse() async {
+        await withCheckedContinuation { continuation in
+            response = continuation
+            observer?.resume()
+            observer = nil
+        }
+    }
+    func waitForRequest() async {
+        guard response == nil else { return }
+        await withCheckedContinuation { observer = $0 }
+    }
+    func resumeResponse() {
+        response?.resume()
+        response = nil
+    }
+}
+
+/// 校验本地传输的 Hub 身份及禁缓存契约；所有请求均离线拦截，生产主机或模型补查立即失败。
 nonisolated private final class SessionQuotaProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalCacheData)
-        let summary = request.url?.path.hasSuffix(":retrieveUserQuotaSummary") == true
-        let unavailable = request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-unavailable"
-        let status = !summary && unavailable ? 503 : 200
-        let body = summary ? SessionQuotaFixture.summary : SessionQuotaFixture.live
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "antigravity/hub/2.23.0 darwin/arm64")
+        XCTAssertTrue(request.url?.host?.contains("daily-cloudcode-pa") == true)
+        XCTAssertTrue(request.url?.path.hasSuffix(":retrieveUserQuotaSummary") == true)
+        let auth = request.value(forHTTPHeaderField: "Authorization")
+        let status = auth == "Bearer fixture-forbidden" ? 403 :
+            (auth == "Bearer fixture-fallback" && request.url?.host == "daily-cloudcode-pa.googleapis.com" ? 503 : 200)
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocol(self, didLoad: SessionQuotaFixture.summary(weekly: 0.95, session: 0.84))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}

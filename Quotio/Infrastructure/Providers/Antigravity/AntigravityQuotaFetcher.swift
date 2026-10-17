@@ -339,52 +339,26 @@ actor AntigravityQuotaFetcher {
         }
     }
 
-    /// 已导入账号使用凭据中明确的项目；本机 IDE 账号才通过 loadCodeAssist 发现项目。
-    /// 汇总提供周额度，再以同一凭据的运行环境 quotaInfo 校准五小时桶；
-    /// 汇总不可用时仍报告失败，不能用模型目录的满额占位伪造周额度。
+    /// 已导入账号使用凭据中明确的项目；本机 IDE 账号才通过原订阅缓存发现项目。
+    /// 本地与 CPA 共用同一额度契约，五小时及周额度取自同一次 Antigravity 汇总。
+    /// 原 actor 继续持有认证、URLSession 与套餐缓存，不新增任务或改变外层会话提交所有权。
     func fetchQuota(accessToken: String, projectId: String? = nil) async throws -> ProviderQuotaData {
         let resolvedProject: String?
         if let project = QuotaResponseValue.string(projectId) { resolvedProject = project }
         else { resolvedProject = await fetchProjectId(accessToken: accessToken) }
-        guard let resolvedProject else { throw QuotaFetchError.invalidResponse }
-        var lastError: Error = QuotaFetchError.invalidResponse
-        for host in AntigravityQuotaEndpoints.summaryHosts {
-            try Task.checkCancellation()
-            do {
-                let data = try await postCloudCode(urlString: host + "/v1internal:retrieveUserQuotaSummary",
-                    accessToken: accessToken, payload: ["project": resolvedProject])
-                guard let summary = AntigravityQuotaParser.summaryModels(from: data) else { throw QuotaFetchError.invalidResponse }
-                let liveModels = AntigravityQuotaParser.requiresSessionCalibration(from: data)
-                    ? try await fetchSessionModelData(accessToken: accessToken, projectID: resolvedProject) : nil
-                try Task.checkCancellation()
-                let models = AntigravityQuotaParser.calibratedModels(summaryData: data, liveModelData: liveModels) ?? summary
-                return ProviderQuotaData(models: models, lastUpdated: Date())
-            } catch is CancellationError { throw CancellationError() }
-            catch { lastError = error }
-        }
-        if case QuotaFetchError.httpError(403) = lastError { return ProviderQuotaData(isForbidden: true) }
-        throw lastError
-    }
-
-    /// 补充读取仍属于本次 fetchQuota 调用，不创建缓存或后台任务。
-    /// 失败保留已取得的周额度，会话桶由解析器标为未知；取消必须向上传播，禁止发布旧结果。
-    private func fetchSessionModelData(accessToken: String, projectID: String) async throws -> Data? {
-        for host in AntigravityQuotaEndpoints.sessionHosts {
-            try Task.checkCancellation()
-            do {
-                let data = try await postCloudCode(urlString: host + "/v1internal:fetchAvailableModels",
-                    accessToken: accessToken, payload: ["project": projectID])
-                guard let models = try? AntigravityQuotaParser.models(from: data),
-                      models.contains(where: { $0.percentage >= 0 }) else { continue }
-                return data
-            } catch is CancellationError { throw CancellationError() }
-            catch { continue }
-        }
         try Task.checkCancellation()
-        return nil
+        guard let resolvedProject else { throw QuotaFetchError.invalidResponse }
+        let reader = AntigravityQuotaReader { url, payload in
+            try await self.postCloudCode(urlString: url, accessToken: accessToken, payload: payload)
+        }
+        do {
+            let models = try await reader.fetch(projectID: resolvedProject)
+            try Task.checkCancellation()
+            return ProviderQuotaData(models: models, lastUpdated: Date())
+        } catch QuotaFetchError.httpError(403) { return ProviderQuotaData(isForbidden: true) }
     }
 
-    private func postCloudCode(urlString: String, accessToken: String, payload: [String: Any]) async throws -> Data {
+    private func postCloudCode(urlString: String, accessToken: String, payload: String) async throws -> Data {
         guard let url = URL(string: urlString) else {
             throw QuotaFetchError.invalidURL
         }
@@ -395,7 +369,7 @@ actor AntigravityQuotaFetcher {
         request.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.addValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        request.httpBody = Data(payload.utf8)
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {

@@ -121,50 +121,22 @@ nonisolated struct CPAQuotaFetcher: Sendable {
                 guard let discoveredProject else { throw QuotaFetchError.invalidResponse }
                 project = discoveredProject
             }
-            let payload = String(decoding: try JSONEncoder().encode(["project": project]), as: UTF8.self)
-            var lastError: Error = QuotaFetchError.invalidResponse
-            for host in AntigravityQuotaEndpoints.summaryHosts {
-                try Task.checkCancellation()
-                do {
-                    let body = try await request(index: index, url: host + "/v1internal:retrieveUserQuotaSummary",
-                                                 headers: headers, payload: payload)
-                    guard let summary = AntigravityQuotaParser.summaryModels(from: body) else { throw QuotaFetchError.invalidResponse }
-                    // 补查使用完全相同的 authIndex、$TOKEN$ 和项目，不读取本机另一个同邮箱账号。
-                    // production 汇总保留真实周额度；daily quotaInfo 只校准五小时桶及其重置时间。
-                    let liveModels = AntigravityQuotaParser.requiresSessionCalibration(from: body)
-                        ? try await loadAntigravitySessionModels(index: index, headers: headers, payload: payload) : nil
-                    let models = AntigravityQuotaParser.calibratedModels(summaryData: body, liveModelData: liveModels) ?? summary
-                    let subscriptionInfo = await subscription
-                    try Task.checkCancellation()
-                    return ProviderQuotaData(
-                        models: models,
-                        planType: subscriptionInfo.flatMap(CPAQuotaProfileMapper.antigravityPlan) ?? metadata.plan,
-                        subscriptionInfo: subscriptionInfo
-                    )
-                } catch is CancellationError { throw CancellationError() }
-                catch { lastError = error }
+            // 把本轮精确凭据绑定到原管理客户端，统一 Reader 只负责 Antigravity 协议。
+            // 项目、authIndex、令牌占位符始终成组使用；不读取本机另一个账号，不跨环境拼接周期。
+            let quotaHeaders = headers
+            let reader = AntigravityQuotaReader { url, payload in
+                try await request(index: index, url: url, headers: quotaHeaders, payload: payload)
             }
-            // 模型级 quotaInfo 只能证明五小时额度，不能在汇总失败后伪造周额度或整账号满额。
-            throw lastError
+            let models = try await reader.fetch(projectID: project)
+            let subscriptionInfo = await subscription
+            try Task.checkCancellation()
+            return ProviderQuotaData(
+                models: models,
+                planType: subscriptionInfo.flatMap(CPAQuotaProfileMapper.antigravityPlan) ?? metadata.plan,
+                subscriptionInfo: subscriptionInfo
+            )
         default: throw QuotaFetchError.invalidResponse
         }
-    }
-
-    /// 原管理客户端继续唯一承载传输，全部走 CPA v8 的 /requests/api-call。
-    /// 补充接口失败保留周额度、会话显示未知；取消不吞掉，也不新增状态、Task 或账号回退。
-    private func loadAntigravitySessionModels(index: String, headers: [String: String], payload: String) async throws -> Data? {
-        for host in AntigravityQuotaEndpoints.sessionHosts {
-            try Task.checkCancellation()
-            do {
-                let data = try await request(index: index, url: host + "/v1internal:fetchAvailableModels", headers: headers, payload: payload)
-                guard let models = try? AntigravityQuotaParser.models(from: data),
-                      models.contains(where: { $0.percentage >= 0 }) else { continue }
-                return data
-            } catch is CancellationError { throw CancellationError() }
-            catch { continue }
-        }
-        try Task.checkCancellation()
-        return nil
     }
 
     /// 使用 Result 保留每个计费接口独立的成功或失败，避免一个接口抛错取消另一个有效查询。

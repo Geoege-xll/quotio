@@ -1,5 +1,6 @@
 # 菜单栏真实级联审计与 Antigravity Gemini 额度修复
 
+> 2026-10-17 后续核对：本文中 Antigravity 的旧请求标识／production 优先方案已由 [Hub 周期额度统一契约](antigravity-hub-quota-contract-2026-10-17.md)替代。旧缺组现象与当时的 `cli/1.0.13` 请求身份有关，不能据此认为 production 周额度始终权威；以下保留当时现场及实施历史。
 日期：2026-10-16。基线：`4632030`，直接在 `master` 工作。
 
 后续实测补充：本记录的主机顺序修复解决 Gemini 桶缺失，但 production 五小时桶仍可能成功返回滚动满额占位。当前取数规则已由[五小时额度与重置时间校准](antigravity-session-quota-calibration-2026-10-16.md)补齐：周额度保留汇总，五小时从同一身份的 daily 模型额度校准。下文保留当时取证与验证历史，不应据此继续采用只读汇总的旧方案。

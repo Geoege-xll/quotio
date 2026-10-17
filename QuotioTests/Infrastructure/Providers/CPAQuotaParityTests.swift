@@ -111,14 +111,14 @@ final class CPAQuotaParityTests: XCTestCase {
         let requests = await log.requests
         // 并发套餐请求没有固定完成顺序，只对顺序回退的额度请求验证主机顺序。
         let summaries = requests.filter { $0.url.hasSuffix(":retrieveUserQuotaSummary") }
-        XCTAssertEqual(summaries.count, 3)
-        XCTAssertTrue(summaries[0].url.hasPrefix("https://cloudcode-pa.googleapis.com/"))
-        XCTAssertTrue(summaries[1].url.hasPrefix("https://daily-cloudcode-pa.googleapis.com/"))
+        XCTAssertEqual(summaries.count, 2)
+        XCTAssertTrue(summaries[0].url.hasPrefix("https://daily-cloudcode-pa.googleapis.com/"))
+        XCTAssertTrue(summaries[1].url.hasPrefix("https://daily-cloudcode-pa.sandbox.googleapis.com/"))
         XCTAssertEqual(requests.filter { $0.url.hasSuffix(":loadCodeAssist") }.count, 1)
         XCTAssertFalse(requests.contains { $0.url.contains("fetchAvailableModels") })
     }
 
-    func testCPAAntigravityPrefersProductionSummaryWithGeminiAndClaudeForExactCredential() async throws {
+    func testCPAAntigravityUsesHubSummaryWithGeminiAndClaudeForExactCredential() async throws {
         let log = RequestLog()
         let fetcher = CPAQuotaFetcher(call: { request in
             await log.append(request)
@@ -127,12 +127,8 @@ final class CPAQuotaParityTests: XCTestCase {
             if request.url.hasSuffix(":loadCodeAssist") {
                 return APICallResponse(statusCode: 200, header: nil, body: #"{"cloudaicompanionProject":"fixture-project"}"#)
             }
-            if request.url.hasSuffix(":fetchAvailableModels") {
-                XCTAssertEqual(request.url, "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")
-                XCTAssertTrue(request.data?.contains("fixture-project") == true)
-                return APICallResponse(statusCode: 200, header: nil, body: #"{"models":{"gemini-test":{"quotaInfo":{"remainingFraction":0.62,"resetTime":"2099-01-01T03:00:00Z"}},"claude-test":{"quotaInfo":{"remainingFraction":1}}}}"#)
-            }
-            XCTAssertEqual(request.url, "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
+            XCTAssertEqual(request.header?["User-Agent"], "antigravity/hub/2.23.0 darwin/arm64")
+            XCTAssertEqual(request.url, "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
             XCTAssertTrue(request.data?.contains("fixture-project") == true)
             return APICallResponse(statusCode: 200, header: nil, body: #"{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"weekly","remainingFraction":0.41},{"window":"5h","remainingFraction":0.73}]},{"displayName":"Claude and GPT models","buckets":[{"window":"weekly","remainingFraction":1},{"window":"5h","remainingFraction":1}]}]}"#)
         }, download: { _ in
@@ -143,10 +139,10 @@ final class CPAQuotaParityTests: XCTestCase {
         let quota = try await fetcher.fetch(file: file)
         XCTAssertEqual(quota.models.count, 4)
         XCTAssertEqual(AntigravityDisplayGroup.make(from: quota.models).filter { $0.name.hasPrefix("Gemini") }.count, 2)
-        XCTAssertEqual(quota.models.first { $0.sourceDisplayName?.hasPrefix("Gemini") == true && $0.antigravityWindow == .session }?.percentage, 62)
+        XCTAssertEqual(quota.models.first { $0.sourceDisplayName?.hasPrefix("Gemini") == true && $0.antigravityWindow == .session }?.percentage, 73)
         let requests = await log.requests
         XCTAssertEqual(requests.filter { $0.url.hasSuffix(":retrieveUserQuotaSummary") }.count, 1)
-        XCTAssertEqual(requests.filter { $0.url.hasSuffix(":fetchAvailableModels") }.count, 1)
+        XCTAssertEqual(requests.filter { $0.url.hasSuffix(":fetchAvailableModels") }.count, 0)
     }
 
     func testCPAClaudeDoesNotDownloadCredentialsOrUseLocalQuotaCache() async throws {

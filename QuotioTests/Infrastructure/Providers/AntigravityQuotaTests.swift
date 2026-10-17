@@ -12,38 +12,38 @@ final class AntigravityQuotaTests: XCTestCase {
     }
 
     func testNewModelVersionsAndThirdPartyModelsKeepIndependentQuota() throws {
-        let input: [String: Any] = ["models": [
-            "gemini-3.1-pro": ["quotaInfo": ["remainingFraction": 0.2]],
-            "gemini-3.5-flash": ["quotaInfo": ["remainingFraction": 0.8]],
-            "gpt-oss-120b": ["quotaInfo": ["remainingFraction": 0.4]],
-            "future-model": ["quotaInfo": ["remainingFraction": 0.6]],
-        ]]
-        let models = try AntigravityQuotaParser.models(from: data(input))
+        // 新型号与未知组仍按上游独立额度池展示，不通过固定家族清单平均或合并。
+        let values: [(String, Double)] = [("gemini-new-pro", 0.2), ("gemini-new-flash", 0.8), ("gpt-oss-new", 0.4), ("future-model", 0.6)]
+        let models = try summary(values.map { name, value in
+            ["groupId": name, "displayName": name, "buckets": [["bucketId": "quota", "remainingFraction": value]]]
+        })
         let rows = AntigravityDisplayGroup.make(from: models)
-        XCTAssertEqual(rows.map(\.name), ["gemini-3.1-pro", "gpt-oss-120b", "future-model", "gemini-3.5-flash"])
         XCTAssertEqual(rows.map(\.percentage), [20, 40, 60, 80])
+        for (row, name) in zip(rows, ["gemini-new-pro", "gpt-oss-new", "future-model", "gemini-new-flash"]) {
+            XCTAssertTrue(row.name.hasPrefix(name))
+        }
         XCTAssertEqual(AntigravityDisplayGroup.lowestRemaining(in: models), 20)
         XCTAssertNil(MenuBarQuotaPair.resolve(for: .antigravity, from: models))
     }
 
     func testMissingNullBooleanAndNonfiniteQuotaStayUnknownWhileZeroIsExhausted() throws {
-        let input: [String: Any] = ["models": [
-            "missing": ["quotaInfo": [:]],
-            "null": ["quotaInfo": ["remainingFraction": NSNull()]],
-            "boolean": ["quotaInfo": ["remainingFraction": true]],
-            "infinity": ["quotaInfo": ["remainingFraction": "Infinity"]],
-            "nan": ["quotaInfo": ["remainingFraction": "NaN"]],
-            "zero": ["quotaInfo": ["remainingFraction": 0]],
-            "above": ["quotaInfo": ["remainingFraction": 1.2]],
-        ]]
-        let models = try AntigravityQuotaParser.models(from: data(input))
-        for model in models where !["zero", "above"].contains(model.name) {
+        let buckets: [[String: Any]] = [
+            ["id": "missing", "name": "missing"],
+            ["id": "null", "name": "null", "remainingFraction": NSNull()],
+            ["id": "boolean", "name": "boolean", "remainingFraction": true],
+            ["id": "infinity", "name": "infinity", "remainingFraction": "Infinity"],
+            ["id": "nan", "name": "nan", "remainingFraction": "NaN"],
+            ["id": "zero", "name": "zero", "remainingFraction": 0],
+            ["id": "above", "name": "above", "remainingFraction": 1.2],
+        ]
+        let models = try summary([["name": "Values", "buckets": buckets]])
+        for model in models where !["Values · zero", "Values · above"].contains(model.displayName) {
             XCTAssertEqual(model.percentage, -1, model.name)
             XCTAssertEqual(model.formattedPercentage, "—")
         }
-        XCTAssertEqual(models.first { $0.name == "zero" }?.percentage, 0)
-        XCTAssertEqual(models.first { $0.name == "above" }?.percentage, 100)
-        XCTAssertEqual(AntigravityDisplayGroup.make(from: models).first?.name, "zero")
+        XCTAssertEqual(models.first { $0.displayName == "Values · zero" }?.percentage, 0)
+        XCTAssertEqual(models.first { $0.displayName == "Values · above" }?.percentage, 100)
+        XCTAssertEqual(AntigravityDisplayGroup.make(from: models).first?.name, "Values · zero")
     }
 
     func testSameLabelBucketsAndDifferentGeminiGroupsAreNotDropped() throws {
@@ -62,6 +62,41 @@ final class AntigravityQuotaTests: XCTestCase {
         let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: models))
         XCTAssertEqual(pair.top.remainingPercentage, 20)
         XCTAssertEqual(pair.bottom.remainingPercentage, 30)
+    }
+
+    func testOmittedZeroRequiresValidResetWhileMalformedRemainingStaysUnknown() throws {
+        // 汇总与旧模型明细遵循同一 protobuf 零值省略约定；显式坏值不能借重置时间变为耗尽。
+        let reset = "2099-01-07T00:00:00Z"
+        let buckets: [[String: Any]] = [
+            ["id": "omitted", "name": "omitted", "window": "weekly", "resetTime": reset],
+            ["id": "explicit", "name": "explicit", "window": "5h", "remainingFraction": 0, "resetTime": reset],
+            ["id": "empty", "name": "empty"],
+            ["id": "invalid-reset", "name": "invalid-reset", "resetTime": "not-a-date"],
+            ["id": "null", "name": "null", "remainingFraction": NSNull(), "resetTime": reset],
+            ["id": "boolean", "name": "boolean", "remaining_fraction": true, "resetTime": reset],
+            ["id": "nan", "name": "nan", "remainingFraction": "NaN", "resetTime": reset],
+            ["id": "infinity", "name": "infinity", "remainingFraction": "Infinity", "resetTime": reset],
+            ["id": "object", "name": "object", "remaining": [:], "resetTime": reset],
+            ["id": "wrong-case", "name": "wrong-case", "remaining": ["case": "other", "value": 0], "resetTime": reset],
+        ]
+        let models = try summary([["name": "Fixture", "buckets": buckets]])
+        XCTAssertEqual(models.count, buckets.count)
+        for model in models {
+            let exhausted = ["Fixture · omitted", "Fixture · explicit"].contains(model.displayName)
+            XCTAssertEqual(model.percentage, exhausted ? 0 : -1, model.displayName)
+        }
+    }
+
+    func testAllExhaustedOmittedBucketsAreSuccessfulSummary() throws {
+        let models = try summary([["displayName": "Gemini Models", "buckets": [
+            ["id": "weekly", "window": "weekly", "resetTime": "2099-01-07T00:00:00Z"],
+            ["id": "5h", "window": "5h", "resetTime": "2099-01-01T03:00:00Z"],
+        ]]])
+        XCTAssertEqual(models.count, 2)
+        XCTAssertEqual(models.map(\.percentage), [0, 0])
+        let pair = try XCTUnwrap(MenuBarQuotaPair.resolve(for: .antigravity, from: models))
+        XCTAssertEqual(pair.top.remainingPercentage, 0)
+        XCTAssertEqual(pair.bottom.remainingPercentage, 0)
     }
 
     func testDuplicateBucketUsesLowestQuotaWithItsOwnResetTimeRegardlessOfOrder() throws {
@@ -101,8 +136,7 @@ final class AntigravityQuotaTests: XCTestCase {
         ]]]]
         XCTAssertNil(AntigravityQuotaParser.summaryModels(from: try data(input)))
         XCTAssertNil(AntigravityQuotaParser.summaryModels(from: Data("{}".utf8)))
-        XCTAssertThrowsError(try AntigravityQuotaParser.models(from: Data("{}".utf8)))
-        XCTAssertThrowsError(try AntigravityQuotaParser.models(from: Data(#"{"models":{}}"#.utf8)))
+        XCTAssertNil(AntigravityQuotaParser.summaryModels(from: Data(#"{"models":{"gemini-test":{"quotaInfo":{"remainingFraction":1}}}}"#.utf8)))
     }
 
     func testWindowOnlyBucketsArePreservedAlongsideNamedBuckets() throws {
@@ -161,9 +195,9 @@ final class AntigravityQuotaTests: XCTestCase {
         XCTAssertEqual(quota.models[0].antigravityWindow, .weekly)
     }
 
-    /// daily 可以只返回 Claude/GPT 且 HTTP 成功；生产汇总才有同账号的 Gemini 周／会话额度。
-    /// 只读线上核对后固定为脱敏样例，同时验证账号页共用投影没有丢失 Gemini。
-    func testFetcherPreservesCompleteProductionWeeklySummaryWhileCalibratingSession() async throws {
+    /// Hub 请求标识使 daily 完整返回同账号的 Gemini 周／会话额度，不能回到旧 CLI 标识。
+    /// 固定脱敏形状，同时验证账号页共用投影没有丢失 Gemini。
+    func testFetcherPreservesCompleteHubSummaryForAccountPresentation() async throws {
         let session = mockSession()
         defer { session.invalidateAndCancel() }
         let quota = try await AntigravityQuotaFetcher(session: session).fetchQuota(accessToken: "synthetic-partial-daily")
@@ -207,17 +241,17 @@ nonisolated private final class AntigravityQuotaTestProtocol: URLProtocol, @unch
         if path.hasSuffix(":loadCodeAssist") {
             body = #"{"cloudaicompanionProject":"synthetic-project"}"#
         } else if path.hasSuffix(":retrieveUserQuotaSummary") {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "antigravity/hub/2.23.0 darwin/arm64")
+            XCTAssertTrue(request.url?.host?.contains("daily-cloudcode-pa") == true)
             if request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-partial-daily" {
                 let claude = #"{"displayName":"Claude and GPT models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":1},{"bucketId":"5h","window":"5h","remainingFraction":1}]}"#
                 let gemini = #"{"displayName":"Gemini Models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":0.41},{"bucketId":"5h","window":"5h","remainingFraction":0.73}]}"#
-                body = "{\"groups\":[" + (request.url?.host == "cloudcode-pa.googleapis.com" ? gemini + "," : "") + claude + "]}"
+                body = "{\"groups\":[" + gemini + "," + claude + "]}"
             } else {
                 body = request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-summary"
                     ? #"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"weekly","window":"weekly","remainingFraction":0.76}]}]}"#
                     : #"{"groups":[]}"#
             }
-        } else if path.hasSuffix(":fetchAvailableModels") {
-            body = #"{"models":{"gemini-3.1-pro":{"quotaInfo":{"remainingFraction":1}}}}"#
         } else {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return

@@ -56,25 +56,6 @@ nonisolated enum QuotaResponseValue {
     }
 }
 
-/// 共享 Antigravity 接口地址，不共享或记录任何账号令牌。
-nonisolated enum AntigravityQuotaEndpoints {
-    private static let productionHost = "https://cloudcode-pa.googleapis.com"
-    private static let dailyHosts = [
-        "https://daily-cloudcode-pa.googleapis.com",
-        "https://daily-cloudcode-pa.sandbox.googleapis.com"
-    ]
-    // 订阅／项目发现沿用原顺序，避免本次额度修复改变辅助信息的读取语义。
-    static let hosts = dailyHosts + [productionHost]
-    /// 额度汇总先读正式主机：daily 可能成功返回 HTTP 200，却只有 Claude/GPT，
-    /// 而同一凭据的正式响应同时含 Gemini。不能把“任意桶有效”误当作所有主机数据一致。
-    /// 汇总自身仍按原规则逐个回退；五小时额度另用同一身份的运行环境校准，不改写周桶。
-    static let summaryHosts = [productionHost] + dailyHosts
-    /// 会话额度按实际执行环境读取。production 的模型与会话桶可能同时返回滚动满额占位，
-    /// 因此不能用它给 daily 会话读取“兜底”，否则会重新覆盖真实消耗和固定重置时间。
-    static let sessionHosts = dailyHosts
-    static let userAgent = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)"
-}
-
 /// 从 CPA 凭据元数据提取配额请求所需的项目和账号。原始令牌仅用于本地解码 JWT 声明，
 /// 返回值不包含令牌，既不写入统计账本，也不输出到日志。
 nonisolated struct CPAQuotaMetadata: Sendable {
