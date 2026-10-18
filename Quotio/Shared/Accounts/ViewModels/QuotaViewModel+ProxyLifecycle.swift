@@ -52,10 +52,24 @@ extension QuotaViewModel {
 
     /// 完整模式仍先直读额度，再按原偏好决定自动启动代理或启动停服直读定时器；模式选择入口继续留在主类。
     func initializeFullMode() async {
+        await initializeFullMode(
+            refreshQuotas: { await self.refreshQuotasUnified() },
+            shouldAutoStartProxy: { UserDefaults.standard.bool(forKey: "autoStartProxy") }
+        )
+    }
+
+    /// 初始化的外部读取和偏好读取可单独替换，流程仍属于原调用者，不持有新的初始化 Task。
+    private func initializeFullMode(refreshQuotas: () async -> Void, shouldAutoStartProxy: () -> Bool) async {
+        let modeRevision = modeManager.revision
         // Always refresh quotas directly first (works without proxy)
-        await refreshQuotasUnified()
-        
-        let autoStartProxy = UserDefaults.standard.bool(forKey: "autoStartProxy")
+        await refreshQuotas()
+        guard !Task.isCancelled, modeManager.revision == modeRevision, !modeManager.isMonitorMode else { return }
+        // 首轮本地读取可能很慢，用户可在它挂起期间从界面启动 CPA。
+        // 此时 startProxy 已建立 CPA 轮询，原启动流程负责首轮读取；迟到的初始化不能再用
+        // “代理停止时才读取”的循环覆盖同一 refreshTask，否则 CPA 运行期间会永久空转。
+        guard !proxyManager.proxyStatus.running else { return }
+
+        let autoStartProxy = shouldAutoStartProxy()
         if autoStartProxy && proxyManager.isBinaryInstalled {
             await startProxy()
             // Note: checkForProxyUpgrade() is now called inside startProxy()
@@ -64,6 +78,13 @@ extension QuotaViewModel {
             startQuotaAutoRefreshWithoutProxy()
         }
     }
+
+    #if DEBUG
+    /// 仅隔离首轮外部读取与启动偏好，验证真实初始化收尾不会覆盖用户稍早启动的 CPA 定时任务。
+    func initializeFullModeForTesting(refreshQuotas: () async -> Void, shouldAutoStartProxy: () -> Bool) async {
+        await initializeFullMode(refreshQuotas: refreshQuotas, shouldAutoStartProxy: shouldAutoStartProxy)
+    }
+    #endif
 
     /// 启动后的禁用同步保留原目录与偏好来源，每个账号请求前都复核取消、客户端身份和代理运行会话。
     /// Sync local disabled state to backend after proxy starts

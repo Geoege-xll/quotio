@@ -12,6 +12,26 @@ import Foundation
 /// 原 async let、Task、defer、失败回退及挂起后的提交检查完整保留；后台与手动刷新继续各自遵守原合并规则。
 /// 目录提交与失败持久化辅助留在同文件并继续 private，统一收尾继续复用原方法，不另建一套发布或通知逻辑。
 extension QuotaViewModel {
+    /// CPA 定时到期的一轮刷新。调度来自主类唯一 refreshTask，不再检查 lastQuotaRefresh 的机会性节流。
+    /// 目录／密钥仍按原入口读取，返回值继续服务仪表盘的严格完成判定；密钥失败、被新读取取代
+    /// 或正在编辑时，不应阻止独立的账号额度查询。额度获取器会按同一凭据重新读取所需目录。
+    /// 闭包在生产中固定为原批量入口并等待槽位；测试仅缩小外部取数范围，不移动状态或任务所有权。
+    /// 返回值仅表示轮次结束时来源仍有效，供原定时器保留错误恢复计数；不替代目录的成功返回。
+    @discardableResult
+    func refreshScheduledCPAData(refreshQuotas: () async -> Void) async -> Bool {
+        let source = refreshContext()
+        guard !modeManager.isMonitorMode, proxyManager.proxyStatus.running, let client = apiClient else { return false }
+        func isCurrentSource() -> Bool {
+            canUseRefreshSource(source) && !modeManager.isMonitorMode
+                && proxyManager.proxyStatus.running && apiClient === client
+        }
+        guard isCurrentSource() else { return false }
+        _ = await refreshData(refreshQuotas: false)
+        guard isCurrentSource() else { return false }
+        await refreshQuotas()
+        return isCurrentSource()
+    }
+
     /// 本地目录仍先读取再检查账号／模式／代理会话世代，之后按原顺序发布并归一身份。
     /// Load auth files directly from filesystem
     func loadDirectAuthFiles() async {

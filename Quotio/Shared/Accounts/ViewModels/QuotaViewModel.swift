@@ -811,26 +811,51 @@ final class QuotaViewModel {
         )
     }
     
-    /// 启动扩展通过此原入口建立 CPA 轮询；仍先取消旧刷新任务，失败计数、恢复阈值及句柄所有权不变。
+    /// 启动扩展通过原入口建立 CPA 轮询；refreshTask 仍由本类唯一持有。
+    /// 定时到期本身就是额度刷新依据，不再通过 refreshData 内的机会性节流二次判断。
     func startAutoRefresh() {
+        startAutoRefresh(
+            now: { ContinuousClock.now },
+            sleepUntil: { try await ContinuousClock().sleep(until: $0) },
+            refreshQuotas: { await self.refreshAllQuotas(waitForAvailability: true) }
+        )
+    }
+
+    /// 时钟与额度读取仅以闭包注入，便于离线验证到期／取消，不增加状态、Task 或第二个计时器。
+    /// 正式运行固定使用单调时钟及原批量入口；网络耗时不会再与整段刷新间隔重复累计。
+    private func startAutoRefresh(
+        now: @escaping @MainActor () -> ContinuousClock.Instant,
+        sleepUntil: @escaping @MainActor (ContinuousClock.Instant) async throws -> Void,
+        refreshQuotas: @escaping @MainActor () async -> Void
+    ) {
         stopQuotaAutoRefresh()
-        
-        guard let intervalNs = refreshSettings.refreshCadence.intervalNanoseconds else {
+        guard !modeManager.isMonitorMode, proxyManager.proxyStatus.running,
+              let intervalNs = refreshSettings.refreshCadence.intervalNanoseconds else {
             return
         }
-        
+        let modeRevision = modeManager.revision
+        func isCurrentMode() -> Bool {
+            !Task.isCancelled && modeManager.revision == modeRevision && !modeManager.isMonitorMode
+        }
+
         refreshTask = Task {
             var consecutiveFailures = 0
             let maxFailuresBeforeRecovery = max(3, Int(180_000_000_000 / intervalNs))
-            
+            let interval = Duration.nanoseconds(Int64(intervalNs))
+            var nextRefresh = now().advanced(by: interval)
+
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: intervalNs)
-                guard !Task.isCancelled else { break }
+                do { try await sleepUntil(nextRefresh) } catch { break }
+                guard isCurrentMode() else { break }
+
+                // 在原轮询 Task 内完整等待一轮，避免派生的额度任务失去取消归属，
+                // 或被最近的启动／手动批次时间戳挡住后再等一整个周期。
+                // CPA 管理器可自行重启而不重建本 Task，因此会话／客户端只绑定一轮。
+                // 旧轮失效时拒绝继续和写回，保留下个到期点采样新来源，不能永久停掉调度。
+                let completedInSource = await refreshScheduledCPAData(refreshQuotas: refreshQuotas)
+                guard isCurrentMode() else { break }
                 
-                await refreshData()
-                guard !Task.isCancelled else { break }
-                
-                if errorMessage != nil {
+                if completedInSource && errorMessage != nil {
                     consecutiveFailures += 1
                     Log.quota("Refresh failed, consecutive failures: \(consecutiveFailures)")
                     
@@ -845,9 +870,33 @@ final class QuotaViewModel {
                     }
                     consecutiveFailures = 0
                 }
+
+                // 正常请求维持原定周期边界；超长请求或休眠错过边界时不并发补跑多轮。
+                // 已有槽位互斥继续生效，慢轮次完成后重新等待一周期，避免追赶请求风暴。
+                nextRefresh = nextRefresh.advanced(by: interval)
+                let finishedAt = now()
+                if nextRefresh <= finishedAt {
+                    nextRefresh = finishedAt.advanced(by: interval)
+                }
             }
         }
     }
+
+    #if DEBUG
+    /// 测试只替换时钟与外部额度 I/O，真实定时 Task、目录读取、会话保护及菜单通知仍走生产路径。
+    func startCPAAutoRefreshForTesting(
+        now: @escaping @MainActor () -> ContinuousClock.Instant,
+        sleepUntil: @escaping @MainActor (ContinuousClock.Instant) async throws -> Void,
+        refreshQuotas: @escaping @MainActor () async -> Void
+    ) {
+        startAutoRefresh(now: now, sleepUntil: sleepUntil, refreshQuotas: refreshQuotas)
+    }
+
+    /// 只等待主类现有任务结束，供会话失效回归确认旧循环已退出；不暴露句柄或新增任务存储。
+    func waitForQuotaAutoRefreshForTesting() async {
+        await refreshTask?.value
+    }
+    #endif
     
     /// Attempt to recover an unresponsive proxy
     /// 恢复任务继续由主类独立持有；先按原顺序停止，再采样新会话并建立恢复 Task，避免继承已取消的轮询状态。
@@ -872,7 +921,8 @@ final class QuotaViewModel {
         refreshSettings.refreshCadence.intervalSeconds ?? 60
     }
 
-    /// CPA 目录轮询沿用原节流判定：从未启动过额度批次时立即到期，否则使用当前设置的间隔。
+    /// 非定时入口读取 CPA 目录时沿用原机会性节流：从未启动过批次则立即到期，否则按设置间隔判断。
+    /// CPA 自动任务由单调时钟直接判定到期，不再把这个时间戳当成第二道定时门槛。
     /// 此方法同步读取原私有时间和频率，不缓存判断、不推进时间，也不把原字段的 setter 开放给扩展。
     func isQuotaRefreshDueForPolling() -> Bool {
         if let lastRefresh = lastQuotaRefresh {
