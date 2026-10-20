@@ -14,8 +14,9 @@ struct DashboardScreen: View {
 
     @State private var selectedProvider: AIProvider?
     @State private var isImporterPresented = false
-    @State private var selectedAgentForConfig: CLIAgent?
-    @State private var sheetPresentationID = UUID()
+    /// 快捷配置与客户端页使用同一只读呈现契约，避免首次 sheet 捕获另一个 State 中的旧会话。
+    /// 此页面仍只持有自身呈现状态，配置草稿和保存事务继续归原 AgentSetupViewModel。
+    @State private var configurationPresentation: AgentConfigurationPresentation?
 
 
     private var showGettingStarted: Bool {
@@ -98,12 +99,11 @@ struct DashboardScreen: View {
                 }
                 .environment(viewModel)
             }
-            .sheet(item: $selectedAgentForConfig) { (agent: CLIAgent) in
-                let sessionID = sheetPresentationID
-                AgentConfigSheet(viewModel: viewModel.agentSetupViewModel, agent: agent, configurationSessionID: sessionID)
-                    .id(sessionID)
+            .sheet(item: $configurationPresentation) { presentation in
+                AgentConfigSheet(viewModel: viewModel.agentSetupViewModel, agent: presentation.agent, configurationSessionID: presentation.id)
+                    .id(presentation.id)
                     .onDisappear {
-                        viewModel.agentSetupViewModel.dismissConfiguration(sessionID: sessionID)
+                        viewModel.agentSetupViewModel.dismissConfiguration(sessionID: presentation.id)
                         Task { await viewModel.agentSetupViewModel.refreshAgentStatuses() }
                     }
             }
@@ -397,8 +397,8 @@ struct DashboardScreen: View {
 
         // 客户端目录和配置只使用客户端 API key，不能以 v8 管理密钥代替。
         let apiKey = viewModel.apiKeys.first ?? ""
-        sheetPresentationID = viewModel.agentSetupViewModel.startConfiguration(for: firstAgent.agent, apiKey: apiKey)
-        selectedAgentForConfig = firstAgent.agent
+        let sessionID = viewModel.agentSetupViewModel.startConfiguration(for: firstAgent.agent, apiKey: apiKey)
+        configurationPresentation = AgentConfigurationPresentation(id: sessionID, agent: firstAgent.agent)
     }
 
 

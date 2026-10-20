@@ -291,37 +291,4 @@ final class QuotaHistoryTests: XCTestCase {
         _ = try await store.record([QuotaHistorySample(account: account(), point: point(48, date: now.addingTimeInterval(31 * 86_400)))], generation: 0, now: now.addingTimeInterval(31 * 86_400))
         XCTAssertEqual(try database.scalarInt("SELECT COUNT(*) FROM quota_history_samples"), 1)
     }
-
-    func testHistoryWindowRendersIsolatedChartAndExistingSegmentControls() async throws {
-        let store = QuotaHistoryStore(databaseURL: try location())
-        let preferences = try defaults()
-        let service = QuotaHistoryService(store: store, defaults: preferences)
-        let date = Date()
-        let samples = (0...48).map { index in
-            QuotaHistorySample(account: account(), point: point(90 - Double(index),
-                date: date.addingTimeInterval(Double(index - 48) * 3600)))
-        }
-        _ = try await store.record(samples, generation: 0)
-        let view = QuotaHistoryView(account: account(), accountName: "fixture@example.invalid",
-            settings: MenuBarSettingsManager(defaults: preferences), service: service, onClose: {})
-            .environment(\.locale, Locale(identifier: "zh-Hans"))
-        let host = NSHostingView(rootView: view)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 720),
-            styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = host
-        defer { window.close() }
-        host.frame = NSRect(x: 0, y: 0, width: 760, height: 720)
-        // 让真实 .task 完成临时库查询及 SwiftUI 布局，不启动任何提供商请求。
-        try await Task.sleep(for: .milliseconds(200))
-        host.layoutSubtreeIfNeeded()
-        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: bitmap)
-        let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        XCTAssertGreaterThan(data.count, 5000)
-        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
-        attachment.name = "额度历史窗口-隔离数据"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
 }

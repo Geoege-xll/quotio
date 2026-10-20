@@ -73,6 +73,30 @@ extension QuotaViewModel {
         }
     }
 
+    /// DeepSeek 沿用自定义提供商密钥服务，异步读取余额与额度后提交状态。
+    func refreshDeepSeekQuotasInternal() async {
+        let context = refreshContext()
+        let quotas = await fetchLocalQuota(for: .deepseek) { await self.deepseekFetcher.fetchAllQuotas() }
+        guard canCommit(context) else { return }
+        if !quotas.isEmpty {
+            providerQuotas[.deepseek] = quotas
+        } else {
+            providerQuotas.removeValue(forKey: .deepseek)
+        }
+    }
+
+    /// Moonshot (Kimi) 沿用自定义提供商密钥服务，异步读取余额与代金券额度后提交状态。
+    func refreshMoonshotQuotasInternal() async {
+        let context = refreshContext()
+        let quotas = await fetchLocalQuota(for: .moonshot) { await self.moonshotFetcher.fetchAllQuotas() }
+        guard canCommit(context) else { return }
+        if !quotas.isEmpty {
+            providerQuotas[.moonshot] = quotas
+        } else {
+            providerQuotas.removeValue(forKey: .moonshot)
+        }
+    }
+
     /// ClinePass 沿用原获取器和结果提交条件，不增加缓存或跨提供商回退。
     /// Refresh ClinePass quota using API keys from CustomProviderService
     func refreshClinePassQuotasInternal() async {

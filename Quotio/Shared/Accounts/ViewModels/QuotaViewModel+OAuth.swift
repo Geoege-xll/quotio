@@ -55,7 +55,12 @@ extension QuotaViewModel {
             },
             update: { [weak self] in self?.oauthState = $0 },
             openURL: { if launchMode == .autoOpen { NSWorkspace.shared.open($0) } },
-            authorized: { [weak self] in _ = await self?.refreshData() })
+            authorized: { [weak self] in
+                guard let self, self.modeManager.revision == modeRevision, self.apiClient === client,
+                      self.proxyManager.runtimeSessionID == runtimeSession else { return }
+                // 授权新增账号之后复用已有账号变更桥接，菜单由单账号切换到账号池时不能保留旧说明。
+                await self.refreshAfterCPAAccountChange()
+            })
     }
 
     private func startMonitorOAuth(for provider: AIProvider, claudeRevision: UInt64, githubHost: GitHubHost? = nil) async {
@@ -192,9 +197,11 @@ extension QuotaViewModel {
     }
 
     private func startKiroAuth(method: AuthCommand) async {
+        let source = refreshContext(), client = apiClient
         oauthState = OAuthState(provider: .kiro, status: .waiting)
         
         let result = await proxyManager.runAuthCommand(method)
+        guard canUseRefreshSource(source), apiClient === client else { return }
         
         if result.success {
             // Check if it's an import - simply wait and refresh, don't poll for new files (files might already exist)
@@ -209,7 +216,9 @@ extension QuotaViewModel {
                     Log.quota("[Kiro] Refreshed \(refreshedCount) token(s) after import")
                 }
 
-                await refreshData()
+                guard canUseRefreshSource(source), apiClient === client else { return }
+                await refreshAfterCPAAccountChange()
+                guard canUseRefreshSource(source), apiClient === client else { return }
 
                 // For import, we assume success if the command succeeded
                 oauthState = OAuthState(provider: .kiro, status: .success)
@@ -231,15 +240,20 @@ extension QuotaViewModel {
 
     /// Poll for Copilot auth completion by monitoring auth files
     private func pollCopilotAuthCompletion() async {
+        let source = refreshContext(), client = apiClient
         let startFileCount = authFiles.filter { $0.provider == "github-copilot" || $0.provider == "copilot" }.count
         
         for _ in 0..<90 {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard canUseRefreshSource(source), apiClient === client else { return }
             
             await refreshData()
+            guard canUseRefreshSource(source), apiClient === client else { return }
             
             let currentFileCount = authFiles.filter { $0.provider == "github-copilot" || $0.provider == "copilot" }.count
             if currentFileCount > startFileCount {
+                await refreshModelsAfterCPAAccountChange(invalidateModelsAfterCPAAccountChange(source: source))
+                guard canUseRefreshSource(source), apiClient === client else { return }
                 oauthState = OAuthState(provider: .copilot, status: .success)
                 return
             }
@@ -249,12 +263,15 @@ extension QuotaViewModel {
     }
 
     private func pollKiroAuthCompletion() async {
+        let source = refreshContext(), client = apiClient
         let startFileCount = authFiles.filter { $0.provider == "kiro" }.count
 
         for _ in 0..<90 {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard canUseRefreshSource(source), apiClient === client else { return }
 
             await refreshData()
+            guard canUseRefreshSource(source), apiClient === client else { return }
 
             let currentFileCount = authFiles.filter { $0.provider == "kiro" }.count
             if currentFileCount > startFileCount {
@@ -262,7 +279,9 @@ extension QuotaViewModel {
                 if refreshedCount > 0 {
                     Log.quota("[Kiro] Refreshed \(refreshedCount) token(s) after login")
                 }
-                await refreshData()
+                guard canUseRefreshSource(source), apiClient === client else { return }
+                await refreshAfterCPAAccountChange()
+                guard canUseRefreshSource(source), apiClient === client else { return }
                 oauthState = OAuthState(provider: .kiro, status: .success)
                 return
             }

@@ -36,6 +36,8 @@ extension QuotaViewModel {
         await openAIFetcher.updateProxyConfiguration()
         await copilotFetcher.updateProxyConfiguration()
         await glmFetcher.updateProxyConfiguration()
+        await deepseekFetcher.updateProxyConfiguration()
+        await moonshotFetcher.updateProxyConfiguration()
         await claudeCodeFetcher.updateProxyConfiguration()
         await cursorFetcher.updateProxyConfiguration()
         await codexCLIFetcher.updateProxyConfiguration()
@@ -162,6 +164,8 @@ extension QuotaViewModel {
     /// 保留原启动协调器、目录／禁用同步、预热及后续副作用顺序；首轮额度现在明确等待完成。
     func startProxy() async {
         await proxyStartFlow.run { [self] in
+            // 重启／恢复同样先撤销旧目录提交，再由原协调器启动新运行会话；合并等待者不重复执行。
+            invalidateAgentModelSource()
             errorMessage = nil
             do {
                 try await proxyManager.start()

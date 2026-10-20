@@ -195,18 +195,24 @@ final class AgentConfigurationSessionTests: XCTestCase {
                 let starts = (0..<2).map { expectation(description: "保存 \($0)") }
                 let gates = starts.map { Gate<Result<AgentConfigResult, URLError>>($0) }
                 let requests = Sequence(gates)
-                let vm = vm(home: try home(), generate: { _, _, mode, _, _ in
+                // 新生产入口接管目录菜单；会话回归提供真实有效的离线角色映射，
+                // 让保存进入原生成屏障，而不是被“目录为空／原生槽未映射”的校验提前结束。
+                let vm = vm(home: try home(), fetch: { _, _ in
+                    [.init(id: "new-model", name: "new-model", provider: "fixture", isDefault: false)]
+                }, generate: { _, _, mode, _, _ in
                     XCTAssertEqual(mode, .manual)
                     return try await requests.next().get()
                 })
                 let oldID = vm.startConfiguration(for: .claudeCode, apiKey: "same-key")
                 try await ready(vm)
+                vm.currentConfiguration?.modelSlots = Dictionary(uniqueKeysWithValues: ModelSlot.legacyCases.map { ($0, "new-model") })
                 vm.configurationMode = .manual
                 let old = Task { await vm.applyConfiguration(sessionID: oldID) }
                 await fulfillment(of: [starts[0]], timeout: 2)
                 vm.dismissConfiguration(sessionID: oldID)
                 let newID = vm.startConfiguration(for: nextAgent, apiKey: "same-key")
                 try await ready(vm)
+                vm.currentConfiguration?.modelSlots = Dictionary(uniqueKeysWithValues: ModelSlot.legacyCases.map { ($0, "new-model") })
                 vm.currentConfiguration?.codexModel = "new-model"
                 vm.configurationMode = .manual
                 let new = Task { await vm.applyConfiguration(sessionID: newID) }
@@ -230,7 +236,7 @@ final class AgentConfigurationSessionTests: XCTestCase {
         let gate = Gate<AgentConfigResult>(started)
         let vm = vm(home: try home(), generate: { _, _, mode, storage, _ in
             XCTAssertEqual(mode, .manual)
-            XCTAssertEqual(storage, .both)
+            XCTAssertEqual(storage, .jsonOnly, "手动模式不继承自动模式已隐藏的存储选项")
             return await gate.wait()
         })
         draft(vm)
@@ -245,6 +251,94 @@ final class AgentConfigurationSessionTests: XCTestCase {
         await saving.value
         XCTAssertEqual(vm.configResult?.instructions, "manual-result")
         XCTAssertFalse(vm.isConfiguring)
+    }
+
+    /// 同一页恢复后的磁盘回填即使挂起，也必须继续持有原操作互斥。
+    /// 这里拦在实际恢复之后，证明应用和删除都不会越过屏障修改刚恢复的文件／备份。
+    func testRestoreOwnsSameSessionBarrierUntilReadAndCatalogFinish() async throws {
+        let directory = try home()
+        let backup = directory.appendingPathComponent(".claude/settings.json.backup.100")
+        try FileManager.default.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let restored = Data(#"{"env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"restored-model"},"keep":true}"#.utf8)
+        try restored.write(to: backup)
+        let started = expectation(description: "实际恢复后回填挂起")
+        let gate = Gate<AgentConfigurationService.SavedAgentConfig?>(started)
+        let reads = RestoreRead(gate)
+        let vm = vm(home: directory, fetch: { _, _ in
+            [.init(id: "restored-model", name: "restored-model", provider: "fixture", isDefault: false)]
+        }, read: { _ in await reads.read() }, generate: { _, _, _, _, _ in
+            XCTFail("恢复持锁期间不应执行保存")
+            return .failure(error: "unexpected")
+        })
+        let id = vm.startConfiguration(for: .claudeCode, apiKey: "same-key")
+        try await ready(vm)
+        vm.currentConfiguration?.modelSlots[.opus] = "old-before-restore"
+        vm.currentConfiguration?.proxyURL = "https://old-external.invalid/v1"
+        vm.currentConfiguration?.apiKey = "external-key-not-for-cpa"
+        let descriptor = AgentConfigurationService.BackupFile(path: backup.path,
+            timestamp: Date(timeIntervalSince1970: 100), agent: .claudeCode)
+        let restoring = Task { await vm.restoreFromBackup(descriptor, sessionID: id) }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(vm.isConfiguring)
+        XCTAssertTrue(vm.isLoadingConfiguration)
+        await vm.applyConfiguration(sessionID: id)
+        await vm.deleteBackups([descriptor], sessionID: id)
+        await vm.restoreFromBackup(descriptor, sessionID: id)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
+        XCTAssertEqual(try Data(contentsOf: backup.deletingLastPathComponent().appendingPathComponent("settings.json")), restored)
+        XCTAssertNil(vm.configResult)
+        XCTAssertNil(vm.errorMessage)
+        await gate.release(.init(baseURL: "https://fixture.invalid", apiKey: "restored-cpa-key", modelSlots: [.sonnet: "restored-model"],
+            isProxyConfigured: true, backupFiles: []))
+        await restoring.value
+        XCTAssertFalse(vm.isConfiguring)
+        XCTAssertFalse(vm.isLoadingConfiguration)
+        XCTAssertEqual(vm.currentConfiguration?.modelSlots[.sonnet], "restored-model")
+        XCTAssertNil(vm.currentConfiguration?.modelSlots[.opus], "备份中缺失的角色不能从恢复前草稿复活")
+        XCTAssertEqual(vm.currentConfiguration?.apiKey, "restored-cpa-key", "外部草稿的 key 不能随恢复地址带入 CPA")
+        XCTAssertEqual(vm.currentModelCandidates.map(\.id), ["restored-model"])
+    }
+
+    /// 页面回读必须保留原服务和它自己的认证；只有同一当前 CPA 才沿用入口提供的新 key。
+    func testSavedSourceKeepsExternalCredentialsAndSameCPAKeepsCurrentKey() async throws {
+        for (baseURL, expectedURL, expectedKey) in [
+            ("https://external.invalid/proxy", "https://external.invalid/proxy/v1", "saved-key"),
+            ("https://fixture.invalid", "https://fixture.invalid/v1", "new-cpa-key")
+        ] {
+            let vm = vm(home: try home(), fetch: { url, key in
+                XCTAssertEqual(url, expectedURL)
+                XCTAssertEqual(key, expectedKey)
+                return []
+            }, read: { _ in .init(baseURL: baseURL, apiKey: "saved-key", modelSlots: [:],
+                                 isProxyConfigured: true, backupFiles: []) })
+            let id = vm.startConfiguration(for: .claudeCode, apiKey: "new-cpa-key")
+            try await ready(vm)
+            XCTAssertEqual(vm.selectedSetupMode, .proxy)
+            XCTAssertEqual(vm.currentConfiguration?.proxyURL, expectedURL)
+            XCTAssertEqual(vm.currentConfiguration?.apiKey, expectedKey)
+            XCTAssertEqual(vm.usesCPAModelService, baseURL == "https://fixture.invalid")
+            vm.dismissConfiguration(sessionID: id)
+        }
+    }
+
+    /// 保存入口和纯预览必须采取同一份有效手动操作，旧的仅 Shell 选择不应阻断 JSON 方案。
+    func testAutomaticShellOnlyThenManualUsesJSONForValidationPreviewAndSave() async throws {
+        let vm = vm(home: try home(), generate: { _, _, mode, storage, _ in
+            XCTAssertEqual(mode, .manual)
+            XCTAssertEqual(storage, .jsonOnly)
+            return .success(type: .both, mode: .manual, instructions: "json-plan")
+        })
+        draft(vm)
+        vm.currentConfiguration?.claudeModelPicker = .roleDefaults(mode: .append)
+        vm.configStorageOption = .shellOnly
+        XCTAssertNotNil(vm.claudeConfigurationValidationMessage)
+        vm.configurationMode = .manual
+        XCTAssertNil(vm.claudeConfigurationValidationMessage)
+        let preview = await vm.generatePreviewConfig(sessionID: vm.configurationSessionID)
+        XCTAssertEqual(preview?.instructions, "json-plan")
+        await vm.applyConfiguration(sessionID: vm.configurationSessionID)
+        XCTAssertEqual(vm.configResult?.instructions, "json-plan")
+        XCTAssertEqual(vm.configStorageOption, .shellOnly, "有效操作不应偷偷重写用户的自动模式选择")
     }
 
     private actor RestoreRead {

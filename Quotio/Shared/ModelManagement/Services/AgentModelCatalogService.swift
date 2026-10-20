@@ -4,6 +4,12 @@ import Foundation
 /// 实时目录、候选筛选和连接探测共用传输，但各自保留原成功条件、解析、错误和兜底边界。
 /// @concurrent 保持读取及解析在通用执行器执行；原 ViewModel／配置 actor 继续负责提交、取消和状态校验。
 nonisolated enum AgentModelCatalogService {
+    /// 同一次后端读取的两种投影：注册目录证明请求身份，候选保留原 Copilot 可用性筛选。
+    /// 后端是否支持完整 ID 不能由本机某个账号的可用模型集合推断；此值不持有任务或缓存。
+    struct Selection: Sendable {
+        let catalog: [AvailableModel]
+        let candidates: [AvailableModel]
+    }
     /// 只接受原 HTTP 200 及合法目录正文；空列表如实返回，错误如实抛出，不读取候选静态兜底。
     @concurrent
     static func fetchModelCatalog(proxyURL: String, apiKey: String, session: URLSession? = nil) async throws -> [ModelCatalogEntry] {
@@ -24,15 +30,27 @@ nonisolated enum AgentModelCatalogService {
             await CopilotQuotaFetcher().fetchUserAvailableModelIds()
         }
     ) async throws -> [AvailableModel] {
+        try await fetchModelSelection(proxyURL: proxyURL, apiKey: apiKey, session: session,
+                                      fetchCopilotModelIDs: fetchCopilotModelIDs).candidates
+    }
+
+    @concurrent
+    static func fetchModelSelection(
+        proxyURL: String, apiKey: String, session: URLSession? = nil,
+        fetchCopilotModelIDs: @Sendable () async -> Set<String> = {
+            await CopilotQuotaFetcher().fetchUserAvailableModelIds()
+        }
+    ) async throws -> Selection {
         let parsedModels = ModelCatalog.agentSetupModels(from:
             try await fetchModelCatalog(proxyURL: proxyURL, apiKey: apiKey, session: session))
         let availableCopilotModelIds = await fetchCopilotModelIDs()
-        return parsedModels.filter { model in
+        let candidates = parsedModels.filter { model in
             if model.provider == "github-copilot", !availableCopilotModelIds.isEmpty {
                 return availableCopilotModelIds.contains(model.id)
             }
             return true
         }
+        return Selection(catalog: parsedModels, candidates: candidates)
     }
 
     /// 连接探测保留原宽松正文语义：HTTP 200 即可成功，目录不可解析时仅不填 modelResponded。

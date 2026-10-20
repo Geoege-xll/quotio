@@ -146,7 +146,9 @@ extension QuotaViewModel {
             await refreshQuotasDirectly(force: waitForAvailability)
             return
         }
-        let providers: Set<AIProvider> = [.antigravity, .codex, .copilot, .claude, .glm, .warp, .kiro, .clinePass]
+        let providers: Set<AIProvider> = [
+            .antigravity, .codex, .copilot, .claude, .glm, .deepseek, .moonshot, .warp, .kiro, .clinePass,
+        ]
         guard await QuotaRefreshAvailability.acquire(wait: waitForAvailability, claim: {
             beginBatchRefresh(providers: providers)
         }) else { return }
@@ -164,11 +166,13 @@ extension QuotaViewModel {
         async let copilot: () = refreshCopilotQuotasInternal()
         async let claudeCode: () = refreshClaudeCodeQuotasInternal()
         async let glm: () = refreshGlmQuotasInternal()
+        async let deepseek: () = refreshDeepSeekQuotasInternal()
+        async let moonshot: () = refreshMoonshotQuotasInternal()
         async let warp: () = refreshWarpQuotasInternal()
         async let kiro: () = refreshKiroQuotasInternal()
         async let clinePass: () = refreshClinePassQuotasInternal()
 
-        _ = await (antigravity, openai, copilot, claudeCode, glm, warp, kiro, clinePass)
+        _ = await (antigravity, openai, copilot, claudeCode, glm, deepseek, moonshot, warp, kiro, clinePass)
         guard canCommit(batchContext) else { return }
         reconcileAccountQuotaIdentities()
 
@@ -194,7 +198,7 @@ extension QuotaViewModel {
             return
         }
         let providers: Set<AIProvider> = [
-            .antigravity, .codex, .copilot, .claude, .glm, .warp, .kiro, .clinePass,
+            .antigravity, .codex, .copilot, .claude, .glm, .deepseek, .moonshot, .warp, .kiro, .clinePass,
         ]
         guard await QuotaRefreshAvailability.acquire(wait: waitForAvailability, claim: {
             beginBatchRefresh(providers: providers)
@@ -213,11 +217,13 @@ extension QuotaViewModel {
         async let copilot: () = refreshCopilotQuotasInternal()
         async let claudeCode: () = refreshClaudeCodeQuotasInternal()
         async let glm: () = refreshGlmQuotasInternal()
+        async let deepseek: () = refreshDeepSeekQuotasInternal()
+        async let moonshot: () = refreshMoonshotQuotasInternal()
         async let warp: () = refreshWarpQuotasInternal()
         async let kiro: () = refreshKiroQuotasInternal()
         async let clinePass: () = refreshClinePassQuotasInternal()
 
-        _ = await (antigravity, codex, copilot, claudeCode, glm, warp, kiro, clinePass)
+        _ = await (antigravity, codex, copilot, claudeCode, glm, deepseek, moonshot, warp, kiro, clinePass)
         guard canCommit(batchContext) else { return }
         reconcileAccountQuotaIdentities()
 
@@ -266,6 +272,10 @@ extension QuotaViewModel {
             await refreshTraeQuotasInternal()
         case .glm:
             await refreshGlmQuotasInternal()
+        case .deepseek:
+            await refreshDeepSeekQuotasInternal()
+        case .moonshot:
+            await refreshMoonshotQuotasInternal()
         case .warp:
             await refreshWarpQuotasInternal()
         case .kiro:
@@ -351,6 +361,36 @@ extension QuotaViewModel {
             var fetchedQuota = try? await glmFetcher.fetchQuota(apiKey: match.key.apiKey, baseURL: match.provider.baseURL)
             fetchedQuota?.accountDisplayName = match.provider.name
             quota = fetchedQuota
+        case .deepseek:
+            let credentials = CustomProviderService.shared.providers
+                .filter { $0.type == .deepseekCompatibility && $0.isEnabled }
+                .flatMap { provider in
+                    provider.apiKeys.map { (provider: provider, key: $0) }
+                }
+            let exactMatch = credentials.first {
+                DeepSeekQuotaFetcher.quotaAccountKey(providerID: $0.provider.id, apiKeyID: $0.key.id)
+                    == account.accountKey
+            }
+            let legacyMatches = credentials.filter { $0.provider.name == account.accountKey }
+            guard let match = exactMatch ?? (legacyMatches.count == 1 ? legacyMatches.first : nil) else { return }
+            var fetchedQuota = try? await deepseekFetcher.fetchQuota(apiKey: match.key.apiKey, baseURL: match.provider.baseURL)
+            fetchedQuota?.accountDisplayName = match.provider.name
+            quota = fetchedQuota
+        case .moonshot:
+            let credentials = CustomProviderService.shared.providers
+                .filter { $0.type == .moonshotCompatibility && $0.isEnabled }
+                .flatMap { provider in
+                    provider.apiKeys.map { (provider: provider, key: $0) }
+                }
+            let exactMatch = credentials.first {
+                MoonshotQuotaFetcher.quotaAccountKey(providerID: $0.provider.id, apiKeyID: $0.key.id)
+                    == account.accountKey
+            }
+            let legacyMatches = credentials.filter { $0.provider.name == account.accountKey }
+            guard let match = exactMatch ?? (legacyMatches.count == 1 ? legacyMatches.first : nil) else { return }
+            var fetchedQuota = try? await moonshotFetcher.fetchQuota(apiKey: match.key.apiKey, baseURL: match.provider.baseURL)
+            fetchedQuota?.accountDisplayName = match.provider.name
+            quota = fetchedQuota
         case .warp:
             guard let entry = WarpService.shared.tokens.first(where: {
                 $0.isEnabled && $0.name == account.accountKey
@@ -373,7 +413,7 @@ extension QuotaViewModel {
             quota = await openRouterFetcher.fetchQuota(accountKey: account.accountKey)
         case .amp:
             quota = await ampFetcher.fetchQuota(accountKey: account.accountKey)
-        case .qwen, .iflow, .vertex:
+        case .qwen, .iflow, .vertex, .minimax:
             return
         }
 

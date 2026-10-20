@@ -1,5 +1,7 @@
 # Claude Code Fable 与模型菜单展示调整
 
+> 后续兼容性说明（2026-10-19）：本记录中的 CLI 菜单检查只验证展示，未验证选中后的实际请求。旧 Magpie 选择器切到 CPA 后的统一适配及真实请求验证，见[Claude 配置兼容性重构](claude-configuration-compatibility-2026-10-19.md)。
+
 ## 页面与配置行为
 
 - 模型槽增加 Fable，排列为 Opus、Fable、Sonnet、Haiku。新增槽沿用搜索、代理别名、手动输入和独立 1M 设置。

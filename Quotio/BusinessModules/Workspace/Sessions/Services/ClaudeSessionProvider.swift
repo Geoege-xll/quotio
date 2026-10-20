@@ -224,40 +224,127 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
     @concurrent
     public func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage] {
         try WorkspaceSessionPathPolicy(homeDirectory: homeDir, agent: .claude).validate(session.filePath)
-        let content = try String(contentsOfFile: session.filePath, encoding: .utf8)
-        var messages: [WorkspaceSessionMessage] = []
+        guard fileManager.fileExists(atPath: session.filePath) else { return [] }
 
-        for line in content.components(separatedBy: .newlines) {
-            guard !line.isEmpty,
-                  let data = line.data(using: .utf8),
+        var messages: [WorkspaceSessionMessage] = []
+        let fileURL = URL(fileURLWithPath: session.filePath)
+
+        // 使用异步行流逐行读取，避免大文件（可达 100MB+）一次性加载耗尽内存或引起主线程卡顿
+        for try await line in fileURL.lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  let data = trimmed.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+            // 过滤子链/sidechain记录（除非当前会话本身为子任务会话）
+            if !session.isSubagent, json["isSidechain"] as? Bool == true {
+                continue
+            }
 
             let ts = (json["timestamp"] as? String).flatMap { SessionIOUtils.parseDate($0) }
 
-            if let msg = json["message"] as? [String: Any] {
-                let roleStr = msg["role"] as? String ?? "assistant"
-                let role: WorkspaceMessageRole = roleStr == "user" ? .user : .assistant
-                let text = extractContentText(from: msg["content"])
-                if !text.isEmpty {
-                    messages.append(WorkspaceSessionMessage(role: role, content: text, timestamp: ts))
-                }
-            } else if let prompt = json["prompt"] as? String, !prompt.isEmpty {
+            // 1. 处理现代 Claude Code 记录的本地斜杠命令 (system.local_command)
+            if json["type"] as? String == "system", json["subtype"] as? String == "local_command",
+               let cmdContent = json["content"] as? String, !cmdContent.isEmpty {
+                messages.append(WorkspaceSessionMessage(role: .user, content: cmdContent, timestamp: ts))
+                continue
+            }
+
+            // 2. 处理直接 prompt 字段
+            if let prompt = json["prompt"] as? String, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 messages.append(WorkspaceSessionMessage(role: .user, content: prompt, timestamp: ts))
+                continue
+            }
+
+            // 3. 处理标准 message 结构体
+            if let msg = json["message"] as? [String: Any] {
+                let roleStr = msg["role"] as? String ?? (json["type"] as? String ?? "assistant")
+
+                if roleStr == "user" {
+                    // 若记录仅携带 toolUseResult 或 sourceToolAssistantUUID，属于工具回传载荷而非用户提问
+                    if json["toolUseResult"] != nil || json["sourceToolAssistantUUID"] != nil {
+                        continue
+                    }
+
+                    let text = extractUserText(from: msg["content"])
+                    if !text.isEmpty {
+                        messages.append(WorkspaceSessionMessage(role: .user, content: text, timestamp: ts))
+                    }
+                } else {
+                    // assistant 消息：提取正文文本、思考过程与工具调用
+                    let parsed = extractAssistantBlocks(from: msg["content"])
+                    if let text = parsed.text, !text.isEmpty {
+                        messages.append(WorkspaceSessionMessage(role: .assistant, content: text, timestamp: ts))
+                    }
+                    for tool in parsed.tools {
+                        messages.append(WorkspaceSessionMessage(
+                            role: .tool,
+                            content: tool.detail.isEmpty ? "调用工具: \(tool.name)" : "调用工具: \(tool.name)\n\(tool.detail)",
+                            timestamp: ts,
+                            toolCalls: [tool.name]
+                        ))
+                    }
+                }
             }
         }
+
+        // 4. 若解析结果为空，回退展示扫描所得的 initial prompt (summary)
+        if messages.isEmpty, let summary = session.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            messages.append(WorkspaceSessionMessage(role: .user, content: summary, timestamp: session.createdAt))
+        }
+
         return messages
     }
 
-    private func extractContentText(from content: Any?) -> String {
-        if let str = content as? String { return str }
+    private func extractUserText(from content: Any?) -> String {
+        if let str = content as? String { return str.trimmingCharacters(in: .whitespacesAndNewlines) }
         if let array = content as? [[String: Any]] {
             return array.compactMap { item -> String? in
-                if let text = item["text"] as? String { return text }
-                if let contentStr = item["content"] as? String { return contentStr }
+                if item["type"] as? String == "text", let text = item["text"] as? String {
+                    return text
+                }
+                if item["type"] == nil, let text = item["text"] as? String {
+                    return text
+                }
                 return nil
-            }.joined(separator: "\n")
+            }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return ""
+    }
+
+    private struct ParsedAssistantContent {
+        var text: String?
+        var tools: [(name: String, detail: String)]
+    }
+
+    private func extractAssistantBlocks(from content: Any?) -> ParsedAssistantContent {
+        if let str = content as? String {
+            return ParsedAssistantContent(text: str.trimmingCharacters(in: .whitespacesAndNewlines), tools: [])
+        }
+        guard let array = content as? [[String: Any]] else {
+            return ParsedAssistantContent(text: nil, tools: [])
+        }
+
+        var textParts: [String] = []
+        var tools: [(name: String, detail: String)] = []
+
+        for item in array {
+            let blockType = item["type"] as? String ?? ""
+            if blockType == "text", let text = item["text"] as? String, !text.isEmpty {
+                textParts.append(text)
+            } else if blockType == "thinking", let thinking = item["thinking"] as? String, !thinking.isEmpty {
+                textParts.append("💭 \(thinking.trimmingCharacters(in: .whitespacesAndNewlines))")
+            } else if blockType == "tool_use" {
+                let name = item["name"] as? String ?? "tool"
+                let input = (item["input"] as? [String: Any]).flatMap {
+                    try? String(data: JSONSerialization.data(withJSONObject: $0, options: [.prettyPrinted]), encoding: .utf8)
+                } ?? ""
+                tools.append((name: name, detail: input))
+            }
+        }
+
+        let combinedText = textParts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return ParsedAssistantContent(text: combinedText.isEmpty ? nil : combinedText, tools: tools)
     }
 
     @concurrent

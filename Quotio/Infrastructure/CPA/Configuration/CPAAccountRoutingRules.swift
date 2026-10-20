@@ -15,17 +15,35 @@ nonisolated enum CPAAccountWeight {
     }
 }
 
+/// CPA 账号调度优先级校验契约。
+/// 优先级决定故障转移与梯队使用顺序：数值越高越优先调度，0 为默认普通梯队。
+nonisolated enum CPAAccountPriority {
+    static let maximum = 1_000_000
+    static let minimum = 0
+
+    static func parse(_ text: String) throws -> Int {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return 0 }
+        guard let value = Int(trimmed), value >= minimum, value <= maximum else {
+            throw CPASettingsValidationError.invalidPriority
+        }
+        return value
+    }
+}
+
 /// 保留既有类型名称、全部错误 case 与本地化反馈，兼容原调用方的模式匹配和错误展示。
 /// 设置草稿也复用此错误契约，但草稿、按 scope 的补丁与保存基线仍由 Settings 原类型负责。
 /// localizedStatic 是基础设施现有的语言辅助；错误格式化不读取页面状态或改写配置。
 nonisolated enum CPASettingsValidationError: LocalizedError {
     case invalidWeight
+    case invalidPriority
     case invalidNumber(String)
     case emptySessionTTL
 
     var errorDescription: String? {
         switch self {
         case .invalidWeight: "settings.cpa.weightInvalid".localizedStatic()
+        case .invalidPriority: "settings.cpa.priorityInvalid".localizedStatic()
         case .invalidNumber(let field): String(format: "settings.cpa.numberInvalid".localizedStatic(), field.localizedStatic())
         case .emptySessionTTL: "settings.cpa.sessionTTLInvalid".localizedStatic()
         }

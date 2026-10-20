@@ -5,10 +5,30 @@
 
 import Foundation
 
+/// 单次受管目录提交的同步许可，生命周期仍由原 AgentSetupViewModel 持有。
+/// actor 调用排队后仍能被主线程同步失效；检查与本地提交使用同一把锁，
+/// 不能先检查 Bool、释放锁后再写盘。锁内没有网络或 await，不新增任务或业务状态宿主。
+nonisolated final class ClaudeCatalogCommitAuthorization: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isValid = true
+
+    func invalidate() { lock.withLock { isValid = false } }
+
+    func withPermission<T>(_ body: () -> T) -> T? {
+        lock.withLock {
+            guard isValid, !Task.isCancelled else { return nil }
+            return body()
+        }
+    }
+}
+
 actor AgentConfigurationService {
     private let fileManager = FileManager.default
     private let homeDirectory: URL
+    /// 原 actor 仍唯一负责文件事务；所有 Claude 操作共享初始化时解析的同一个目标目录。
+    private let claudeLocation: ClaudeConfigurationLocation
     private let trashBackup: @Sendable (URL) throws -> Void
+    private let writeConfigurationData: @Sendable (Data, URL) throws -> Void
     private let fetchPiModels: @Sendable (String, String) async throws -> [AvailableModel]
     /// Pi 查证与安装会让 actor 可重入；互斥仍归原配置服务，不新增持有 Task 的队列或单例。
     /// 已开始的文件事务完整完成，新页面的第二次自动写入／恢复必须稍后重试，避免旧事务覆盖新文件。
@@ -21,13 +41,25 @@ actor AgentConfigurationService {
         fetchPiModels: @escaping @Sendable (String, String) async throws -> [AvailableModel] = { url, key in
             try await AgentModelCatalogService.fetchAvailableModels(proxyURL: url, apiKey: key)
         },
+        writeConfigurationData: @escaping @Sendable (Data, URL) throws -> Void = { data, url in
+            try data.write(to: url, options: .atomic)
+        },
         trashBackup: @escaping @Sendable (URL) throws -> Void = { url in
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-        }
+        },
+        claudeConfigDirectory: URL? = nil,
+        environment: [String: String]? = nil
     ) {
         self.homeDirectory = homeDirectory
+        // 测试显式传入临时 home 时不继承本机目录覆盖，避免离线回归误写真实配置。
+        // 生产默认 home 继续使用实际进程环境；调用者也可明确注入整个位置契约。
+        let inherited = environment ?? (homeDirectory == FileManager.default.homeDirectoryForCurrentUser
+            ? ProcessInfo.processInfo.environment : [:])
+        self.claudeLocation = ClaudeConfigurationLocation(homeDirectory: homeDirectory,
+            directory: claudeConfigDirectory, environment: inherited)
         self.fetchPiModels = fetchPiModels
         self.trashBackup = trashBackup
+        self.writeConfigurationData = writeConfigurationData
     }
     
     // MARK: - Saved Configuration Models
@@ -55,6 +87,10 @@ actor AgentConfigurationService {
         var claudeGatewayModelDiscovery = false
         var claudeModelPicker = ClaudeModelPickerConfiguration.roleDefaults(mode: .native)
         var claudeSubagentModel: String? = nil
+        /// 与模型值分开回读，保留外部强制覆盖的原始值及只开启 FORCE 的合法配置。
+        var claudeSubagentModelForce: String? = nil
+        /// 只读模型引用快照用于同一份兼容性预览；最终保存仍重新读取磁盘，不持有凭据副本。
+        var claudeLegacyModelReferences = ClaudeLegacyModelReferences()
     }
     
     /// Represents a backup file that can be restored
@@ -79,6 +115,13 @@ actor AgentConfigurationService {
     }
     
     // MARK: - Read Existing Configuration
+
+    /// 已保存路径是事务输入，不能在备份／恢复时重新回到旧的静态默认目录。
+    /// 其他客户端继续沿用原配置路径，Claude 统一采用显式或环境覆盖后的实际位置。
+    private func configurationPaths(for agent: CLIAgent) -> [String] {
+        if agent == .claudeCode { return [claudeLocation.settings.path] }
+        return agent.configPaths.map { $0.replacingOccurrences(of: "~", with: homeDirectory.path) }
+    }
     
     /// Read the current saved configuration for an agent
     func readConfiguration(agent: CLIAgent) -> SavedAgentConfig? {
@@ -100,11 +143,9 @@ actor AgentConfigurationService {
     
     /// List available backup files for an agent
     func listBackups(agent: CLIAgent) -> [BackupFile] {
-        let home = homeDirectory.path
         var backups: [BackupFile] = []
         
-        for configPath in agent.configPaths {
-            let expandedPath = configPath.replacingOccurrences(of: "~", with: home)
+        for expandedPath in configurationPaths(for: agent) {
             let directory = (expandedPath as NSString).deletingLastPathComponent
             let filename = (expandedPath as NSString).lastPathComponent
             
@@ -153,20 +194,17 @@ actor AgentConfigurationService {
         if backup.agent == .pi, isConfiguringPi {
             throw PiAgentSupport.failure("agents.pi.configurationInProgress".localizedStatic())
         }
-        // Determine the original config path from the backup path
-        // e.g., ~/.claude/settings.json.backup.123 -> ~/.claude/settings.json
-        let originalPath = backup.path
-            .replacingOccurrences(of: ".backup.\(Int(backup.timestamp.timeIntervalSince1970))", with: "")
-        
-        // Create a backup of current config before restoring
-        if fileManager.fileExists(atPath: originalPath) {
-            let currentBackupPath = "\(originalPath).backup.\(Int(Date().timeIntervalSince1970))"
-            try? fileManager.copyItem(atPath: originalPath, toPath: currentBackupPath)
-            try fileManager.removeItem(atPath: originalPath)
-        }
-        
-        // Copy backup to original location
-        try fileManager.copyItem(atPath: backup.path, toPath: originalPath)
+        // 恢复只能使用原目录中实际列出的普通备份；先读、成功备份当前文件，再原子替换。
+        // 任何备份／写入失败都保留当前配置，不能先删除文件，更不能忽略备份失败。
+        guard listBackups(agent: backup.agent).contains(where: { $0.path == backup.path }),
+              try fileManager.attributesOfItem(atPath: backup.path)[.type] as? FileAttributeType == .typeRegular,
+              let originalPath = configurationPaths(for: backup.agent)
+                .first(where: { backup.path.hasPrefix($0 + ".backup.") }) else { throw BackupDeletionError.invalidBackup }
+        let data = try Data(contentsOf: URL(fileURLWithPath: backup.path))
+        let before = try currentFileData(originalPath)
+        _ = try backupIfPresent(originalPath)
+        try replaceConfiguration(data, path: originalPath, expected: before)
+
     }
     
     // MARK: - Agent-Specific Read Implementations
@@ -178,9 +216,18 @@ actor AgentConfigurationService {
         AgentConfiguration.normalizedClaudeModelID(value)
     }
 
+    /// 回填与保存冲突核对共用整数语义，兼容旧串的前导零／正号与外部 JSON 整数。
+    /// 不接受布尔或小数，不能把 true 当成 1 令牌；此规则只解析显式值，不推断模型容量。
+    private func claudeContextTokens(from value: Any?) -> Int? {
+        let parsed = (value as? String).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            ?? (value as? NSNumber).flatMap { number in
+                CFGetTypeID(number) == CFBooleanGetTypeID() ? nil : Int(number.stringValue)
+            }
+        return parsed.flatMap { $0 > 0 ? $0 : nil }
+    }
+
     private func readClaudeCodeConfig() -> SavedAgentConfig? {
-        let home = homeDirectory.path
-        let configPath = "\(home)/.claude/settings.json"
+        let configPath = claudeLocation.settings.path
         
         guard fileManager.fileExists(atPath: configPath),
               let data = fileManager.contents(atPath: configPath),
@@ -188,10 +235,12 @@ actor AgentConfigurationService {
             return nil
         }
         
-        let env = json["env"] as? [String: String] ?? [:]
+        // 仅投影当前支持的字符串值，不因一个未来扩展字段而丢弃其他有效的模型和连接配置。
+        let env = (json["env"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
         
         let baseURL = env["ANTHROPIC_BASE_URL"]
         let apiKey = env["ANTHROPIC_AUTH_TOKEN"]
+        let projection = ClaudeCatalogProjection.read(in: json)
 
         var modelSlots: [ModelSlot: String] = [:]
         var claudeModel1M: [ModelSlot: Bool] = [:]
@@ -200,8 +249,10 @@ actor AgentConfigurationService {
             guard let requestModel = env[key] else { continue }
             let normalized = normalizedClaudeModelID(requestModel)
             modelSlots[slot] = normalized.base
-            if normalized.uses1M {
+            if normalized.uses1M, projection?.isAutomaticContext(slot.rawValue, selector: requestModel) != true {
                 claudeModel1M[slot] = true
+            } else if !normalized.uses1M, projection?.isExplicitNormalContext(slot, selector: requestModel) == true {
+                claudeModel1M[slot] = false
             }
         }
 
@@ -217,22 +268,20 @@ actor AgentConfigurationService {
             defaultModel = normalized.uses1M && ModelSlot(rawValue: normalized.base) != nil
                 ? normalized.base + "[1m]" : normalized.base
             defaultModel1M = normalized.uses1M
+                && projection?.isAutomaticContext("default", selector: configuredDefaultModel) != true
         } else {
             defaultModel = nil
             defaultModel1M = false
         }
 
-        let parsedContextTokens = env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].flatMap(Int.init)
-        let claudeMaxContextTokens = (parsedContextTokens ?? AgentConfiguration.defaultClaudeMaxContextTokens) > 0
-            ? (parsedContextTokens ?? AgentConfiguration.defaultClaudeMaxContextTokens)
-            : AgentConfiguration.defaultClaudeMaxContextTokens
+        let rawContext = (json["env"] as? [String: Any])?["CLAUDE_CODE_MAX_CONTEXT_TOKENS"]
+        let claudeMaxContextTokens = claudeContextTokens(from: rawContext)
         let parsedCompactPercentage = env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"].flatMap(Int.init)
         let claudeAutoCompactPercentage = parsedCompactPercentage.flatMap { (1...100).contains($0) ? $0 : nil }
             ?? AgentConfiguration.defaultClaudeAutoCompactPercentage
 
-        // Check if proxy is configured (localhost or 127.0.0.1 in base URL)
-        let isProxy = baseURL?.contains("127.0.0.1") == true ||
-                      baseURL?.contains("localhost") == true
+        // 已保存来源包括隧道、局域网和远端 CPA，只有明确官方端点才回到官方模式。
+        let isProxy = ClaudeConfigurationSource.isProxyEndpoint(baseURL)
 
         let displayNames = Dictionary(uniqueKeysWithValues: ModelSlot.allCases.compactMap { slot -> (ModelSlot, String)? in
             let modelID = modelSlots[slot] ?? AvailableModel.defaultModels[slot]?.name ?? ""
@@ -240,7 +289,8 @@ actor AgentConfigurationService {
                 env["ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL_NAME"], for: slot, modelID: modelID) else { return nil }
             return (slot, name)
         })
-        var picker = ClaudeModelPickerConfiguration.read(json["modelPicker"])
+        var picker = ClaudeCatalogOwnership.picker(in: json)
+        if let projection { picker = projection.restoringMenu(picker) }
         // 页面已经移除菜单编辑入口，回填的菜单仅用于兼容与预览，不主动取得写入权限。
         // 即使是旧版 Quotio 创建的菜单，也保留原顺序、标题、说明和未知字段；
         // 不能把已有文本清空成“自动名称”，否则保存模型槽时会意外重新生成旧菜单。
@@ -274,7 +324,13 @@ actor AgentConfigurationService {
                 env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"]?.lowercased() ?? ""
             ),
             claudeModelPicker: picker,
-            claudeSubagentModel: env["CLAUDE_CODE_SUBAGENT_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
+            claudeSubagentModel: env["CLAUDE_CODE_SUBAGENT_MODEL"].flatMap { value in
+                guard !value.isEmpty else { return nil }
+                return projection?.isAutomaticContext("subagent", selector: value) == true
+                    ? ClaudeModelReference(value).base : value
+            },
+            claudeSubagentModelForce: env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"],
+            claudeLegacyModelReferences: .read(json)
         )
     }
     
@@ -879,7 +935,8 @@ actor AgentConfigurationService {
         mode: ConfigurationMode,
         storageOption: ConfigStorageOption = .jsonOnly,
         detectionService: AgentDetectionService,
-        availableModels: [AvailableModel] = []
+        availableModels: [AvailableModel] = [],
+        shell: ShellType = .zsh
     ) async throws -> AgentConfigResult {
         
         // UI 与直接生成调用共享保存屏障：缺客户端密钥时禁止写入空认证，
@@ -904,7 +961,7 @@ actor AgentConfigurationService {
 
         // Check if we should generate default (non-proxy) configuration
         if config.setupMode == .defaultSetup {
-            return try await generateDefaultConfiguration(agent: agent, mode: mode)
+            return try await generateDefaultConfiguration(agent: agent, mode: mode, shell: shell)
         }
 
         switch agent {
@@ -912,7 +969,8 @@ actor AgentConfigurationService {
             // 入口已统一分发 Pi，保留显式分支避免新增智能体后遗漏枚举处理。
             return .failure(error: "Pi configuration must use the dedicated provider service.")
         case .claudeCode:
-            return generateClaudeCodeConfig(config: config, mode: mode, storageOption: storageOption, availableModels: availableModels)
+            return generateClaudeCodeConfig(config: config, mode: mode, storageOption: storageOption,
+                                           availableModels: availableModels, shell: shell)
 
         case .codexCLI:
             return try await generateCodexConfig(config: config, mode: mode)
@@ -931,13 +989,13 @@ actor AgentConfigurationService {
     // MARK: - Generate Default (Non-Proxy) Configuration
     
     /// Generates configuration that removes Quotio proxy settings while preserving user settings
-    private func generateDefaultConfiguration(agent: CLIAgent, mode: ConfigurationMode) async throws -> AgentConfigResult {
+    private func generateDefaultConfiguration(agent: CLIAgent, mode: ConfigurationMode, shell: ShellType = .zsh) async throws -> AgentConfigResult {
         switch agent {
         case .pi:
             // 入口已统一分发 Pi，保留显式分支避免新增智能体后遗漏枚举处理。
             return .failure(error: "Pi configuration must use the dedicated provider service.")
         case .claudeCode:
-            return generateClaudeCodeDefaultConfig(mode: mode)
+            return generateClaudeCodeDefaultConfig(mode: mode, shell: shell)
         case .codexCLI:
             return generateCodexDefaultConfig(mode: mode)
         case .ampCLI:
@@ -949,105 +1007,69 @@ actor AgentConfigurationService {
         }
     }
     
-    private func generateClaudeCodeDefaultConfig(mode: ConfigurationMode) -> AgentConfigResult {
-        let home = homeDirectory.path
-        let configDir = "\(home)/.claude"
-        let configPath = "\(configDir)/settings.json"
-        
-        // 映射与显示元数据必须一起清理，否则恢复默认后仍会留下旧代理模型的名称或说明。
-        let keysToRemove = [
-            "ANTHROPIC_BASE_URL",
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_MODEL",
-            "ANTHROPIC_DEFAULT_MODEL",
-            "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
-            "DISABLE_AUTO_COMPACT",
-            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-            "CLAUDE_CODE_SUBAGENT_MODEL"
-        ] + ModelSlot.allCases.flatMap { slot in
-            let key = "ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"
-            return [key, key + "_NAME", key + "_DESCRIPTION"]
-        }
-        
-        if mode == .automatic && fileManager.fileExists(atPath: configPath) {
-            do {
-                // Read existing settings
-                let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
-                var existingSettings = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-
-                // 恢复官方连接只撤下 Quotio 新建的菜单，用户和其他工具的菜单仍由其自行维护。
-                if (existingSettings["modelPicker"] as? [String: Any])?["quotioManaged"] as? Bool == true {
-                    existingSettings.removeValue(forKey: "modelPicker")
-                }
-                
-                // 同一秒内反复重新配置或恢复默认也必须保留独立备份。
-                _ = try backupIfPresent(configPath)
-                
-                // 删除前记录受管模型，支持任意代理 ID 和别名；不再用 gpt/gemini 子串猜测归属。
-                let oldEnv = existingSettings["env"] as? [String: String] ?? [:]
-                let modelKeys = ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL"]
-                    + ModelSlot.allCases.map { "ANTHROPIC_DEFAULT_\($0.envSuffix)_MODEL" }
-                let managedModels = Set(modelKeys.compactMap { oldEnv[$0] })
-                if var env = existingSettings["env"] as? [String: String] {
-                    for key in keysToRemove {
-                        env.removeValue(forKey: key)
-                    }
-                    existingSettings["env"] = env.isEmpty ? nil : env
-                }
-                
-                // 顶层可能保留 haiku 等角色，而 DEFAULT_MODEL 已展开为实际 ID；
-                // 只有该角色仍有受管映射时才一起清理，保留用户未受代理映射影响的原生选择。
-                if let modelName = existingSettings["model"] as? String {
-                    let role = ModelSlot(rawValue: normalizedClaudeModelID(modelName).base)
-                    let usesManagedRole = role.map { oldEnv["ANTHROPIC_DEFAULT_\($0.envSuffix)_MODEL"] != nil } ?? false
-                    if managedModels.contains(modelName) || usesManagedRole {
-                        existingSettings.removeValue(forKey: "model")
-                    }
-                }
-                
-                // Write updated settings
-                let updatedData = try JSONSerialization.data(withJSONObject: existingSettings, options: [.prettyPrinted, .sortedKeys])
-                try updatedData.write(to: URL(fileURLWithPath: configPath))
-                
-                return .success(
-                    type: .file,
-                    mode: mode,
-                    configPath: configPath,
-                    authPath: nil,
-                    shellConfig: nil,
-                    rawConfigs: [],
-                    instructions: "Removed Quotio proxy configuration. Claude Code will now use its default Anthropic API endpoint.",
-                    modelsConfigured: 0
-                )
-            } catch {
-                return .failure(error: "Failed to update settings: \(error.localizedDescription)")
+    /// 官方恢复也是一份完整目标：按同一严格快照撤下已知配置，并返回受管 Shell 的清理动作。
+    /// 不按 env 的整体字符串类型决定能否清理，未知根字段和任意 env 扩展值原样保留。
+    private func generateClaudeCodeDefaultConfig(mode: ConfigurationMode, shell: ShellType = .zsh) -> AgentConfigResult {
+        do {
+            let snapshot = try readClaudeSettingsSnapshot()
+            var settings = snapshot.object
+            let oldEnv = settings["env"] as? [String: Any] ?? [:]
+            let legacyMenuOwned = settings[ClaudeCatalogOwnership.rootKey] == nil
+                && (settings["modelPicker"] as? [String: Any])?["quotioManaged"] as? Bool == true
+            let menuOwned = ClaudeCatalogOwnership.source(in: settings) != nil || legacyMenuOwned
+            var managedModels = (["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL"]
+                + ModelSlot.allCases.map { "ANTHROPIC_DEFAULT_" + $0.envSuffix + "_MODEL" })
+                .compactMap { oldEnv[$0] as? String }
+            if menuOwned {
+                // /model 可以把追加菜单的具体型号保存为默认，它未必出现在任何角色槽。
+                // 删除菜单前保留其归属证据，避免恢复官方后继续向官方发送该代理专用型号。
+                managedModels += ((settings["modelPicker"] as? [String: Any])?["options"] as? [[String: Any]] ?? [])
+                    .compactMap { $0["model"] as? String }
             }
+            let ownedWireIDs = Set(managedModels.compactMap { ClaudeModelReference($0).wireModelID })
+            if menuOwned {
+                // 撤下受管菜单的已知行为字段；未知菜单扩展继续留在原位置，完整旧行另有原字节备份。
+                if var picker = settings["modelPicker"] as? [String: Any] {
+                    for field in ["options", "replaceBuiltInOptions"] + ClaudeCatalogOwnership.legacyKeys {
+                        picker.removeValue(forKey: field)
+                    }
+                    if picker.isEmpty { settings.removeValue(forKey: "modelPicker") }
+                    else { settings["modelPicker"] = picker }
+                }
+            }
+            settings = ClaudeCatalogOwnership.removingKnownFields(in: settings)
+            var env = oldEnv
+            for key in ClaudeManagedEnvironment.keys { env.removeValue(forKey: key) }
+            if env.isEmpty { settings.removeValue(forKey: "env") } else { settings["env"] = env }
+            if let model = settings["model"] as? String {
+                let role = ModelSlot(rawValue: normalizedClaudeModelID(model).base)
+                let mappedRole = role.map { oldEnv["ANTHROPIC_DEFAULT_" + $0.envSuffix + "_MODEL"] != nil } ?? false
+                let wireOwned = ClaudeModelReference(model).wireModelID.map { ownedWireIDs.contains($0) } ?? false
+                if wireOwned || mappedRole { settings.removeValue(forKey: "model") }
+            }
+            let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+            let path = claudeLocation.settings.path
+            if mode == .automatic {
+                var result = AgentConfigResult.success(type: .file, mode: mode,
+                    configPath: snapshot.data == nil ? nil : path,
+                    instructions: "agents.claude.official.restored".localizedStatic(), modelsConfigured: 0)
+                if snapshot.data != nil {
+                    let committed = try commitClaudeSettings(data, expected: snapshot.data)
+                    result.backupPath = committed.backupPath
+                    result.claudeRollback = committed.receipt
+                }
+                // 即使原 JSON 不存在，历史仅 Shell 配置也必须被撤下；不能把没有文件当作恢复完成。
+                result.claudeShellAction = .remove
+                return result
+            }
+            let instructions = String(format: "agents.claude.official.manual".localizedStatic(), path, shell.profilePath)
+            return .success(type: .file, mode: mode, rawConfigs: [
+                .init(format: .json, content: String(decoding: data, as: UTF8.self), filename: "settings.json",
+                      targetPath: path, instructions: instructions)
+            ], instructions: instructions, modelsConfigured: 0)
+        } catch {
+            return .failure(error: error.localizedDescription)
         }
-        
-        // Manual mode - show what would be removed
-        let instructions = """
-        To revert to default, remove these environment variables from ~/.claude/settings.json:
-        \(keysToRemove.map { "- " + $0 }.joined(separator: "\n"))
-        \("agents.claudePicker.manualReset".localizedStatic())
-        """
-        
-        return .success(
-            type: .file,
-            mode: mode,
-            configPath: nil,
-            authPath: nil,
-            shellConfig: nil,
-            rawConfigs: [RawConfigOutput(
-                format: .json,
-                content: "Remove the above keys from ~/.claude/settings.json env section",
-                filename: "instructions.txt",
-                targetPath: configPath,
-                instructions: instructions
-            )],
-            instructions: instructions,
-            modelsConfigured: 0
-        )
     }
     
     private func generateCodexDefaultConfig(mode: ConfigurationMode) -> AgentConfigResult {
@@ -1263,6 +1285,50 @@ actor AgentConfigurationService {
         )
     }
     
+    /// 同一份严格快照供代理保存与官方恢复使用；无法理解的文件不能当成首次配置覆盖。
+    /// 原始字节继续作为 CAS 基线及回滚输入，未知对象成员不经过字符串字典的整体强转。
+    private func readClaudeSettingsSnapshot() throws -> (data: Data?, object: [String: Any]) {
+        let original = try currentFileData(claudeLocation.settings.path)
+        guard let original else { return (nil, [:]) }
+        if String(data: original, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            return (original, [:])
+        }
+        guard let object = try JSONSerialization.jsonObject(with: original) as? [String: Any],
+              object["env"] == nil || object["env"] is [String: Any] else { throw ClaudeCommitError.unreadable }
+        return (original, object)
+    }
+
+    /// 统一 JSON 提交边界：读取方提供原字节，原 actor 备份、比较、原子替换并返回同一回滚回执。
+    /// 官方恢复与普通保存共用此路径；报告只是附属诊断，写失败也不能留下半成功的配置。
+    private func commitClaudeSettings(_ data: Data, expected: Data?, plan: ClaudeConfigurationPlan? = nil)
+        throws -> (backupPath: String?, receipt: ClaudeConfigurationRollback) {
+        let path = claudeLocation.settings.path
+        guard try currentFileData(path) == expected else { throw ClaudeCommitError.changed }
+        try fileManager.createDirectory(at: claudeLocation.directory, withIntermediateDirectories: true)
+        let backupPath = try backupIfPresent(path)
+        let reportPath = plan?.isCatalogManaged == true
+            ? (backupPath ?? path + ".initial." + UUID().uuidString) + ".migration.json" : nil
+        if let reportPath, let plan {
+            let report = try JSONSerialization.data(withJSONObject: plan.migrationReport(backupPath: backupPath), options: [.prettyPrinted, .sortedKeys])
+            try writeConfigurationData(report, URL(fileURLWithPath: reportPath))
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: reportPath)
+        }
+        let receipt = ClaudeConfigurationRollback(original: expected, written: data, reportPath: reportPath)
+        do {
+            try replaceConfiguration(data, path: path, expected: expected)
+            if let reportPath, let plan {
+                var committed = plan.migrationReport(backupPath: backupPath)
+                committed["status"] = "committed"
+                try writeConfigurationData(JSONSerialization.data(withJSONObject: committed, options: [.prettyPrinted, .sortedKeys]),
+                                           URL(fileURLWithPath: reportPath))
+            }
+            return (backupPath, receipt)
+        } catch {
+            if (try? currentFileData(path)) == data { try rollbackClaudeConfiguration(receipt) }
+            throw error
+        }
+    }
+
     /// Generates Claude Code configuration with smart merge behavior
     ///
     /// **Merge Strategy:**
@@ -1275,12 +1341,85 @@ actor AgentConfigurationService {
     /// - Creates timestamped backup on each reconfigure: settings.json.backup.{unix_timestamp}
     /// - Each backup is unique and never overwritten
     /// - All previous backups are preserved
-    private func generateClaudeCodeConfig(config: AgentConfiguration, mode: ConfigurationMode, storageOption: ConfigStorageOption,
-                                         availableModels: [AvailableModel]) -> AgentConfigResult {
-        let home = homeDirectory.path
-        let configDir = "\(home)/.claude"
-        let configPath = "\(configDir)/settings.json"
+    private func generateClaudeCodeConfig(config requestedConfig: AgentConfiguration, mode: ConfigurationMode, storageOption requestedStorage: ConfigStorageOption,
+                                         availableModels: [AvailableModel], shell: ShellType = .zsh) -> AgentConfigResult {
+        let operation = ClaudeConfigurationOperation(mode: mode, storage: requestedStorage)
+        let storageOption = operation.storage
+        // 自动保存与手动预览使用同一条校验；未填写的自定义值不能写成 0，也不能偷偷退回 200K。
+        if let tokens = requestedConfig.claudeMaxContextTokens, tokens <= 0 {
+            return .failure(error: "agents.claude.advanced.context.validation".localizedStatic())
+        }
+        let configPath = claudeLocation.settings.path
 
+        // 在原 actor 的同步事务内读取最新文件，先建立计划，再生成 JSON／Shell。
+        // 未编辑菜单不能被表单旧快照覆盖；计划只迁移有当前目录证据的请求 ID，完整保留其余原字段。
+        let originalData: Data?
+        var existingConfig: [String: Any]
+        do { (originalData, existingConfig) = try readClaudeSettingsSnapshot() }
+        catch { return .failure(error: "agents.claudeCompatibility.unreadable".localizedStatic()) }
+        if requestedConfig.claudeCatalogManaged {
+            guard existingConfig["env"] == nil || existingConfig["env"] is [String: Any],
+                  existingConfig["modelSettings"] == nil || existingConfig["modelSettings"] is [String: Any],
+                  existingConfig["advisorModel"] == nil || existingConfig["advisorModel"] is String,
+                  ClaudeCatalogOwnership.canWrite(in: existingConfig) else {
+                return .failure(error: "agents.claudeCompatibility.unreadable".localizedStatic())
+            }
+        }
+        if requestedConfig.claudeCatalogManaged, let env = existingConfig["env"] as? [String: Any] {
+            let modelKeys = ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+                             "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_MODEL_CAPABILITIES"]
+                + ModelSlot.allCases.map { "ANTHROPIC_DEFAULT_" + $0.envSuffix + "_MODEL" }
+            guard modelKeys.allSatisfy({ env[$0] == nil || env[$0] is String }) else {
+                return .failure(error: "agents.claudeCompatibility.unreadable".localizedStatic())
+            }
+        }
+        var input = requestedConfig
+        if !input.claudeModelPicker.shouldWrite {
+            input.claudeModelPicker = .read(existingConfig["modelPicker"])
+            // 未编辑菜单始终以最新磁盘为基线，仅撤销仍匹配来源记录的自动值，再由同一计划重新投影。
+            if input.claudeCatalogManaged, let projection = ClaudeCatalogProjection.read(in: existingConfig) {
+                input.claudeModelPicker = projection.restoringMenu(input.claudeModelPicker)
+            }
+            input.claudeModelPicker.shouldWrite = false
+        }
+        let plan = ClaudeConfigurationPlan(configuration: input, availableModels: availableModels,
+                                           legacy: .read(existingConfig))
+        let config = plan.configuration
+        if requestedConfig.claudeCatalogManaged {
+            guard storageOption != .shellOnly else { return .failure(error: "agents.catalog.requiresJSON".localizedStatic()) }
+            guard plan.catalogCount > 0 else { return .failure(error: "agents.models.empty".localizedStatic()) }
+            guard plan.blockingReferences.isEmpty else {
+                return .failure(error: "agents.catalog.blocked".localizedStatic() + " " + plan.blockingReferences.joined(separator: ", "))
+            }
+        }
+        let existingEnv = existingConfig["env"] as? [String: Any] ?? [:]
+        // JSON 中的 env 可能压过 Shell。只输出 Shell 无法撤下或替换旧 JSON 窗口，必须明确阻止半成功。
+        // 在 actor 最新磁盘快照上复核，覆盖页面打开后其他程序改写该键的情况；未碰未知 env 与压缩设置。
+        let contextNeedsJSON = existingEnv["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].map { old in
+            guard let desired = config.claudeMaxContextTokens else { return true }
+            return claudeContextTokens(from: old) != desired
+        } ?? false
+        if storageOption == .shellOnly, contextNeedsJSON {
+            return .failure(error: "agents.claude.advanced.context.requiresJSON".localizedStatic())
+        }
+        let oldSubagent = ClaudeSubagentSettings(model: existingEnv["CLAUDE_CODE_SUBAGENT_MODEL"] as? String,
+                                               force: existingEnv["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] as? String)
+        var subagentNeedsJSON = config.claudeSubagentSettings.requiresJSONUpdate(comparedTo: oldSubagent)
+        // 在原 actor 的最新磁盘快照上校验，不能仅依赖页面打开时的 savedConfig。
+        // 手动输出中的 Shell 同样是独立方案：发生冲突时不能继续给出可复制但实际不生效的脚本。
+        if let selector = config.claudeSubagentSelector,
+           let role = ModelSlot(rawValue: AgentConfiguration.normalizedClaudeModelID(selector).base),
+           let oldRole = existingEnv["ANTHROPIC_DEFAULT_\(role.envSuffix)_MODEL"] as? String,
+           oldRole != config.claudeRequestModel(for: role) {
+            // 角色名未变也可能更换其目标；旧 JSON 中的角色映射同样会压过新的 Shell 映射。
+            subagentNeedsJSON = true
+        }
+        if storageOption == .shellOnly, subagentNeedsJSON {
+            return .failure(error: "agents.claudeSubagent.requiresJSON".localizedStatic())
+        }
+        if mode == .automatic, storageOption == .shellOnly, plan.requiresJSONUpdate {
+            return .failure(error: "agents.claudeCompatibility.requiresJSON".localizedStatic())
+        }
         let baseURL = clientServiceBaseURL(config.proxyURL)
 
         // Store base IDs in the form model and apply `[1m]` only to the request
@@ -1293,35 +1432,44 @@ actor AgentConfigurationService {
         // 默认角色保留 alias，由 Claude 继承该槽的模型和上下文；具体 ID 使用独立的 1M 状态。
         let effectiveDefaultModel = config.claudeDefaultModelSelector
 
-        // 三个槽是 Claude Code 的官方别名映射，值必须保留代理实际接受的模型 ID。
+        // 原生角色槽使用 Claude Code 的官方别名映射，值必须保留代理实际接受的模型 ID。
         // 不单独硬编码备用版本，以免界面默认值升级后，配置生成器仍写入旧版本。
         var quotioEnvConfig: [String: String] = [
             "ANTHROPIC_BASE_URL": baseURL,
             "ANTHROPIC_AUTH_TOKEN": config.apiKey,
             // 启动默认值不能用 ANTHROPIC_MODEL 持续钉住：/model 会更新顶层 model，
             // 高优先级的旧环境变量会让重启后的选择回退。默认变量允许 CLI 保存的新选择优先。
-            "ANTHROPIC_DEFAULT_MODEL": config.claudeDefaultFallbackModel,
-            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": String(config.effectiveClaudeMaxContextTokens),
+            "ANTHROPIC_DEFAULT_MODEL": config.claudeCatalogManaged ? config.claudeDefaultRequestModel : config.claudeDefaultFallbackModel,
             "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": String(config.claudeAutoCompactPercentage),
             // 显式写入 0，既清理旧版硬编码的 1，也防止继承的发现设置重新展开网关目录。
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": config.claudeGatewayModelDiscovery ? "1" : "0"
         ]
-        if let subagent = config.claudeSubagentSelector {
+        // 仅明确的自定义值才覆盖客户端窗口。已有 200000 也是合法自定义值，不凭数值猜它是否来自旧版。
+        if let tokens = config.effectiveClaudeMaxContextTokens {
+            quotioEnvConfig["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = String(tokens)
+        }
+        if let subagent = config.claudeSubagentSettings.environmentModel {
             quotioEnvConfig["CLAUDE_CODE_SUBAGENT_MODEL"] = subagent
+        }
+        if let force = config.claudeSubagentModelForce {
+            quotioEnvConfig["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] = force
         }
         if config.claudeDisableAutoCompact {
             quotioEnvConfig["DISABLE_AUTO_COMPACT"] = "1"
         }
+        // 旧后台模型与能力关联键也属于同一计划，Shell 输出不能继续引用旧网关身份。
+        if let model = plan.legacy.smallFastModel { quotioEnvConfig["ANTHROPIC_SMALL_FAST_MODEL"] = model }
+        if let capabilities = plan.legacy.capabilities { quotioEnvConfig["CLAUDE_CODE_MODEL_CAPABILITIES"] = capabilities }
 
         for slot in config.configuredClaudeSlots {
-            let requestModel = requestModels[slot] ?? AvailableModel.defaultModels[slot]!.name
+            let requestModel = requestModels[slot] ?? config.claudeRequestModel(for: slot)
             let key = "ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"
             quotioEnvConfig[key] = requestModel
 
             // 官方 _NAME 控制模型选择器标题，_DESCRIPTION 同时用于 /model 的补全说明。
             // 自动名称保留 Opus/Sonnet/Haiku，两个角色指向同一模型时也不会出现重复的 ID 标题。
             // 用户自定义名称继续保留；说明始终包含实际 ID，补全与会话内面板都能核对请求目标。
-            let displayName = config.claudeDisplayName(for: slot)
+            let displayName = plan.displayName(for: slot)
             quotioEnvConfig[key + "_NAME"] = displayName
             quotioEnvConfig[key + "_DESCRIPTION"] = config.claudeModelDescription(for: slot, availableModels: availableModels)
         }
@@ -1335,36 +1483,36 @@ actor AgentConfigurationService {
         if !clearShellOverride {
             shellEnvConfig["ANTHROPIC_MODEL"] = effectiveDefaultModel
         }
-        // 单引号保护模型 ID、名称和凭据；内嵌单引号拆分后拼接，避免执行 Shell 展开。
+        // 撤销与赋值共用同一份管理键集合，避免清空 Fable、压缩或子代理后旧 Shell export 残留。
+        // 不靠字符串替换把 POSIX 脚本转换成 fish；每条声明由目标 Shell 原生生成。
         let shellExports = "# CLIProxyAPI Configuration for Claude Code\n"
-            + (clearShellOverride ? "unset ANTHROPIC_MODEL\n" : "")
-            + (config.claudeSubagentSelector == nil ? "unset CLAUDE_CODE_SUBAGENT_MODEL\n" : "")
-            + shellEnvConfig.keys.sorted().map { key in
-            let value = shellEnvConfig[key]!.replacingOccurrences(of: "'", with: "'\"'\"'")
-            return "export \(key)='\(value)'"
-        }.joined(separator: "\n")
+            + Set(ClaudeManagedEnvironment.keys).sorted().map { key in
+                shell.environmentStatement(key: key, value: shellEnvConfig[key])
+            }.joined(separator: "\n")
+        // JSON env 对同名 Shell 值有优先级：所有受管值统一比较，不能只检查上下文和子代理。
+        // 只检查已存在的 JSON 覆盖；JSON 没有的键仍可以由 Shell 正常提供。
+        let shellNeedsJSON = ClaudeManagedEnvironment.keys.contains { key in
+            guard let old = existingEnv[key] else { return false }
+            // 上下文已有严格整数规则，等价的旧字符串／JSON 整数不能在这里再次被原字节比较否定。
+            if key == "CLAUDE_CODE_MAX_CONTEXT_TOKENS" { return contextNeedsJSON }
+            if ["CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE"].contains(key) { return subagentNeedsJSON }
+            return (old as? String) != shellEnvConfig[key]
+        } || ((existingConfig["model"] as? String).map { $0 != effectiveDefaultModel } ?? false)
+        if operation.writesShell, !operation.writesJSON, shellNeedsJSON {
+            return .failure(error: "agents.claudeCompatibility.requiresJSON".localizedStatic())
+        }
 
         do {
-            // Read existing settings.json to preserve user configuration
-            // This preserves: permissions, hooks, mcpServers, statusLine, plugins, etc.
-            var existingConfig: [String: Any] = [:]
-            if fileManager.fileExists(atPath: configPath),
-               let existingData = fileManager.contents(atPath: configPath),
-               let parsed = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any] {
-                existingConfig = parsed
-            }
+            // 计划合并只修改已确认的模型引用，不重建未知结构；权限、hooks 等继续沿用原磁盘对象。
+            existingConfig = try plan.mergingLegacyReferences(into: existingConfig)
 
             // Merge env object: preserve user's existing env keys, update only Quotio-managed keys.
             // `DISABLE_AUTO_COMPACT` has no false value: remove a stale Quotio entry
             // before merging when the user re-enables automatic compaction.
-            var mergedEnv = existingConfig["env"] as? [String: String] ?? [:]
-            // 迁移旧版写入的高优先级模型值，避免它覆盖 Claude Code 后续通过 /model 保存的选择。
-            mergedEnv.removeValue(forKey: "ANTHROPIC_MODEL")
-            // 跟随会话必须删除旧的固定子代理模型，否则新设置看起来成功，运行时仍用旧目标。
-            mergedEnv.removeValue(forKey: "CLAUDE_CODE_SUBAGENT_MODEL")
-            if !config.claudeDisableAutoCompact {
-                mergedEnv.removeValue(forKey: "DISABLE_AUTO_COMPACT")
-            }
+            var mergedEnv = existingConfig["env"] as? [String: Any] ?? [:]
+            // 目标快照一次性替换我们已知的环境键：缺失意味着明确撤销，而非保留旧覆盖。
+            // 只移除受管键，未来 env 成员（包括数值、对象）仍按原始 JSON 类型保留。
+            for key in ClaudeManagedEnvironment.keys { mergedEnv.removeValue(forKey: key) }
             for (key, value) in quotioEnvConfig {
                 mergedEnv[key] = value
             }
@@ -1388,61 +1536,64 @@ actor AgentConfigurationService {
                 existingConfig["modelPicker"] = ClaudeModelPresentation.formattedMagpieMenu(picker)
             }
 
+            if config.claudeCatalogManaged {
+                // 根对象未知键为 CLI passthrough，/model 保存后仍能据指纹识别同一后端。
+                existingConfig = ClaudeCatalogOwnership.recording(in: existingConfig, source: plan.sourceIdentifier)
+                existingConfig = ClaudeCatalogProjection.generated(input: input, output: config).recording(in: existingConfig)
+            }
             // Generate JSON from merged config
             let jsonData = try JSONSerialization.data(withJSONObject: existingConfig, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
             let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
             
-            let shellProfilePath = ShellType.zsh.profilePath
+            let shellProfilePath = shell.profilePath
             let rawConfigs = [
                 RawConfigOutput(
                     format: .json,
                     content: jsonString,
                     filename: "settings.json",
                     targetPath: configPath,
-                    instructions: "Option 1: Save as ~/.claude/settings.json"
+                    instructions: "Option 1: Save as " + configPath
                 ),
                 RawConfigOutput(
                     format: .shellExport,
                     content: shellExports,
                     filename: nil,
                     targetPath: shellProfilePath,
-                    instructions: "Option 2: Add to your shell profile"
+                    instructions: contextNeedsJSON ? "agents.claude.advanced.context.requiresJSON".localizedStatic()
+                        : (shellNeedsJSON || subagentNeedsJSON || config.claudeCatalogManaged) ? "agents.claudeSubagent.shellNeedsJSON".localizedStatic() : "Option 2: Add to your shell profile"
                 )
             ]
             
             if mode == .automatic {
-                var backupPath: String? = nil
-                let shouldWriteJson = storageOption == .jsonOnly || storageOption == .both
-                
-                if shouldWriteJson {
-                    try fileManager.createDirectory(atPath: configDir, withIntermediateDirectories: true)
-                    
-                    // 重新配置必须先成功备份；重名时顺延时间戳，不覆盖已有备份。
-                    backupPath = try backupIfPresent(configPath)
-                    
-                    try jsonData.write(to: URL(fileURLWithPath: configPath))
-                }
-                
+                let shouldWriteJson = operation.writesJSON
+                let committed = shouldWriteJson ? try commitClaudeSettings(jsonData, expected: originalData, plan: plan) : nil
+                let backupPath = committed?.backupPath
+
                 let instructions: String
                 switch storageOption {
                 case .jsonOnly:
-                    instructions = "Configuration saved to ~/.claude/settings.json"
+                    instructions = "Configuration saved to " + configPath
                 case .shellOnly:
                     instructions = "Shell exports ready. Add to your shell profile to complete setup."
                 case .both:
-                    instructions = "Configuration saved to ~/.claude/settings.json and shell profile updated."
+                    instructions = "Configuration saved to " + configPath + " and shell profile updated."
                 }
                 
-                return .success(
+                var result = AgentConfigResult.success(
                     type: .both,
                     mode: mode,
                     configPath: shouldWriteJson ? configPath : nil,
                     shellConfig: (storageOption == .shellOnly || storageOption == .both) ? shellExports : nil,
                     rawConfigs: rawConfigs,
                     instructions: instructions,
-                    modelsConfigured: 3,
+                    modelsConfigured: config.claudeCatalogManaged ? config.configuredClaudeSlots.count : 3,
                     backupPath: backupPath
                 )
+                // JSON 与 Shell 是同一用户操作的两个阶段，第二阶段失败必须能回滚所有 JSON 保存方式。
+                result.claudeRollback = committed?.receipt
+                result.claudeShellAction = operation.writesShell ? .replace(shellExports)
+                    : config.claudeCatalogManaged ? .remove : .preserve
+                return result
             } else {
                 return .success(
                     type: .both,
@@ -1450,8 +1601,10 @@ actor AgentConfigurationService {
                     configPath: configPath,
                     shellConfig: shellExports,
                     rawConfigs: rawConfigs,
-                    instructions: "Choose one option: save settings.json OR add shell exports to your profile:",
-                    modelsConfigured: 3
+                    instructions: contextNeedsJSON ? "agents.claude.advanced.context.requiresJSON".localizedStatic()
+                        : (shellNeedsJSON || subagentNeedsJSON || config.claudeCatalogManaged) ? "agents.claudeSubagent.shellNeedsJSON".localizedStatic()
+                        : "Choose one option: save settings.json OR add shell exports to your profile:",
+                    modelsConfigured: config.claudeCatalogManaged ? config.configuredClaudeSlots.count : 3
                 )
             }
         } catch {
@@ -1738,6 +1891,107 @@ actor AgentConfigurationService {
         return try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
     }
 
+    /// 最终提交前比较原字节，原子替换并回读验证；外部修改不得被旧计划覆盖。
+    private func currentFileData(_ path: String) throws -> Data? {
+        guard fileManager.fileExists(atPath: path) else { return nil }
+        return try Data(contentsOf: URL(fileURLWithPath: path))
+    }
+
+    private func replaceConfiguration(_ data: Data, path: String, expected: Data?) throws {
+        guard try currentFileData(path) == expected else { throw ClaudeCommitError.changed }
+        // Dotfiles 可能由符号链接管理；原子替换真实目标，保留用户原来的链接关系。
+        let destination = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        let permissions = (try? fileManager.attributesOfItem(atPath: destination.path)[.posixPermissions]) ?? 0o600
+        do {
+            try writeConfigurationData(data, destination)
+            try fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: destination.path)
+            guard try currentFileData(path) == data else { throw ClaudeCommitError.changed }
+        } catch {
+            if (try? currentFileData(path)) == data {
+                if let expected { try expected.write(to: destination, options: .atomic) }
+                else { try fileManager.removeItem(at: destination) }
+            }
+            throw error
+        }
+    }
+
+    enum ClaudeCommitError: LocalizedError {
+        case changed
+        case unreadable
+        var errorDescription: String? {
+            switch self {
+            case .changed: "agents.catalog.fileChanged".localizedStatic()
+            case .unreadable: "agents.claudeCompatibility.unreadable".localizedStatic()
+            }
+        }
+    }
+
+    /// Shell 阶段失败只回滚本事务仍拥有的 JSON；外部已经改写时报告失败，保留双方备份供恢复。
+    func rollbackClaudeConfiguration(_ receipt: ClaudeConfigurationRollback) throws {
+        let path = claudeLocation.settings.path
+        guard try currentFileData(path) == receipt.written else { throw ClaudeCommitError.changed }
+        if let original = receipt.original { try replaceConfiguration(original, path: path, expected: receipt.written) }
+        else { try fileManager.removeItem(at: URL(fileURLWithPath: path).resolvingSymlinksInPath()) }
+        if let reportPath = receipt.reportPath,
+           let data = fileManager.contents(atPath: reportPath),
+           var report = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            report["status"] = "rolledBack"
+            try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                .write(to: URL(fileURLWithPath: reportPath), options: .atomic)
+        }
+    }
+
+    /// 账号变更只接管已有版本标记且指纹匹配的用户配置；未迁移／外部服务不写盘。
+    /// 读取与重建都在原 actor 中，自动同步不会借用配置页未保存的草稿。
+    func managedClaudeConfiguration(serviceBaseURLs: [String]) -> AgentConfiguration? {
+        guard let saved = readClaudeCodeConfig(), saved.claudeModelPicker.isQuotioManaged,
+              saved.claudeModelPicker.extraFields["quotioCatalogVersion"] == .integer(1),
+              let base = saved.baseURL, let key = saved.apiKey else { return nil }
+        let url = ClaudeConfigurationSource.modelAPIBaseURL(base)
+        var config = AgentConfiguration(agent: .claudeCode, proxyURL: url, apiKey: key)
+        guard serviceBaseURLs.contains(where: { endpoint in
+            ModelCatalogClient.modelsURL(baseURL: ClaudeConfigurationSource.modelAPIBaseURL(endpoint))
+                == ModelCatalogClient.modelsURL(baseURL: url)
+        }), saved.claudeModelPicker.extraFields["quotioCatalogSource"] == .string(ClaudeConfigurationPlan.sourceID(url: url, key: key)) else { return nil }
+        config.modelSlots = saved.modelSlots
+        config.claudeDefaultModel = saved.defaultModel
+        config.claudeDefaultModel1M = saved.claudeDefaultModel1M
+        config.claudeModelDisplayNames = saved.modelDisplayNames
+        config.claudeModelPlatformHints = saved.modelPlatformHints
+        config.claudeMaxContextTokens = saved.claudeMaxContextTokens
+        config.claudeAutoCompactPercentage = saved.claudeAutoCompactPercentage
+        config.claudeDisableAutoCompact = saved.claudeDisableAutoCompact
+        config.claudeModel1M = saved.claudeModel1M
+        config.claudeSubagentModel = saved.claudeSubagentModel
+        config.claudeSubagentModelForce = saved.claudeSubagentModelForce
+        config.claudeModelPicker = saved.claudeModelPicker
+        config.claudeCatalogManaged = true
+        return config
+    }
+
+    func synchronizeManagedClaudeCatalog(sourceID: String, serviceBaseURLs: [String], models: [AvailableModel],
+                                         authorization: ClaudeCatalogCommitAuthorization? = nil) -> AgentConfigResult? {
+        if let authorization {
+            // 许可必须在 actor 真正执行时再检查；调用前后的 MainActor UUID 校验无法撤销已排队的写入。
+            // 递归的无许可分支是同一 actor 内的同步事务，锁一直覆盖最新读取、备份和原子提交。
+            return authorization.withPermission {
+                synchronizeManagedClaudeCatalog(sourceID: sourceID, serviceBaseURLs: serviceBaseURLs, models: models)
+            } ?? nil
+        }
+        guard let config = managedClaudeConfiguration(serviceBaseURLs: serviceBaseURLs),
+              ClaudeConfigurationPlan.sourceID(url: config.proxyURL, key: config.apiKey) == sourceID else { return nil }
+        // 当前磁盘对象是最终基线；同一 actor 同步生成／提交，不存在网络 await 重入。
+        let plan = ClaudeConfigurationPlan(configuration: config, availableModels: models, legacy: .read(
+            (try? JSONSerialization.jsonObject(with: Data(contentsOf: claudeLocation.settings))) as? [String: Any] ?? [:]))
+        guard plan.blockingReferences.isEmpty else { return .failure(error: "agents.catalog.blocked".localizedStatic() + " " + plan.blockingReferences.joined(separator: ", ")) }
+        // 先生成纯预览，字节相同不重复备份或写入，避免手动刷新造成备份膨胀。
+        let preview = generateClaudeCodeConfig(config: config, mode: .manual, storageOption: .jsonOnly, availableModels: models)
+        let path = claudeLocation.settings
+        if let content = preview.rawConfigs.first(where: { $0.format == .json })?.content,
+           (try? Data(contentsOf: path)) == Data(content.utf8) { return preview }
+        return generateClaudeCodeConfig(config: config, mode: .automatic, storageOption: .jsonOnly, availableModels: models)
+    }
+
     private func backupIfPresent(_ path: String) throws -> String? {
         guard fileManager.fileExists(atPath: path) else { return nil }
         var timestamp = Int(Date().timeIntervalSince1970)
@@ -1746,7 +2000,9 @@ actor AgentConfigurationService {
             timestamp += 1
             backupPath = "\(path).backup.\(timestamp)"
         }
-        try fileManager.copyItem(atPath: path, toPath: backupPath)
+        // 备份存放原字节而非符号链接本身，恢复列表中的文件始终独立于原目标。
+        try Data(contentsOf: URL(fileURLWithPath: path)).write(to: URL(fileURLWithPath: backupPath), options: .withoutOverwriting)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backupPath)
         return backupPath
     }
     

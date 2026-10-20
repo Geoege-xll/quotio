@@ -126,15 +126,17 @@ struct RoutingFlowFrame: View {
                       let target = geometry.target(activity.targetID) else { continue }
                 if reduceMotion {
                     // 减少动态效果时只强调关联路径，无移动光点、位移或扩散。
-                    for curve in [source, target] {
-                        context.stroke(curve.path, with: .color(.accentColor.opacity(0.55)),
-                                       style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
-                    }
+                    context.stroke(source.path, with: .color(activity.agentColor.opacity(0.55)),
+                                   style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
+                    context.stroke(target.path, with: .color(resultColor(activity.outcome).opacity(0.55)),
+                                   style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
                     continue
                 }
                 if let sample = RoutingFlowSample.at(age: age) {
                     let curve = sample.leg == .source ? source : target
-                    let color = sample.leg == .result ? resultColor(activity.outcome) : Color.accentColor
+                    // 出站阶段（Agent -> Hub 以及 Hub -> Target）使用调用端 Agent 的专属品牌色彩；
+                    // 结果回程阶段（Target -> Hub）使用执行结果终态色彩（绿/红/橙）。
+                    let color = sample.leg == .result ? resultColor(activity.outcome) : activity.agentColor
                     let point = curve.point(at: sample.headParameter)
                     let beamSegment = curve.segment(from: sample.tailParameter, to: sample.headParameter)
 
@@ -163,7 +165,7 @@ struct RoutingFlowFrame: View {
                                  with: .color(color.opacity(sample.opacity)))
                 }
                 // 中枢交接、上游到达和结果回到中枢时，连接端轻微亮起并触发冲击波扩散
-                pulse(context: &context, point: source.end, age: age - 0.55, color: .accentColor)
+                pulse(context: &context, point: source.end, age: age - 0.55, color: activity.agentColor)
                 pulse(context: &context, point: target.end, age: age - 1.18, color: resultColor(activity.outcome))
                 pulse(context: &context, point: target.start, age: age - 1.55, color: resultColor(activity.outcome))
             }

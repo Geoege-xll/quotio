@@ -70,6 +70,26 @@ final class AgentModelCatalogServiceTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.id), ["unconfirmed"])
     }
 
+    func testCompatibilityUsesRawRegistryEvenWhenCopilotCandidateIsFiltered() async throws {
+        let http = fixture { _, _ in .reply(#"{"data":[{"id":"codex/fixture-model","owned_by":"github-copilot"},{"id":"fixture-model","owned_by":"custom"}]}"#) }
+        let selection = try await AgentModelCatalogService.fetchModelSelection(
+            proxyURL: http.url, apiKey: "fixture", session: http.session, fetchCopilotModelIDs: { ["another-model"] })
+        XCTAssertEqual(selection.catalog.map(\.id), ["codex/fixture-model", "fixture-model"])
+        XCTAssertEqual(selection.candidates.map(\.id), ["fixture-model"])
+        let vm = AgentSetupViewModel(fetchModelSelection: { _, _ in selection })
+        vm.selectedAgent = .claudeCode
+        var config = AgentConfiguration(agent: .claudeCode, proxyURL: http.url, apiKey: "fixture")
+        config.modelSlots[.opus] = "codex/fixture-model"
+        vm.currentConfiguration = config
+        let success = await vm.loadModels()
+        XCTAssertTrue(success)
+        XCTAssertEqual(vm.availableModels.map(\.id), ["fixture-model"], "UI 原候选筛选不改变")
+        let plan = try XCTUnwrap(vm.claudeCompatibilityPlan)
+        XCTAssertEqual(plan.configuration.modelSlots[.opus], "codex/fixture-model", "合法完整路由不能按本机账号候选推断删除")
+        XCTAssertTrue(plan.migrations.isEmpty)
+        XCTAssertEqual(http.state.requestCount, 1, "证据和候选必须来自同一轮请求，不新增目录请求")
+    }
+
     func testMalformedHTTP200FailsCatalogButRemainsSuccessfulConnection() async {
         let http = fixture { _, _ in .reply("not-a-model-directory") }
         do {

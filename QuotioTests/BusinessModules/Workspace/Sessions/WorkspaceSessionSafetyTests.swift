@@ -360,4 +360,125 @@ final class WorkspaceSessionSafetyTests: XCTestCase {
         XCTAssertEqual(try count(database, table: "conversation_summaries"), 0)
         for path in paths { XCTAssertFalse(files.fileExists(atPath: path)) }
     }
+
+    func testCodexLoadMessagesRecoversFromThreadHistoryWhenRolloutMissing() async throws {
+        let historyDb = home.appendingPathComponent(".codex/thread_history_1.sqlite").path
+        try files.createDirectory(atPath: home.appendingPathComponent(".codex").path, withIntermediateDirectories: true)
+        try execute(historyDb, """
+        CREATE TABLE thread_items (
+            thread_id TEXT,
+            turn_id TEXT,
+            item_id TEXT,
+            rollout_ordinal INTEGER,
+            created_at_ms INTEGER,
+            item_json TEXT,
+            item_type TEXT
+        );
+        INSERT INTO thread_items VALUES (
+            'test-thread-1', 'turn-1', 'item-1', 1, 1787816521000,
+            '{"type":"userMessage","content":[{"type":"text","text":"请帮我修复 Tab 数据更新问题"}]}',
+            'userMessage'
+        );
+        INSERT INTO thread_items VALUES (
+            'test-thread-1', 'turn-1', 'item-2', 2, 1787816522000,
+            '{"type":"reasoning","summary":[{"type":"text","text":"正在分析数据流"}]}',
+            'reasoning'
+        );
+        INSERT INTO thread_items VALUES (
+            'test-thread-1', 'turn-1', 'item-3', 3, 1787816523000,
+            '{"type":"agentMessage","text":"我已定位到问题，准备修改"}',
+            'agentMessage'
+        );
+        INSERT INTO thread_items VALUES (
+            'test-thread-1', 'turn-1', 'item-4', 4, 1787816524000,
+            '{"type":"commandExecution","command":"git diff"}',
+            'commandExecution'
+        );
+        """)
+
+        let s = WorkspaceSession(
+            id: "test-thread-1",
+            agent: .codex,
+            title: "Test Thread",
+            summary: "请帮我修复 Tab 数据更新问题",
+            projectDirectory: "/tmp",
+            projectName: "tmp",
+            createdAt: Date(),
+            lastActiveAt: Date(),
+            filePath: home.appendingPathComponent(".codex/sessions/2026/missing.jsonl").path,
+            fileSizeBytes: 0,
+            messageCount: 0,
+            resumeCommand: "codex resume test-thread-1"
+        )
+
+        let provider = CodexSessionProvider(homeDir: home.path)
+        let messages = try await provider.loadMessages(for: s)
+        XCTAssertEqual(messages.count, 4)
+        XCTAssertEqual(messages[0].role, .user)
+        XCTAssertEqual(messages[0].content, "请帮我修复 Tab 数据更新问题")
+        XCTAssertEqual(messages[1].role, .assistant)
+        XCTAssertTrue(messages[1].content.contains("💭 正在分析数据流"))
+        XCTAssertEqual(messages[2].role, .assistant)
+        XCTAssertTrue(messages[2].content.contains("我已定位到问题"))
+        XCTAssertEqual(messages[3].role, .tool)
+        XCTAssertEqual(messages[3].content, "执行命令: git diff")
+    }
+
+    func testCodexLoadMessagesFallsBackToSummaryWhenNoDatabaseOrFile() async throws {
+        let s = WorkspaceSession(
+            id: "test-thread-orphan",
+            agent: .codex,
+            title: "Orphan Session",
+            summary: "这是登记在 threads 表的初始问题",
+            projectDirectory: "/tmp",
+            projectName: "tmp",
+            createdAt: Date(),
+            lastActiveAt: Date(),
+            filePath: home.appendingPathComponent(".codex/sessions/missing.jsonl").path,
+            fileSizeBytes: 0,
+            messageCount: 0,
+            resumeCommand: "codex resume test-thread-orphan"
+        )
+
+        let provider = CodexSessionProvider(homeDir: home.path)
+        let messages = try await provider.loadMessages(for: s)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages[0].role, .user)
+        XCTAssertEqual(messages[0].content, "这是登记在 threads 表的初始问题")
+    }
+
+    func testClaudeLoadMessagesParsesSystemLocalCommandAndToolBlocks() async throws {
+        let claudePath = try write(".claude/projects/test-proj/session.jsonl", """
+        {"type":"system","subtype":"local_command","content":"/model"}
+        {"type":"user","message":{"role":"user","content":[{"type":"text","text":"你好 Claude"}]},"sessionId":"c1"}
+        {"type":"user","message":{"role":"user","content":[]},"toolUseResult":{"ok":true},"sourceToolAssistantUUID":"uuid-1"}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"分析中..."},{"type":"text","text":"你好！有什么我可以帮你的？"}]}}
+        """)
+
+        let s = WorkspaceSession(
+            id: "c1",
+            agent: .claude,
+            title: "Claude Session",
+            summary: "你好 Claude",
+            projectDirectory: "/tmp",
+            projectName: "test-proj",
+            createdAt: Date(),
+            lastActiveAt: Date(),
+            filePath: claudePath,
+            fileSizeBytes: 100,
+            messageCount: 0,
+            resumeCommand: "claude --resume c1"
+        )
+
+        let provider = ClaudeSessionProvider(homeDir: home.path)
+        let messages = try await provider.loadMessages(for: s)
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertEqual(messages[0].role, .user)
+        XCTAssertEqual(messages[0].content, "/model")
+        XCTAssertEqual(messages[1].role, .user)
+        XCTAssertEqual(messages[1].content, "你好 Claude")
+        XCTAssertEqual(messages[2].role, .assistant)
+        XCTAssertTrue(messages[2].content.contains("你好！有什么我可以帮你的？"))
+        XCTAssertTrue(messages[2].content.contains("💭 分析中..."))
+    }
 }

@@ -546,6 +546,46 @@ actor ManagementAPIClient {
         guard let entry = entries.first(where: { $0.name == name || $0.id == name }) else { throw APIError.invalidResponse }
         return entry.weight ?? 1
     }
+
+    /// 凭据调度元数据（权重与优先级）。
+    struct AuthFileRoutingMetadata: Sendable, Equatable {
+        let weight: Int
+        let priority: Int
+    }
+
+    /// 读取凭据调度元数据（权重与优先级）。
+    func fetchAuthFileRouting(name: String) async throws -> AuthFileRoutingMetadata {
+        struct Entry: Decodable { let id: String?; let name: String; let weight: Int?; let priority: Int? }
+        struct Response: Decodable { let files: [Entry] }
+        let data = try await makeRequest(Self.authFileEndpoint("/credentials", name: name))
+        let entries = try JSONDecoder().decode(Response.self, from: data).files
+        guard let entry = entries.first(where: { $0.name == name || $0.id == name }) else { throw APIError.invalidResponse }
+        return AuthFileRoutingMetadata(weight: entry.weight ?? 1, priority: entry.priority ?? 0)
+    }
+
+    /// 写入凭据调度元数据（权重与优先级）。
+    func setAuthFileRouting(name: String, weight: Int, priority: Int) async throws {
+        _ = try CPAAccountWeight.parse(String(weight))
+        _ = try CPAAccountPriority.parse(String(priority))
+        struct Request: Encodable {
+            let name: String
+            let weight: Int
+            let priority: Int
+        }
+        try await mutateOperation("/credentials/fields", method: "PATCH",
+            body: JSONEncoder().encode(Request(name: name, weight: weight, priority: priority)))
+    }
+
+    /// 重置指定凭据在 CPA 内核中的冷却或配额耗尽状态。
+    func resetCredentialCooldown(authIndex: String) async throws {
+        let trimmed = authIndex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw APIError.invalidResponse }
+        struct Request: Encodable {
+            let auth_index: String
+        }
+        try await mutateOperation("/routing/cooldown/reset", method: "POST",
+            body: JSONEncoder().encode(Request(auth_index: trimmed)))
+    }
     
     /// Get routing strategy
     func getRoutingStrategy() async throws -> String {
@@ -850,9 +890,12 @@ nonisolated struct AuthFileModelInfo: Codable, Sendable {
     let id: String
     let ownedBy: String?
     let type: String?
-    
+    /// v8 凭据模型接口明确返回的显示名，缺省兼容既有响应及成员初始化调用。
+    var displayName: String? = nil
+
     enum CodingKeys: String, CodingKey {
         case id, type
+        case displayName = "display_name"
         case ownedBy = "owned_by"
     }
 }

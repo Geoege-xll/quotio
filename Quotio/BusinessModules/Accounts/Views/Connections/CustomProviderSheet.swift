@@ -49,7 +49,12 @@ struct CustomProviderSheet: View {
     @State private var modelFetchError: String?
     @State private var limitToSelectedModels: Bool = true
 
-    private static let selectableProviderTypes = CustomProviderType.allCases.filter { $0 != .clinePass }
+    private static let selectableProviderTypes = CustomProviderType.allCases.filter {
+        $0 != .clinePass
+            && $0 != .deepseekCompatibility
+            && $0 != .moonshotCompatibility
+            && $0 != .minimaxCompatibility
+    }
 
     private static let clinePassModels = [
         AvailableModel(id: "cline-pass/glm-5.2", name: "GLM-5.2", provider: "clinepass", isDefault: false),
@@ -299,7 +304,8 @@ struct CustomProviderSheet: View {
             ForEach(Array(apiKeys.enumerated()), id: \.offset) { index, _ in
                 apiKeyRow(index: index)
             }
-            CPAProviderWeightsSection(keys: apiKeys, observed: observedWeights, drafts: $weightDrafts)
+            Divider().opacity(0.3)
+            CPAProviderWeightsSection(keys: apiKeys, observed: observedWeights, drafts: $weightDrafts, isCard: false)
         }
         .quotioInsetCard()
     }
@@ -817,7 +823,8 @@ struct CustomProviderSheet: View {
         
         // Set authorization header based on provider type
         switch providerType {
-        case .openaiCompatibility, .codexCompatibility, .clinePass:
+        case .openaiCompatibility, .codexCompatibility, .clinePass,
+             .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility:
             request.setValue("Bearer \(firstKey.apiKey)", forHTTPHeaderField: "Authorization")
         case .claudeCompatibility:
             request.setValue("Bearer \(firstKey.apiKey)", forHTTPHeaderField: "Authorization")
@@ -979,7 +986,8 @@ struct CustomProviderSheet: View {
         
         // Set authorization header based on provider type
         switch provider.type {
-        case .openaiCompatibility, .codexCompatibility, .clinePass:
+        case .openaiCompatibility, .codexCompatibility, .clinePass,
+             .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility:
             request.setValue("Bearer \(firstKey.apiKey)", forHTTPHeaderField: "Authorization")
         case .claudeCompatibility:
             request.setValue("Bearer \(firstKey.apiKey)", forHTTPHeaderField: "Authorization")
@@ -1033,32 +1041,6 @@ struct CustomProviderSheet: View {
             suffix += 1
         }
         return "\(baseName) \(suffix)"
-    }
-}
-
-enum CustomProviderTestError: LocalizedError {
-    case noAPIKey
-    case invalidURL
-    case invalidResponse
-    case unauthorized
-    case endpointNotFound
-    case serverError(Int, String)
-    
-    var errorDescription: String? {
-        switch self {
-        case .noAPIKey:
-            return "No API key provided"
-        case .invalidURL:
-            return "Invalid base URL"
-        case .invalidResponse:
-            return "Invalid response from server"
-        case .unauthorized:
-            return "API key is invalid or unauthorized"
-        case .endpointNotFound:
-            return "Models endpoint not found at this URL"
-        case .serverError(let code, let message):
-            return "Server error (\(code)): \(message)"
-        }
     }
 }
 

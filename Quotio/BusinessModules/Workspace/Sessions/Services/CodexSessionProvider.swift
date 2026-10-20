@@ -319,8 +319,31 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
 
     @concurrent
     public func loadMessages(for session: WorkspaceSession) async throws -> [WorkspaceSessionMessage] {
-        try WorkspaceSessionPathPolicy(homeDirectory: homeDir, agent: .codex).validate(session.filePath)
-        let content = try String(contentsOfFile: session.filePath, encoding: .utf8)
+        var messages: [WorkspaceSessionMessage] = []
+
+        // 1. 若本地 rollout JSONL 文件存在且路径安全，优先从文件解析完整消息
+        if !session.filePath.isEmpty, fileManager.fileExists(atPath: session.filePath) {
+            if let _ = try? WorkspaceSessionPathPolicy(homeDirectory: homeDir, agent: .codex).validate(session.filePath),
+               let content = try? String(contentsOfFile: session.filePath, encoding: .utf8) {
+                messages = parseRolloutMessages(content: content)
+            }
+        }
+
+        // 2. 若文件已被清理/归档或解析为空，从 ~/.codex/thread_history_1.sqlite (thread_items) 回退读取
+        if messages.isEmpty {
+            messages = loadMessagesFromThreadHistory(threadID: session.id)
+        }
+
+        // 3. 若数据库亦无多轮记录，回退展示 threads 表登记的首条用户消息（summary）
+        if messages.isEmpty, let summary = session.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            messages.append(WorkspaceSessionMessage(role: .user, content: summary, timestamp: session.createdAt))
+        }
+
+        return messages
+    }
+
+    /// 解析 rollout JSONL 格式的会话文本
+    private func parseRolloutMessages(content: String) -> [WorkspaceSessionMessage] {
         var messages: [WorkspaceSessionMessage] = []
 
         for line in content.components(separatedBy: .newlines) {
@@ -376,6 +399,102 @@ public nonisolated struct CodexSessionProvider: AgentSessionProviderProtocol {
                 messages.append(WorkspaceSessionMessage(role: .user, content: prompt, timestamp: ts))
             }
         }
+        return messages
+    }
+
+    /// 从现代 Codex 的 thread_history_1.sqlite 读取结构化消息记录，解决大部分 rollout 文件缺失问题
+    private func loadMessagesFromThreadHistory(threadID: String) -> [WorkspaceSessionMessage] {
+        let historyPath = (homeDir as NSString).appendingPathComponent(".codex/thread_history_1.sqlite")
+        guard fileManager.fileExists(atPath: historyPath) else { return [] }
+
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(historyPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            return []
+        }
+        defer { sqlite3_close(db) }
+
+        let query = """
+        SELECT item_type, item_json, created_at_ms
+        FROM thread_items
+        WHERE thread_id = ?
+        ORDER BY rollout_ordinal ASC, created_at_ms ASC;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_text(stmt, 1, (threadID as NSString).utf8String, -1, nil)
+
+        var messages: [WorkspaceSessionMessage] = []
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let itemType = sqlite3_column_text(stmt, 0).flatMap { String(cString: $0) } ?? ""
+            guard let jsonBytes = sqlite3_column_text(stmt, 1) else { continue }
+            let jsonString = String(cString: jsonBytes)
+            let createdAtMs = sqlite3_column_int64(stmt, 2)
+            let date = createdAtMs > 0 ? Date(timeIntervalSince1970: TimeInterval(createdAtMs) / 1000.0) : nil
+
+            guard let data = jsonString.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+            switch itemType {
+            case "userMessage":
+                var texts: [String] = []
+                if let content = json["content"] as? [[String: Any]] {
+                    for item in content {
+                        if item["type"] as? String == "text", let text = item["text"] as? String, !text.isEmpty {
+                            texts.append(text)
+                        }
+                    }
+                } else if let directText = json["text"] as? String, !directText.isEmpty {
+                    texts.append(directText)
+                }
+                let combined = texts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !combined.isEmpty {
+                    messages.append(WorkspaceSessionMessage(role: .user, content: combined, timestamp: date))
+                }
+
+            case "agentMessage":
+                if let text = json["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    messages.append(WorkspaceSessionMessage(role: .assistant, content: text, timestamp: date))
+                }
+
+            case "reasoning":
+                if let summary = json["summary"] as? [[String: Any]] {
+                    let summaryText = summary.compactMap { $0["text"] as? String }.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !summaryText.isEmpty {
+                        messages.append(WorkspaceSessionMessage(role: .assistant, content: "💭 \(summaryText)", timestamp: date))
+                    }
+                }
+
+            case "commandExecution":
+                if let cmd = json["command"] as? String, !cmd.isEmpty {
+                    messages.append(WorkspaceSessionMessage(role: .tool, content: "执行命令: \(cmd)", timestamp: date, toolCalls: [cmd]))
+                }
+
+            case "mcpToolCall", "custom_tool_call", "collabAgentToolCall":
+                let toolName = json["tool"] as? String ?? json["name"] as? String ?? "tool"
+                let input = json["input"] as? String ?? json["parameters"] as? String ?? ""
+                let content = input.isEmpty ? "调用工具: \(toolName)" : "调用工具: \(toolName)\n\(input)"
+                messages.append(WorkspaceSessionMessage(role: .tool, content: content, timestamp: date, toolCalls: [toolName]))
+
+            case "fileChange":
+                let files = (json["files"] as? [String])?.joined(separator: ", ") ?? (json["path"] as? String ?? "")
+                if !files.isEmpty {
+                    messages.append(WorkspaceSessionMessage(role: .tool, content: "修改文件: \(files)", timestamp: date))
+                }
+
+            case "webSearch":
+                if let query = json["query"] as? String, !query.isEmpty {
+                    messages.append(WorkspaceSessionMessage(role: .tool, content: "网页检索: \(query)", timestamp: date))
+                }
+
+            default:
+                break
+            }
+        }
+
         return messages
     }
 

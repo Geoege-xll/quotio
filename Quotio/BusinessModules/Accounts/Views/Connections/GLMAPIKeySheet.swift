@@ -2,8 +2,8 @@
 //  GLMAPIKeySheet.swift
 //  Quotio
 //
-//  Simplified API key configuration sheet for GLM (BigModel.cn)
-//  API key configuration sheet
+//  Simplified API key configuration sheet for GLM (BigModel.cn / Z.ai)
+//  with Capsule controls and persistent test connection state.
 //
 
 import SwiftUI
@@ -24,6 +24,11 @@ struct GLMAPIKeySheet: View {
     @State private var weightDrafts: [UUID: String] = [:]
     @State private var observedWeights: [UUID: Int] = [:]
 
+    // 测试状态仍归本弹窗，两个弹窗只复用纯值提交规则，避免迟到响应覆盖新输入。
+    @State private var connectionTest = ProviderConnectionTestState()
+    private var isTesting: Bool { connectionTest.isTesting }
+    private var testResult: ProviderConnectionTestState.Result? { connectionTest.result }
+
     @State private var validationError: String?
     @State private var showValidationAlert = false
 
@@ -38,9 +43,10 @@ struct GLMAPIKeySheet: View {
             headerView
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 18) {
                     apiKeySection
                     endpointSection
+                    testConnectionSection
                     CPAProviderWeightsSection(keys: weightEntries, observed: observedWeights, drafts: $weightDrafts)
                 }
                 .padding(20)
@@ -49,10 +55,11 @@ struct GLMAPIKeySheet: View {
             footerView
         }
         .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
-        .frame(width: 480, height: 330)
+        .frame(width: 500, height: 540)
         .onAppear {
             loadProviderData()
         }
+        .onDisappear { connectionTest.invalidate() }
         .alert("glm.validationError".localized(), isPresented: $showValidationAlert) {
             Button("action.ok".localized(), role: .cancel) {}
         } message: {
@@ -93,16 +100,19 @@ struct GLMAPIKeySheet: View {
     // MARK: - API Key Section
 
     private var apiKeySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("glm.apiKey".localized())
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("glm.apiKeyHint".localized())
-                    .font(.subheadline)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
 
                 QuotioCapsuleSecureField("glm.apiKeyPlaceholder".localized(), text: $apiKey, systemImage: "key")
+                    .onChange(of: apiKey) {
+                        connectionTest.invalidate()
+                    }
             }
         }
         .quotioInsetCard()
@@ -111,44 +121,131 @@ struct GLMAPIKeySheet: View {
     // MARK: - Endpoint Section
 
     private var endpointSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("glm.endpoint".localized())
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("glm.endpointHint".localized())
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            Text("glm.endpointHint".localized())
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-                Menu {
-                    ForEach(GLMEndpoint.allCases) { ep in
-                        Button(ep.displayName) {
-                            endpoint = ep
-                        }
-                    }
-                } label: {
-                    HStack {
-                        Text(endpoint.displayName)
-                            .font(.body)
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(height: 32)
-                    .background(
-                        Capsule().fill(QuotioTheme.Colors.cardInset(for: colorScheme))
-                    )
-                    .overlay(
-                        Capsule().strokeBorder(QuotioTheme.Colors.sidebarBorder(for: colorScheme), lineWidth: 0.5)
-                    )
-                }
-                .menuStyle(.borderlessButton)
+            QuotioCapsuleSegmentedControl(
+                GLMEndpoint.allCases,
+                selection: $endpoint,
+                size: .medium,
+                tint: QuotioTheme.Colors.claudeOrange,
+                isEqualWidth: true,
+                title: { $0.displayName }
+            )
+            .accessibilityLabel("glm.endpoint".localized())
+            .onChange(of: endpoint) {
+                connectionTest.invalidate()
             }
         }
         .quotioInsetCard()
+    }
+
+    // MARK: - Test Connection Section
+
+    private var testConnectionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
+                Label("agents.testConnection".localized(), systemImage: "network")
+                    .font(.subheadline.weight(.medium))
+
+                Spacer()
+
+                if isTesting {
+                    HStack(spacing: 5) {
+                        SmallProgressView()
+                        Text("customProviders.testing".localized())
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(Capsule())
+                } else if let result = testResult {
+                    HStack(spacing: 5) {
+                        Image(systemName: result.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(result.success ? .green : .red)
+                        Text(result.success ? "remote.test.success".localized() : "remote.test.failed".localized())
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(result.success ? .green : .red)
+                        if let latency = result.latencyMs {
+                            Text("\(latency)ms")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(result.success ? .green.opacity(0.8) : .red.opacity(0.8))
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background((result.success ? Color.green : Color.red).opacity(0.12))
+                    .clipShape(Capsule())
+                }
+
+                Button {
+                    runConnectionTest()
+                } label: {
+                    HStack(spacing: 4) {
+                        if isTesting {
+                            SmallProgressView()
+                        } else {
+                            Image(systemName: testResult == nil ? "bolt.fill" : "arrow.clockwise")
+                        }
+                        Text(testResult == nil ? "agents.test".localized() : "action.retry".localized())
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.quotioMicroCapsule)
+                .controlSize(.small)
+                .disabled(isTesting || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(isTesting ? 0.5 : 1)
+            }
+
+            if let result = testResult, !result.success {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.top, 2)
+                    Text(result.message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous))
+            }
+        }
+        .quotioInsetCard()
+    }
+
+    private func runConnectionTest() {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else {
+            validationError = "glm.error.emptyApiKey".localized()
+            showValidationAlert = true
+            return
+        }
+
+        let request = connectionTest.begin(baseURL: endpoint.baseURL, apiKey: trimmedKey)
+        Task {
+            do {
+                let outcome = try await CustomProviderService.testConnection(
+                    providerType: .glmCompatibility, baseURL: request.baseURL, apiKey: request.apiKey)
+                connectionTest.complete(request, baseURL: endpoint.baseURL, apiKey: apiKey,
+                    result: .init(success: outcome.success, latencyMs: outcome.latencyMs, message: "OK"))
+            } catch {
+                connectionTest.complete(request, baseURL: endpoint.baseURL, apiKey: apiKey,
+                    result: .init(success: false, latencyMs: nil, message: error.localizedDescription))
+            }
+        }
     }
 
     // MARK: - Footer
@@ -197,7 +294,7 @@ struct GLMAPIKeySheet: View {
 
     private func saveProvider() {
         // Validate
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespaces)
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmedKey.isEmpty {
             validationError = "glm.error.emptyApiKey".localized()
@@ -213,7 +310,6 @@ struct GLMAPIKeySheet: View {
 
         do {
             let weighted = try CustomAPIKeyEntry.applyingRoutingWeights(weightEntries, drafts: weightDrafts, observed: observedWeights)
-            // 简化 GLM 表单仍只改首个密钥正文；每个已有密钥的权重按 UUID 独立保存，其余功能保留。
             for index in newProvider.apiKeys.indices {
                 let entry = weighted.first { $0.id == newProvider.apiKeys[index].id }
                     ?? (index == 0 ? weighted.first : nil)
@@ -272,8 +368,8 @@ enum GLMEndpoint: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var displayName: String {
         switch self {
-        case .zai: return "glm.endpoint.zaiGlobal".localizedStatic()
-        case .bigmodel: return "bigmodel.cn"
+        case .zai: return "Z.ai (Global)"
+        case .bigmodel: return "bigmodel.cn (国内)"
         }
     }
 
@@ -282,13 +378,5 @@ enum GLMEndpoint: String, CaseIterable, Codable, Identifiable, Sendable {
         case .zai: return "https://api.z.ai"
         case .bigmodel: return "https://bigmodel.cn"
         }
-    }
-}
-
-// MARK: - Preview
-
-#Preview {
-    GLMAPIKeySheet(provider: nil) { provider in
-        print("Saved: \(provider.name)")
     }
 }

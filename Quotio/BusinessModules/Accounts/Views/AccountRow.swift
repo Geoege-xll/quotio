@@ -53,6 +53,10 @@ struct AccountRowData: Identifiable, Hashable {
     let canSwitch: Bool           // Whether this account can be switched (Antigravity only)
     /// 只允许真实 CPA 文件账号编辑权重；监控账号、运行时 API Key 和插件虚拟账号不走文件字段接口。
     let canEditRoutingWeight: Bool
+    let authIndex: String?
+    let weight: Int?
+    let priority: Int?
+    let cooldowns: [AuthFileCooldown]?
 
     // Custom initializer to handle canEdit parameter
     init(
@@ -69,7 +73,11 @@ struct AccountRowData: Identifiable, Hashable {
         canDelete: Bool,
         canEdit: Bool = false,
         canSwitch: Bool = false,
-        canEditRoutingWeight: Bool = false
+        canEditRoutingWeight: Bool = false,
+        authIndex: String? = nil,
+        weight: Int? = nil,
+        priority: Int? = nil,
+        cooldowns: [AuthFileCooldown]? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -85,8 +93,23 @@ struct AccountRowData: Identifiable, Hashable {
         self.canEdit = canEdit
         self.canSwitch = canSwitch
         self.canEditRoutingWeight = canEditRoutingWeight
+        self.authIndex = authIndex
+        self.weight = weight
+        self.priority = priority
+        self.cooldowns = cooldowns
     }
 
+    /// 原成员保留兼容调用；可见行显式传入 Timeline 的时间，不触发网络或额度刷新。
+    var activeCooldowns: [AuthFileCooldown] { activeCooldowns(at: Date()) }
+    var hasActiveCooldown: Bool { !activeCooldowns.isEmpty }
+    var cooldownSummary: String? { AuthFileCooldown.summary(activeCooldowns) }
+    var cooldownTooltip: String? { AuthFileCooldown.tooltip(activeCooldowns) }
+    var canResetCooldown: Bool { canResetCooldown(at: Date()) }
+
+    func activeCooldowns(at date: Date) -> [AuthFileCooldown] { AuthFileCooldown.active(cooldowns, at: date) }
+    func canResetCooldown(at date: Date) -> Bool {
+        !activeCooldowns(at: date).isEmpty && authIndex?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
 
     /// 固定入口遵循已确认的额度归属。歧义管理行没有可固定凭据；缓存行
     /// 仍有自己的键，多 Key 连接则分别提供所有 Key，不把首 Key 代表整条连接。
@@ -121,7 +144,11 @@ struct AccountRowData: Identifiable, Hashable {
             canDelete: true,
             canEditRoutingWeight: authFile.runtimeOnly != true &&
                 !(["api-key", "plugin"].contains(authFile.source?.lowercased() ?? "")) &&
-                authFile.name.lowercased().hasSuffix(".json")
+                authFile.name.lowercased().hasSuffix(".json"),
+            authIndex: authFile.authIndex,
+            weight: authFile.weight,
+            priority: authFile.priority,
+            cooldowns: authFile.cooldowns
         )
     }
     
@@ -184,13 +211,21 @@ struct AccountRowData: Identifiable, Hashable {
         hasher.combine(authFileName)
         hasher.combine(isDisabled)
         hasher.combine(status)
+        hasher.combine(authIndex)
+        hasher.combine(weight)
+        hasher.combine(priority)
+        hasher.combine(cooldowns)
     }
 
     static func == (lhs: AccountRowData, rhs: AccountRowData) -> Bool {
         lhs.id == rhs.id &&
         lhs.authFileName == rhs.authFileName &&
         lhs.isDisabled == rhs.isDisabled &&
-        lhs.status == rhs.status
+        lhs.status == rhs.status &&
+        lhs.authIndex == rhs.authIndex &&
+        lhs.weight == rhs.weight &&
+        lhs.priority == rhs.priority &&
+        lhs.cooldowns == rhs.cooldowns
     }
 }
 
@@ -251,7 +286,17 @@ struct AccountRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        // 只有含冷却数据的可见行提供一秒级展示时钟；不新增 VM Task 或后台取数。
+        if account.cooldowns?.isEmpty == false {
+            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                rowContent(at: timeline.date)
+            }
+        } else { rowContent(at: .now) }
+    }
+
+    private func rowContent(at date: Date) -> some View {
+        let activeCooldowns = account.activeCooldowns(at: date)
+        return HStack(spacing: 12) {
             // Account Identity Avatar
             accountAvatar
 
@@ -264,6 +309,30 @@ struct AccountRow: View {
                         .lineLimit(1)
                     AccountPlanBadge(quotaData: quotaData, subscriptionInfo: subscriptionInfo)
                         .fixedSize()
+                    if let priority = account.priority, priority > 0 {
+                        Text("P\(priority)")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Capsule().fill(Color.purple.opacity(colorScheme == .dark ? 0.22 : 0.12)))
+                            .foregroundStyle(.purple)
+                            .nativeTooltip(String(format: "credentials.priority.badgeTooltip".localized(), priority))
+                            .help(String(format: "credentials.priority.badgeTooltip".localized(), priority))
+                    }
+                    if let summary = AuthFileCooldown.summary(activeCooldowns) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "snowflake")
+                                .font(.system(size: 8.5))
+                            Text(summary)
+                                .font(.system(size: 9.5, weight: .medium))
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1.5)
+                        .background(Capsule().fill(Color.orange.opacity(colorScheme == .dark ? 0.22 : 0.12)))
+                        .foregroundStyle(.orange)
+                        .nativeTooltip(AuthFileCooldown.tooltip(activeCooldowns) ?? "")
+                        .help(AuthFileCooldown.tooltip(activeCooldowns) ?? "")
+                    }
                 }
 
                 HStack(spacing: 6) {
@@ -354,6 +423,23 @@ struct AccountRow: View {
                 // Menu bar toggle (26pt circular icon button)
                 menuBarControl
 
+                // Cooldown reset button
+                if account.canResetCooldown(at: date) {
+                    QuotioCircularIconButton(
+                        systemImage: "arrow.counterclockwise",
+                        tint: .orange,
+                        backgroundTint: .orange,
+                        tooltip: "credentials.cooldown.reset".localized()
+                    ) {
+                        if let authIndex = account.authIndex {
+                            Task {
+                                await viewModel.resetAuthFileCooldown(authIndex: authIndex)
+                            }
+                        }
+                    }
+                    .accessibilityLabel("credentials.cooldown.reset".localized())
+                }
+
                 // Disable/Enable toggle button (only for proxy accounts)
                 if account.source.supportsDisable, let onToggleDisabled = onToggleDisabled {
                     let title = account.isDisabled ? "providers.enable".localized() : "providers.disable".localized()
@@ -385,11 +471,11 @@ struct AccountRow: View {
                         systemImage: "slider.horizontal.3",
                         tint: .blue,
                         backgroundTint: .blue,
-                        tooltip: "settings.cpa.accountWeight".localized()
+                        tooltip: "settings.cpa.accountRouting".localized()
                     ) {
                         showWeightSheet = true
                     }
-                    .accessibilityLabel("settings.cpa.accountWeight".localized())
+                    .accessibilityLabel("settings.cpa.accountRouting".localized())
                 }
 
                 if showsQuotaActions {
@@ -426,9 +512,19 @@ struct AccountRow: View {
         }
         .contentShape(Rectangle())
         .contextMenu {
+            if account.canResetCooldown(at: date) {
+                Button {
+                    if let authIndex = account.authIndex {
+                        Task { await viewModel.resetAuthFileCooldown(authIndex: authIndex) }
+                    }
+                } label: {
+                    Label("credentials.cooldown.reset".localized(), systemImage: "arrow.counterclockwise")
+                }
+            }
+
             if canEditRoutingWeight {
                 Button { showWeightSheet = true } label: {
-                    Label("settings.cpa.accountWeight".localized(), systemImage: "slider.horizontal.3")
+                    Label("settings.cpa.accountRouting".localized(), systemImage: "slider.horizontal.3")
                 }
             }
             // Switch account option (Antigravity only)

@@ -1,118 +1,205 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "oauth.githubHost.label" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "GitHub host"
+    "agents.claudeMenu.contextInfo": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自动使用已保存的上下文声明或服务明确提供的容量；容量未知时跟随 Claude Code。"
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hôte GitHub"
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uses the saved context declaration or an explicit capacity from the service automatically; otherwise follows Claude Code."
           }
         },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Máy chủ GitHub"
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utilise automatiquement la déclaration conservée ou la capacité explicite du service ; sinon suit Claude Code."
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "GitHub 主机"
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tự động dùng khai báo đã lưu hoặc dung lượng do dịch vụ xác nhận; nếu chưa biết thì theo Claude Code."
           }
         }
       }
     },
-    "oauth.githubHost.placeholder" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "github.com or company.ghe.com"
+    "agents.claudeMenu.contextAutomatic": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自动"
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "github.com ou entreprise.ghe.com"
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto"
           }
         },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "github.com hoặc company.ghe.com"
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "github.com 或 company.ghe.com"
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tự động"
           }
         }
       }
     },
-    "oauth.githubHost.hint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Leave empty for GitHub.com. Supports Enterprise Cloud accounts on GHE.com."
+    "agents.claudeMenu.context": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上下文"
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Laissez vide pour GitHub.com. Les comptes Enterprise Cloud sur GHE.com sont pris en charge."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Context"
           }
         },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Để trống để dùng GitHub.com. Hỗ trợ tài khoản Enterprise Cloud trên GHE.com."
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contexte"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "留空使用 GitHub.com，支持 GHE.com 数据驻留企业云账号。"
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ngữ cảnh"
           }
         }
       }
     },
-    "oauth.githubHost.invalid" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enter github.com or a single company.ghe.com host, without a port or path."
+    "agents.claudeMenu.sourceUnknown": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来源未标明"
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Saisissez github.com ou un hôte entreprise.ghe.com, sans port ni chemin."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source not specified"
           }
         },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nhập github.com hoặc company.ghe.com, không có cổng hay đường dẫn."
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source non précisée"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请输入 github.com 或单层 company.ghe.com 主机，不含端口或路径。"
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chưa xác định nguồn"
+          }
+        }
+      }
+    },
+    "agents.claudeMenu.accountPool": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "账号池"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account pool"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pool de comptes"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nhóm tài khoản"
+          }
+        }
+      }
+    },
+    "agents.claude.official.manual": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将以下内容保存到 %1$@，并移除 %2$@ 中 Claude Code 的 Quotio 管理段。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save the JSON below to %1$@, and remove the Quotio managed block for Claude Code from %2$@."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrez le JSON ci-dessous dans %1$@, puis retirez le bloc Quotio de Claude Code dans %2$@."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lưu JSON bên dưới vào %1$@ và xóa khối do Quotio quản lý cho Claude Code trong %2$@."
+          }
+        }
+      }
+    },
+    "agents.claude.official.restored": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已恢复 Claude Code 默认配置。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code default configuration restored."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La configuration par défaut de Claude Code a été rétablie."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã khôi phục cấu hình mặc định của Claude Code."
           }
         }
       }
@@ -143,6 +230,9 @@
     "(%@)" : {
       "comment" : "A small text label showing the progress of a route. The text inside the parentheses is replaced with the actual progress string.",
       "isCommentAutoGenerated" : true
+    },
+    "(%lld)" : {
+
     },
     "(default: %@)" : {
       "comment" : "A small note below the base URL field, indicating that it will use the default value if left empty. The placeholder text inside the parentheses is replaced with the actual default value.",
@@ -375,6 +465,9 @@
 
     },
     "1h / 30m" : {
+
+    },
+    "1M" : {
 
     },
     "10%" : {
@@ -2020,6 +2113,306 @@
         }
       }
     },
+    "agents.catalog.blocked" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select confirmed models for these entries before saving:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez des modèles confirmés pour ces entrées :"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chọn mô hình đã xác nhận cho các mục sau:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先为以下入口选择当前目录确认的模型："
+          }
+        }
+      }
+    },
+    "agents.catalog.changed" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The model catalog changed. Review the updated preview and save again."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le catalogue a changé. Vérifiez l’aperçu puis enregistrez à nouveau."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Danh mục đã thay đổi. Kiểm tra bản xem trước rồi lưu lại."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型目录已变化，请核对更新后的预览再保存。"
+          }
+        }
+      }
+    },
+    "agents.catalog.fileChanged" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The configuration changed outside this transaction. Reload and retry; no newer content was overwritten."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La configuration a changé. Rechargez puis réessayez ; les nouvelles données sont conservées."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cấu hình đã thay đổi. Tải lại rồi thử lại; nội dung mới không bị ghi đè."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置文件已被其他操作修改，请重新读取后重试；新内容未被覆盖。"
+          }
+        }
+      }
+    },
+    "agents.catalog.oldVersion" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Catalog-managed menus require Claude Code 2.1.242 or later."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les menus du catalogue nécessitent Claude Code 2.1.242 ou ultérieur."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menu danh mục yêu cầu Claude Code 2.1.242 trở lên."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目录菜单需要 Claude Code 2.1.242 或更高版本。"
+          }
+        }
+      }
+    },
+    "agents.catalog.removed" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These references will leave the active configuration and remain in the backup:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ces références seront retirées de la configuration active et conservées en sauvegarde :"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Các tham chiếu sau sẽ được gỡ khỏi cấu hình hoạt động và giữ trong bản sao lưu:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以下旧引用将退出生效配置，并完整保留在备份中："
+          }
+        }
+      }
+    },
+    "agents.catalog.requiresJSON" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save JSON or JSON + Shell to migrate the model menu."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistrez JSON ou JSON + Shell pour migrer le menu."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lưu JSON hoặc JSON + Shell để di chuyển menu mô hình."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请保存 JSON 或 JSON + Shell，以迁移模型菜单。"
+          }
+        }
+      }
+    },
+    "agents.catalog.restart" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The menu is generated from the last successful catalog sync. Reopen Claude Code after saving."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le menu utilise le dernier catalogue synchronisé. Rouvrez Claude Code après l’enregistrement."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menu dùng danh mục đồng bộ thành công gần nhất. Mở lại Claude Code sau khi lưu."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "菜单按最近一次成功同步的目录生成，保存后请重开 Claude Code 会话。"
+          }
+        }
+      }
+    },
+    "agents.catalog.rollbackFailed" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The migration could not be rolled back automatically. Restore from the preserved backup:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La migration n’a pas pu être annulée automatiquement. Restaurez la sauvegarde :"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Không thể tự động hoàn tác. Hãy khôi phục từ bản sao lưu:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "迁移未能自动回滚，请使用已保留的备份恢复："
+          }
+        }
+      }
+    },
+    "agents.catalog.shellMalformed" : {
+      "comment" : "管理段不完整时停止迁移，原文件和备份保持可恢复。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Quotio Shell block is incomplete. Repair its start/end markers before retrying."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le bloc Shell Quotio est incomplet. Corrigez ses marqueurs avant de réessayer."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Khối Shell Quotio chưa đầy đủ. Sửa dấu bắt đầu/kết thúc rồi thử lại."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quotio 的 Shell 管理段标记不完整，请修复开始／结束标记后重试。"
+          }
+        }
+      }
+    },
+    "agents.catalog.summary" : {
+      "comment" : "受管目录菜单与统一迁移提示；不翻译模型 ID。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmed %ld · Adapt %ld · Remove from menu %ld"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmés %ld · À adapter %ld · À retirer %ld"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã xác nhận %ld · Điều chỉnh %ld · Gỡ khỏi menu %ld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已确认 %ld 项 · 将适配 %ld 项 · 退出菜单 %ld 项"
+          }
+        }
+      }
+    },
     "agents.checkingUpdate" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2123,18 +2516,31 @@
       }
     },
     "agents.claude.advanced.context" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Maximum context window"
+      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom context window"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最大上下文窗口"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自定义上下文窗口"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fenêtre de contexte personnalisée"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cửa sổ ngữ cảnh tùy chỉnh"
           }
         }
       }
@@ -2157,18 +2563,151 @@
       }
     },
     "agents.claude.advanced.context.info" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Used for custom models without a 1M declaration. Each model’s 1M setting leaves this value unchanged."
+      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Follow Claude Code unless you explicitly declare a custom window. This does not increase upstream capacity. Per-model 1M stays independent; existing compaction settings are preserved. Reopen your terminal after applying changes."
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "用于未声明 1M 的自定义模型；各模型的 1M 设置不会改变此值。"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "默认跟随 Claude Code；仅自定义时声明窗口，不会提升上游容量。各模型 1M 独立生效，已有压缩设置保留。应用后请重新打开终端。"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suivez Claude Code sauf déclaration explicite. Cela n’augmente pas la capacité amont. Le mode 1M par modèle reste indépendant et les réglages de compaction sont conservés. Rouvrez le terminal après application."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mặc định theo Claude Code; chỉ khai báo cửa sổ khi tùy chỉnh, không tăng dung lượng máy chủ. 1M theo mô hình độc lập, giữ thiết lập nén. Mở lại terminal sau khi áp dụng."
+          }
+        }
+      }
+    },
+    "agents.claude.advanced.context.automatic" : {
+      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Follow Claude Code"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "跟随 Claude Code"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suivre Claude Code"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Theo Claude Code"
+          }
+        }
+      }
+    },
+    "agents.claude.advanced.context.custom" : {
+      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom window"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自定义窗口"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fenêtre personnalisée"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cửa sổ tùy chỉnh"
+          }
+        }
+      }
+    },
+    "agents.claude.advanced.context.placeholder" : {
+      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Token count"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "输入令牌数"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jetons"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Số token"
+          }
+        }
+      }
+    },
+    "agents.claude.advanced.context.requiresJSON" : {
+      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The context window differs from settings.json. Save JSON or JSON + Shell so the old override can be removed or replaced."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上下文窗口与现有 settings.json 不一致，请选择 JSON 或 JSON＋Shell 保存，才能移除或替换旧覆盖。"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La fenêtre diffère de settings.json. Enregistrez JSON ou JSON + Shell pour retirer ou remplacer l’ancienne valeur."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cửa sổ khác settings.json. Hãy lưu JSON hoặc JSON + Shell để xóa hoặc thay thế giá trị cũ."
           }
         }
       }
@@ -2271,6 +2810,156 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fable 需要 Claude Code 2.1.257 或更新版本；请升级 CLI，或继续使用原有三个角色。"
+          }
+        }
+      }
+    },
+    "agents.claudeCompatibility.conflicts" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conflicting model settings are preserved for review:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ces paramètres de modèles en conflit sont conservés pour vérification :"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Các thiết lập mô hình xung đột được giữ lại để kiểm tra:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以下模型关联设置存在冲突，已保留供核对："
+          }
+        }
+      }
+    },
+    "agents.claudeCompatibility.migrated" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%ld model references will be adapted to the current service when saved."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%ld références de modèles seront adaptées au service actuel lors de l’enregistrement."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%ld tham chiếu mô hình sẽ được điều chỉnh theo dịch vụ hiện tại khi lưu."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存时将适配 %ld 处模型引用，以匹配当前服务。"
+          }
+        }
+      }
+    },
+    "agents.claudeCompatibility.requiresJSON" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose JSON or JSON + Shell to update existing model references in settings.json."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez JSON ou JSON + Shell pour mettre à jour les références de modèles dans settings.json."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chọn JSON hoặc JSON + Shell để cập nhật tham chiếu mô hình trong settings.json."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请选择 JSON 或 JSON + Shell，以更新 settings.json 中已有的模型引用。"
+          }
+        }
+      }
+    },
+    "agents.claudeCompatibility.unreadable" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unable to read the existing settings.json. Check its format and permissions before saving."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire le fichier settings.json existant. Vérifiez son format et ses autorisations."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Không thể đọc settings.json hiện có. Hãy kiểm tra định dạng và quyền truy cập."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取已有 settings.json，请检查文件格式和权限后重试。"
+          }
+        }
+      }
+    },
+    "agents.claudeCompatibility.unresolved" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These legacy models were not found in the current catalog; their values are preserved:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ces anciens modèles sont absents du catalogue actuel ; leurs valeurs sont conservées :"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Không tìm thấy các mô hình cũ sau trong danh mục hiện tại; giá trị được giữ nguyên:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前模型目录未找到以下旧模型，已保留原值："
           }
         }
       }
@@ -2717,70 +3406,302 @@
         }
       }
     },
-    "agents.claudeSubagent.info" : {
+    "agents.claudeSubagent.advanced" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Following the session removes the fixed subagent override. Explicit per-agent or per-invocation model settings still take precedence. Haiku background tasks remain separate."
+            "value" : "Advanced subagent options"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Options avancées des sous-agents"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tùy chọn nâng cao cho tác nhân phụ"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跟随会话会移除固定的子代理模型变量；代理定义或单次调用中明确指定的模型仍优先。Haiku 后台任务与子代理配置相互独立。"
+            "value" : "子代理高级选项"
+          }
+        }
+      }
+    },
+    "agents.claudeSubagent.force.enabled" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forced override enabled"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remplacement forcé activé"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã bật ghi đè bắt buộc"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已开启强制覆盖"
+          }
+        }
+      }
+    },
+    "agents.claudeSubagent.force.info" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Overrides explicit subagent model choices according to Claude Code rules. Requires Claude Code 2.1.257 or later."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remplace les choix explicites des sous-agents selon les règles de Claude Code. Nécessite la version 2.1.257 ou ultérieure."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ghi đè lựa chọn mô hình rõ ràng của tác nhân phụ theo quy tắc Claude Code. Yêu cầu phiên bản 2.1.257 trở lên."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按 Claude Code 规则覆盖子代理明确指定的模型，需要 Claude Code 2.1.257 或更高版本。"
+          }
+        }
+      }
+    },
+    "agents.claudeSubagent.force.oldVersion" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Claude Code to 2.1.257 or later before enabling forced subagent model override."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mettez Claude Code à jour vers la version 2.1.257 ou ultérieure avant d’activer le remplacement forcé."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hãy cập nhật Claude Code lên 2.1.257 trở lên trước khi bật ghi đè bắt buộc."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先将 Claude Code 升级到 2.1.257 或更高版本，再开启子代理模型强制覆盖。"
+          }
+        }
+      }
+    },
+    "agents.claudeSubagent.force.title" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Force the specified model for subagents"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imposer le modèle indiqué aux sous-agents"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buộc tác nhân phụ dùng mô hình được chỉ định"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制子代理使用指定模型"
+          }
+        }
+      }
+    },
+    "agents.claudeSubagent.info" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default rules preserve native inheritance. A specified default model does not override explicit per-agent or per-invocation choices unless forced override is enabled. Haiku background tasks remain separate."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les règles par défaut conservent l’héritage natif. Le modèle par défaut ne remplace pas les choix explicites, sauf si le remplacement forcé est activé. Les tâches Haiku restent distinctes."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quy tắc mặc định giữ nguyên cơ chế kế thừa. Mô hình mặc định không ghi đè lựa chọn rõ ràng trừ khi bật ghi đè bắt buộc. Tác vụ nền Haiku vẫn độc lập."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认规则保留原生继承行为；指定默认模型不会覆盖代理定义或单次调用中明确指定的模型，除非开启强制覆盖。Haiku 后台任务与子代理配置相互独立。"
           }
         }
       }
     },
     "agents.claudeSubagent.inherit" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Follow current session"
+            "value" : "Use default rules"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utiliser les règles par défaut"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dùng quy tắc mặc định"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跟随当前会话"
+            "value" : "使用默认规则"
           }
         }
       }
     },
     "agents.claudeSubagent.requiresJSON" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choose JSON or JSON + Shell to remove the fixed subagent model from settings.json."
+            "value" : "Choose JSON or JSON + Shell to update the subagent settings in settings.json."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez JSON ou JSON + Shell pour mettre à jour les paramètres des sous-agents dans settings.json."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chọn JSON hoặc JSON + Shell để cập nhật thiết lập tác nhân phụ trong settings.json."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请选择 JSON 或 JSON + Shell，以移除 settings.json 中固定的子代理模型。"
+            "value" : "请选择 JSON 或 JSON + Shell，以更新 settings.json 中已有的子代理设置。"
+          }
+        }
+      }
+    },
+    "agents.claudeSubagent.shellNeedsJSON" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply this Shell configuration together with the JSON configuration below; the existing settings.json takes precedence."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appliquez cette configuration Shell avec la configuration JSON ci-dessous ; le fichier settings.json existant est prioritaire."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Áp dụng cấu hình Shell cùng cấu hình JSON bên dưới; settings.json hiện có được ưu tiên."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请配合下方 JSON 配置一起应用此 Shell 配置；已有 settings.json 的设置优先。"
           }
         }
       }
     },
     "agents.claudeSubagent.specify" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Specify model or role"
+            "value" : "Specify a default model"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indiquer un modèle par défaut"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chỉ định mô hình mặc định"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "指定模型或角色"
+            "value" : "指定默认模型"
           }
         }
       }
@@ -3643,9 +4564,22 @@
       }
     },
     "agents.modelMapping.oneMillion" : {
-      "extractionState" : "stale",
+      "comment" : "Claude 显式 1M 请求声明；不使用模型 ID 或目录归属猜测后端容量。",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1M"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1M"
+          }
+        },
+        "vi" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "1M"
@@ -3659,19 +4593,62 @@
         }
       }
     },
-    "agents.modelMapping.oneMillion.info" : {
-      "extractionState" : "stale",
+    "agents.modelMapping.oneMillion.declared" : {
+      "comment" : "Claude 显式 1M 请求声明；不使用模型 ID 或目录归属猜测后端容量。",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Append [1m] to this role’s request model."
+            "value" : "This selection explicitly includes [1m]; it is not a model capacity detection result."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce choix inclut explicitement [1m] ; il ne résulte pas d’une détection de capacité."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lựa chọn này có khai báo [1m] rõ ràng; đây không phải kết quả phát hiện dung lượng mô hình."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "为该角色的请求模型追加 [1m]。"
+            "value" : "此选择显式包含 [1m]，不代表已检测后端模型容量。"
+          }
+        }
+      }
+    },
+    "agents.modelMapping.oneMillion.info" : {
+      "comment" : "Claude 显式 1M 请求声明；不使用模型 ID 或目录归属猜测后端容量。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Append [1m] to this role’s request. This does not detect the backend context capacity."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajoute [1m] aux requêtes de ce rôle, sans déduire la capacité du modèle distant."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thêm [1m] vào yêu cầu của vai trò này, không tự suy đoán dung lượng ngữ cảnh của mô hình."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为此角色的请求追加 [1m]，不自动推断后端模型容量。"
           }
         }
       }
@@ -3854,39 +4831,93 @@
         }
       }
     },
-    "agents.models.clientKeyRequired" : {
-      "comment" : "客户端 key 未就绪时阻止代理配置覆盖已有认证；管理密钥不能替代。",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "A client API key is required. Load or create one in API Keys, then refresh the model list." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "尚未取得客户端 API Key。请在 API Key 管理中加载或创建密钥，再刷新模型目录。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "尚未取得用戶端 API Key。請在 API Key 管理中載入或建立金鑰，再重新整理模型目錄。" } }
-      }
-    },
-    "agents.models.failed" : {
-      "comment" : "动态目录提示：不得将接口失败或空目录替换成静态型号；模型选择由用户确认。",
+    "agents.models.accountsChanged" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Unable to load models from the current service. Retry; your selection is preserved."
+            "value" : "Account status changed. Updating the model catalog; you can also refresh to retry."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "État du compte modifié. Mise à jour du catalogue ; vous pouvez aussi actualiser pour réessayer."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trạng thái tài khoản đã thay đổi. Đang cập nhật danh mục; bạn cũng có thể làm mới để thử lại."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法读取当前服务的模型目录。请重试，已有选择会保留。"
+            "value" : "账号状态已变更，正在更新模型目录；也可点击刷新重试。"
+          }
+        }
+      }
+    },
+    "agents.models.clientKeyRequired" : {
+      "comment" : "客户端 key 未就绪时阻止代理配置覆盖已有认证；管理密钥不能替代。",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A client API key is required. Load or create one in API Keys, then refresh the model list."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未取得客户端 API Key。请在 API Key 管理中加载或创建密钥，再刷新模型目录。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無法讀取目前服務的模型目錄。請重試，既有選擇會保留。"
+            "value" : "尚未取得用戶端 API Key。請在 API Key 管理中載入或建立金鑰，再重新整理模型目錄。"
+          }
+        }
+      }
+    },
+    "agents.models.currentConfiguration" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Current configuration (preserved)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configuration actuelle (conservée)"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cấu hình hiện tại (được giữ lại)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前配置（保留原值）"
           }
         }
       }
     },
     "agents.models.empty" : {
       "comment" : "动态目录提示：不得将接口失败或空目录替换成静态型号；模型选择由用户确认。",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3908,35 +4939,52 @@
         }
       }
     },
-    "agents.models.selectRequired" : {
+    "agents.models.failed" : {
       "comment" : "动态目录提示：不得将接口失败或空目录替换成静态型号；模型选择由用户确认。",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Select a model from the current service or enter its model ID manually."
+            "value" : "Unable to load models from the current service. Retry; your selection is preserved."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请从当前服务目录选择模型，或手动输入模型 ID。"
+            "value" : "无法读取当前服务的模型目录。请重试，已有选择会保留。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請從目前服務目錄選擇模型，或手動輸入模型 ID。"
+            "value" : "無法讀取目前服務的模型目錄。請重試，既有選擇會保留。"
           }
         }
       }
     },
     "agents.models.loading" : {
       "comment" : "OpenCode 和 Factory 首次取目录期间阻止空集合提交，不改变目录任务宿主。",
+      "extractionState" : "stale",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading the current model list. Please wait before saving." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在读取当前模型目录，请等待加载完成后保存。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在讀取目前模型目錄，請等待載入完成後儲存。" } }
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading the current model list. Please wait before saving."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取当前模型目录，请等待加载完成后保存。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在讀取目前模型目錄，請等待載入完成後儲存。"
+          }
+        }
       }
     },
     "agents.models.refresh" : {
@@ -3964,6 +5012,60 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "刷新模型列表"
+          }
+        }
+      }
+    },
+    "agents.models.selectRequired" : {
+      "comment" : "动态目录提示：不得将接口失败或空目录替换成静态型号；模型选择由用户确认。",
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select a model from the current service or enter its model ID manually."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请从当前服务目录选择模型，或手动输入模型 ID。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請從目前服務目錄選擇模型，或手動輸入模型 ID。"
+          }
+        }
+      }
+    },
+    "agents.models.unconfirmed" : {
+      "comment" : "客户端配置提示：仅翻译说明，模型 ID、配置键和原始值保持不变。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not confirmed in the current catalog"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non confirmé dans le catalogue actuel"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chưa được xác nhận trong danh mục hiện tại"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未在当前目录确认"
           }
         }
       }
@@ -4352,10 +5454,26 @@
     },
     "agents.pi.configurationInProgress" : {
       "comment" : "同一配置服务内的 Pi 自动保存仍在查证或安装；保留原事务，新写入／恢复需要重试。",
+      "extractionState" : "stale",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "The previous Pi configuration is still being saved. Please retry when it finishes." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "上一次 Pi 配置仍在保存，请等待完成后重试。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "上一次 Pi 配置仍在儲存，請等待完成後重試。" } }
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The previous Pi configuration is still being saved. Please retry when it finishes."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一次 Pi 配置仍在保存，请等待完成后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一次 Pi 配置仍在儲存，請等待完成後重試。"
+          }
+        }
       }
     },
     "agents.pi.modelInfo" : {
@@ -5597,37 +6715,37 @@
         }
       }
     },
-    "agents.update.manualSource": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Installation source is unknown. Update or uninstall using the original installation method."
+    "agents.update.manualSource" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installation source is unknown. Update or uninstall using the original installation method."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法确认安装来源，请按原安装方式手动升级或卸载。"
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source d’installation inconnue. Mettez à jour ou désinstallez avec la méthode d’origine."
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無法確認安裝來源，請按原安裝方式手動升級或解除安裝。"
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chưa xác định được nguồn cài đặt. Hãy cập nhật hoặc gỡ bằng cách cài đặt ban đầu."
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Source d’installation inconnue. Mettez à jour ou désinstallez avec la méthode d’origine."
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认安装来源，请按原安装方式手动升级或卸载。"
           }
         },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chưa xác định được nguồn cài đặt. Hãy cập nhật hoặc gỡ bằng cách cài đặt ban đầu."
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法確認安裝來源，請按原安裝方式手動升級或解除安裝。"
           }
         }
       }
@@ -6763,6 +7881,9 @@
     "API Key #%lld" : {
       "comment" : "A label at the start of each API key row, showing the index of the key.",
       "isCommentAutoGenerated" : true
+    },
+    "API 密钥 (API Key)" : {
+
     },
     "apiKeys.add" : {
       "extractionState" : "stale",
@@ -11998,6 +13119,209 @@
         }
       }
     },
+    "credentials.cooldown.activeTooltip" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Credential is currently cooling down:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'identifiant est actuellement en période de refroidissement :"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thông tin xác thực hiện đang trong thời gian hạ nhiệt:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此凭据当前处于冷却限制中："
+          }
+        }
+      }
+    },
+    "credentials.cooldown.bannerSubtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requests will temporarily skip these credentials until cooldown expires, or you can reset them manually."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les requêtes ignoreront temporairement ces identifiants jusqu'à la fin de la période, ou vous pouvez les réinitialiser."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Các yêu cầu sẽ tạm thời bỏ qua các thông tin xác thực này cho đến khi hết thời gian hạ nhiệt, hoặc bạn có thể đặt lại theo cách thủ công."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调度将临时避开受限凭据，冷却期结束后自动恢复；您也可一键手动解除限制。"
+          }
+        }
+      }
+    },
+    "credentials.cooldown.bannerTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld credentials in cooldown or rate-limited"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld identifiants en période de refroidissement ou limités"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld thông tin xác thực đang hạ nhiệt hoặc bị giới hạn tốc độ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有 %lld 个凭据处于冷却或限流惩罚期"
+          }
+        }
+      }
+    },
+    "credentials.cooldown.reset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset Cooldown"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réinitialiser le refroidissement"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đặt lại hạ nhiệt"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除冷却"
+          }
+        }
+      }
+    },
+    "credentials.cooldown.resetAll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset All Cooldowns"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout réinitialiser"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đặt lại tất cả hạ nhiệt"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一键全部解除"
+          }
+        }
+      }
+    },
+    "credentials.cooldown.scopeAll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All models"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tous les modèles"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tất cả mô hình"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全模型生效"
+          }
+        }
+      }
+    },
+    "credentials.priority.badgeTooltip" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Routing priority: Tier %lld (higher values scheduled first)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priorité de routage : Niveau %lld (les valeurs plus élevées sont prioritaires)"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ưu tiên định tuyến: Bậc %lld (giá trị cao hơn được ưu tiên)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分级调度优先级：P%lld（数值越高越优先调度）"
+          }
+        }
+      }
+    },
     "customProviders.add" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -13038,6 +14362,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将上游模型名称映射到本地别名"
+          }
+        }
+      }
+    },
+    "customProviders.models.required" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configure at least one model: fetch the live catalog or enter an ID manually."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configurez au moins un modèle : chargez le catalogue ou saisissez un ID."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cấu hình ít nhất một mô hình: tải danh mục hoặc nhập ID thủ công."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请至少配置一个模型：读取实时目录，或手动填写模型 ID。"
           }
         }
       }
@@ -14900,6 +16253,35 @@
     },
     "Date" : {
 
+    },
+    "deepseek.status.unavailable" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Service Unavailable"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Service indisponible"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dịch vụ không khả dụng"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务不可用"
+          }
+        }
+      }
     },
     "display_mode" : {
       "extractionState" : "manual",
@@ -20289,6 +21671,122 @@
         }
       }
     },
+    "oauth.githubHost.hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave empty for GitHub.com. Supports Enterprise Cloud accounts on GHE.com."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Laissez vide pour GitHub.com. Les comptes Enterprise Cloud sur GHE.com sont pris en charge."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Để trống để dùng GitHub.com. Hỗ trợ tài khoản Enterprise Cloud trên GHE.com."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留空使用 GitHub.com，支持 GHE.com 数据驻留企业云账号。"
+          }
+        }
+      }
+    },
+    "oauth.githubHost.invalid" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter github.com or a single company.ghe.com host, without a port or path."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez github.com ou un hôte entreprise.ghe.com, sans port ni chemin."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nhập github.com hoặc company.ghe.com, không có cổng hay đường dẫn."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 github.com 或单层 company.ghe.com 主机，不含端口或路径。"
+          }
+        }
+      }
+    },
+    "oauth.githubHost.label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub host"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hôte GitHub"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Máy chủ GitHub"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub 主机"
+          }
+        }
+      }
+    },
+    "oauth.githubHost.placeholder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "github.com or company.ghe.com"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "github.com ou entreprise.ghe.com"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "github.com hoặc company.ghe.com"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "github.com 或 company.ghe.com"
+          }
+        }
+      }
+    },
     "oauth.invalidCallback" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -22098,6 +23596,9 @@
         }
       }
     },
+    "P%lld" : {
+
+    },
     "providers.addAccount" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -23433,6 +24934,35 @@
         }
       }
     },
+    "quota.metric.cashBalance" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cash Balance"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solde rechargé"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Số dư nạp tiền"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "充值余额"
+          }
+        }
+      }
+    },
     "quota.metric.credits" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -23574,6 +25104,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "5 小时"
+          }
+        }
+      }
+    },
+    "quota.metric.grantedBalance" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Granted Balance"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solde offert"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Số dư tặng"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "赠送余额"
           }
         }
       }
@@ -24030,6 +25589,35 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "quota.metric.voucherBalance" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voucher Balance"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代金券余额"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Số dư phiếu"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代金券余额"
           }
         }
       }
@@ -28878,6 +30466,64 @@
         }
       }
     },
+    "settings.cpa.accountPriority" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scheduling priority"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priorité de planification"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Độ ưu tiên lập lịch"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调度优先级"
+          }
+        }
+      }
+    },
+    "settings.cpa.accountRouting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account routing & weights"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Routage et pondérations du compte"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Định tuyến và trọng số tài khoản"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账号调度与权重设置"
+          }
+        }
+      }
+    },
     "settings.cpa.accountWeight" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -29112,6 +30758,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "“%@”的数值无效，请输入该项支持的整数。"
+          }
+        }
+      }
+    },
+    "settings.cpa.priorityHelp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priority tier (0-1,000,000). High-priority accounts are used first; lower tiers act as fallbacks."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Niveau de priorité (0-1 000 000). Les comptes prioritaires sont utilisés en premier ; les niveaux inférieurs servent de secours."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bậc ưu tiên (0-1.000.000). Các tài khoản ưu tiên cao được dùng trước; các bậc thấp hơn dùng làm dự phòng."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账号分级优先级（0-1,000,000）。数值高的梯队优先调度，耗尽或冷却时自动故障转移至低优先级梯队。"
+          }
+        }
+      }
+    },
+    "settings.cpa.priorityInvalid" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Priority must be an integer between 0 and 1,000,000"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La priorité doit être un entier compris entre 0 et 1 000 000"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Độ ưu tiên phải là số nguyên từ 0 đến 1.000.000"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "优先级必须为 0 到 1,000,000 之间的整数"
           }
         }
       }
@@ -45472,9 +47176,6 @@
     "你可以打开终端使用 Claude / Codex / OpenCode / Antigravity 发起对话" : {
 
     },
-    "使用此自定义模型名称" : {
-
-    },
     "全部停用" : {
 
     },
@@ -45664,6 +47365,12 @@
     "更新此仓库中检测出差异的技能" : {
 
     },
+    "服务节点" : {
+
+    },
+    "服务节点 / Endpoint" : {
+
+    },
     "未发现符合条件的会话" : {
 
     },
@@ -45712,6 +47419,9 @@
     "正在解析历史消息..." : {
 
     },
+    "添加 %@ 账号" : {
+
+    },
     "添加 GitHub 仓库源 (SQLite 存储)" : {
 
     },
@@ -45742,10 +47452,16 @@
     "清空缓存 (%@)" : {
 
     },
+    "用于在账号列表和菜单栏中标识该服务商连接" : {
+
+    },
     "纳管到统一库" : {
 
     },
     "缓存已空" : {
+
+    },
+    "编辑 %@ 账号" : {
 
     },
     "覆盖 Claude Code、Codex、OpenCode、Pi、Antigravity 及 Quotio 网关" : {
@@ -45758,6 +47474,15 @@
 
     },
     "输入开源仓库（例如: anthropics/skills 或完整 GitHub 链接）" : {
+
+    },
+    "输入该服务商开放平台生成的 API Key" : {
+
+    },
+    "连接名称" : {
+
+    },
+    "选择 API 请求的基础接入地址" : {
 
     },
     "选择仓库源" : {

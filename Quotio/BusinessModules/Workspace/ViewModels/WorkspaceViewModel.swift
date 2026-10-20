@@ -169,12 +169,19 @@ public final class WorkspaceViewModel {
         defer { if revision == messageRevision { isLoadingMessages = false } }
 
         do {
-            let messages = try await sessionService.loadSessionMessages(session: session)
+            var messages = try await sessionService.loadSessionMessages(session: session)
             guard isCurrentMessageRequest(revision, session: session) else { return }
+            if messages.isEmpty, let summary = session.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                messages = [WorkspaceSessionMessage(role: .user, content: summary, timestamp: session.createdAt)]
+            }
             selectedSessionMessages = messages
         } catch {
             guard isCurrentMessageRequest(revision, session: session) else { return }
-            selectedSessionMessages = []
+            if let summary = session.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                selectedSessionMessages = [WorkspaceSessionMessage(role: .user, content: summary, timestamp: session.createdAt)]
+            } else {
+                selectedSessionMessages = []
+            }
             errorMessage = error.localizedDescription
         }
     }

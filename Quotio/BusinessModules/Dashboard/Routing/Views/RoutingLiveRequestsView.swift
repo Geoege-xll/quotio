@@ -48,23 +48,6 @@ struct RoutingLiveRequestsView: View {
                 .font(.headline)
                 .foregroundStyle(.primary)
 
-            if isRunning {
-                let isLive = store.state == .live
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(isLive ? Color.green : Color.orange)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: (isLive ? Color.green : Color.orange).opacity(0.6), radius: 3)
-
-                    Text(store.statusKey.localized())
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: Capsule())
-            }
-
             Spacer()
 
             // 手动刷新按钮

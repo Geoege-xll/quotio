@@ -51,7 +51,10 @@ extension QuotaViewModel {
         #if DEBUG
         if let hook = authImportRefreshHookForTesting { await hook(context.client != nil); return }
         #endif
-        if context.client != nil { await refreshData() }
+        if context.client != nil {
+            // 新增同型号的第二个账号也会改变菜单来源；沿用原会话和成功后一次刷新的事务边界。
+            await refreshAfterCPAAccountChange()
+        }
         else { await loadDirectAuthFiles() }
     }
 
@@ -109,6 +112,7 @@ extension QuotaViewModel {
             errorMessage = "Proxy not running"
             return
         }
+        let source = refreshContext()
         
         isLoading = true
         defer { isLoading = false }
@@ -121,9 +125,12 @@ extension QuotaViewModel {
             url.stopAccessingSecurityScopedResource()
             
             try await client.uploadVertexServiceAccount(data: data)
-            await refreshData()
+            guard canUseRefreshSource(source), apiClient === client else { return }
+            await refreshAfterCPAAccountChange()
+            guard canUseRefreshSource(source), apiClient === client else { return }
             errorMessage = nil
         } catch {
+            guard canUseRefreshSource(source), apiClient === client else { return }
             errorMessage = "Import failed: \(error.localizedDescription)"
         }
     }

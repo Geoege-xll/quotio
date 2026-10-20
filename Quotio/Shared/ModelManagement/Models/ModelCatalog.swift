@@ -12,8 +12,8 @@ import Foundation
 /// One entry of the proxy's OpenAI-compatible `/v1/models` response.
 ///
 /// This is deliberately a thin mirror of the wire format. It carries only what
-/// `/v1/models` actually states: the model ID, and the `owned_by` metadata when
-/// present. It says nothing about which provider account will serve a request
+/// `/v1/models` actually states: the model ID and optional owner, display name,
+/// and explicit input window metadata. It says nothing about which provider account will serve a request
 /// for the ID — the endpoint does not expose that.
 nonisolated struct ModelCatalogEntry: Identifiable, Equatable, Sendable {
     /// The model ID exactly as listed by `/v1/models`.
@@ -26,14 +26,47 @@ nonisolated struct ModelCatalogEntry: Identifiable, Equatable, Sendable {
     /// replaced when another provider registers the same ID. Do not treat it as
     /// routing provenance.
     let owner: String?
+    /// 可选展示名称和明确容量只作为元数据，不能替代实际可请求 ID；旧构造调用保持兼容。
+    var name: String? = nil
+    var contextWindow: Int? = nil
 
     /// Owner metadata fit for display, or `nil` when the endpoint reported
     /// nothing usable (field absent, empty, or whitespace only).
     var displayOwner: String? {
+        if let refined = Self.refinedOwner(for: id, reportedOwner: owner) {
+            return refined
+        }
         guard let trimmed = owner?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty
         else { return nil }
         return trimmed
+    }
+
+    /// 当 CPA 代理将跨协议上游（例如通过 Anthropic 协议接入的智谱 GLM）标记为协议家族名时，
+    /// 结合模型 ID 特征识别真实的品牌与服务商。
+    static func refinedOwner(for modelID: String, reportedOwner: String?) -> String? {
+        let lowerID = modelID.lowercased()
+        // 智谱 GLM 系列（glm-4, glm-5.3, glm/glm-5.3, cogview, charglm）
+        if lowerID.contains("glm") || lowerID.hasPrefix("cogview") || lowerID.hasPrefix("charglm") {
+            return "GLM"
+        }
+        // DeepSeek 系列
+        if lowerID.contains("deepseek") {
+            return "DeepSeek"
+        }
+        // Moonshot / Kimi 系列
+        if lowerID.contains("moonshot") || lowerID.contains("kimi") {
+            return "Moonshot"
+        }
+        // MiniMax 系列
+        if lowerID.contains("minimax") || lowerID.hasPrefix("abab") {
+            return "MiniMax"
+        }
+        // Qwen 通义千问系列
+        if lowerID.contains("qwen") {
+            return "Qwen"
+        }
+        return nil
     }
 }
 
@@ -153,12 +186,32 @@ nonisolated enum ModelCatalog {
             struct ModelItem: Decodable {
                 let id: String
                 let owned_by: String?
+                let display_name: String?
+                let name: String?
+                let max_input_tokens: Int?
+                let context_length: Int?
+
+                enum CodingKeys: String, CodingKey { case id, owned_by, display_name, name, max_input_tokens, context_length }
+                init(from decoder: any Decoder) throws {
+                    let values = try decoder.container(keyedBy: CodingKeys.self)
+                    id = try values.decode(String.self, forKey: .id)
+                    owned_by = try values.decodeIfPresent(String.self, forKey: .owned_by)
+                    // 展示扩展不是目录有效性的前提；旧代理的非标准类型不能让合法 ID 整批消失。
+                    display_name = try? values.decode(String.self, forKey: .display_name)
+                    name = try? values.decode(String.self, forKey: .name)
+                    max_input_tokens = try? values.decode(Int.self, forKey: .max_input_tokens)
+                    context_length = try? values.decode(Int.self, forKey: .context_length)
+                }
             }
             let data: [ModelItem]
         }
 
         let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
-        return decoded.data.map { ModelCatalogEntry(id: $0.id, owner: $0.owned_by) }
+        return decoded.data.map { item in
+            let window = [item.max_input_tokens, item.context_length].compactMap { $0 }.filter { $0 > 0 }.min()
+            return ModelCatalogEntry(id: item.id, owner: item.owned_by,
+                                     name: item.display_name ?? item.name, contextWindow: window)
+        }
     }
 
     /// Prepares entries for display: deduplicated by ID (first occurrence wins,
@@ -192,10 +245,11 @@ nonisolated enum ModelCatalog {
         entries.map { entry in
             AvailableModel(
                 id: entry.id,
-                name: entry.id,
+                name: entry.name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? entry.name! : entry.id,
                 provider: entry.owner ?? "openai",
                 isDefault: false,
-                displayPlatform: entry.displayOwner
+                displayPlatform: entry.displayOwner,
+                contextWindow: entry.contextWindow
             )
         }
     }

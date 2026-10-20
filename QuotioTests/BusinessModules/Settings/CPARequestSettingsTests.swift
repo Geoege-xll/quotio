@@ -150,6 +150,24 @@ final class CPARequestSettingsTests: XCTestCase {
         }
     }
 
+    func testAdvancedDraftHasChangesAcrossScopes() {
+        let saved = CPAAdvancedSettingsDraft()
+        var modified = saved
+        XCTAssertFalse(modified.hasChanges(comparedTo: saved, scope: .requests))
+        XCTAssertFalse(modified.hasChanges(comparedTo: saved, scope: .logging))
+
+        // 修改请求参数
+        modified.maxRetryCredentials = "5"
+        XCTAssertTrue(modified.hasChanges(comparedTo: saved, scope: .requests))
+        XCTAssertFalse(modified.hasChanges(comparedTo: saved, scope: .logging))
+
+        // 仅修改日志参数
+        var loggingOnly = saved
+        loggingOnly.logsMaxSizeMB = "512"
+        XCTAssertFalse(loggingOnly.hasChanges(comparedTo: saved, scope: .requests))
+        XCTAssertTrue(loggingOnly.hasChanges(comparedTo: saved, scope: .logging))
+    }
+
     func testMenuBarCategoryIsMergedIntoGeneralAndAppearance() {
         XCTAssertFalse(SettingsCategory.allCases.map(\.rawValue).contains("menuBar"), "菜单栏与 Dock 不应作为独立顶层分类存在")
         XCTAssertTrue(SettingsCategory.general.topics.contains(.menuBar), "通用与外观分类中必须包含菜单栏与 Dock 主题")

@@ -16,6 +16,7 @@ nonisolated struct QuotaAccountID: Hashable, Sendable {
 /// Existing snapshots omit this field and continue to render through ModelQuota.percentage.
 nonisolated enum QuotaMetricUnit: String, Codable, Sendable, Equatable {
     case usd
+    case cny
     case credits
     case requests
     case searches
@@ -25,6 +26,8 @@ nonisolated enum QuotaMetricUnit: String, Codable, Sendable, Equatable {
         switch self {
         case .usd:
             return value.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
+        case .cny:
+            return value.formatted(.currency(code: "CNY").precision(.fractionLength(0...2)))
         case .credits:
             return String(format: "quota.metric.unit.credits".localizedStatic(), locale: locale, value)
         case .requests:
@@ -246,6 +249,14 @@ nonisolated struct ModelQuota: Codable, Identifiable, Sendable {
         case "openrouter-week": return "quota.metric.thisWeek".localizedStatic()
         case "openrouter-month": return "quota.metric.thisMonth".localizedStatic()
         case "openrouter-key-limit": return "quota.metric.keyLimit".localizedStatic()
+        // DeepSeek
+        case "deepseek-balance": return "quota.metric.balance".localizedStatic()
+        case "deepseek-topped-up": return "quota.metric.cashBalance".localizedStatic()
+        case "deepseek-granted": return "quota.metric.grantedBalance".localizedStatic()
+        // Kimi
+        case "kimi-balance": return "quota.metric.balance".localizedStatic()
+        case "kimi-cash": return "quota.metric.cashBalance".localizedStatic()
+        case "kimi-voucher": return "quota.metric.voucherBalance".localizedStatic()
         // Amp
         case "amp-free": return "amp.quota.free".localizedStatic()
         case "amp-agent-usage": return "amp.quota.agent".localizedStatic()

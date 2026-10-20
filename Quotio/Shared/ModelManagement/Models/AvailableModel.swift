@@ -19,6 +19,18 @@ nonisolated struct AvailableModel: Identifiable, Codable, Hashable, Sendable {
     /// 只记录目录明确返回的展示归属；provider 的历史 OpenAI 协议兜底不能充当真实平台。
     /// 可选字段允许旧缓存正常解码，它不表示服务账号，也不改变请求路由。
     var displayPlatform: String? = nil
+    /// 仅存放当前后端确认的显示来源，不参与请求 ID 或账号路由；旧缓存缺省为 nil。
+    var displaySource: ModelSource? = nil
+    /// 后端明确声明的输入窗口；nil 表示未提供，不能用型号拼写猜测容量。
+    var contextWindow: Int? = nil
+
+    /// 来源与模型目录成组，是一次读取的值投影，不持有账号凭据、客户端、状态或 Task。
+    struct ModelSource: Codable, Hashable, Sendable {
+        let platforms: [String]
+        /// 只有完整凭据目录和全部模型查询证明单一来源时才填写，避免把轮询池任选一账号展示。
+        let account: String?
+        let isAccountPool: Bool
+    }
 
     var displayName: String {
         name.split(separator: "-")

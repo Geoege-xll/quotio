@@ -28,7 +28,7 @@ enum AccountPageData {
                 groups[provider, default: []].append(data)
             }
         } else if mode == .monitor {
-            for account in monitorAccounts where ![.glm, .warp, .clinePass].contains(account.provider) {
+            for account in monitorAccounts where ![.glm, .warp, .clinePass, .deepseek, .moonshot, .minimax].contains(account.provider) {
                 let state = monitorStatus(account)
                 let data = AccountRowData.from(
                     monitorAccount: account,
@@ -47,7 +47,8 @@ enum AccountPageData {
 
         // 自动检测来源保持原管理页规则；监控模式已从 monitorAccounts 获取同一批账号。
         for (provider, quotas) in quotas where mode != .monitor {
-            if !provider.supportsManualAuth && provider != .glm && provider != .clinePass {
+            if !provider.supportsManualAuth && provider != .glm && provider != .clinePass
+                && provider != .deepseek && provider != .moonshot && provider != .minimax {
                 for (accountKey, _) in quotas {
                     // 同一规范键已由当前连接目录提供时，不再添加第二份自动检测身份。
                     guard !groups[provider, default: []].contains(where: {
@@ -79,6 +80,63 @@ enum AccountPageData {
                 canEdit: true
             )
             groups[.glm, default: []].append(data)
+        }
+
+        // 主流 OpenAI 兼容服务商（DeepSeek、Moonshot、MiniMax）沿用提供商配置的编辑／删除流程。
+        for provider in customProviders.filter({ $0.type == .deepseekCompatibility && $0.isEnabled }) {
+            let keys = provider.apiKeys.map {
+                DeepSeekQuotaFetcher.quotaAccountKey(providerID: provider.id, apiKeyID: $0.id)
+            }
+            let data = AccountRowData(
+                id: provider.id.uuidString,
+                provider: .deepseek,
+                displayName: provider.name.isEmpty ? "DeepSeek" : provider.name,
+                menuBarAccountKey: keys.first ?? provider.name,
+                quotaAccountKeys: keys.isEmpty ? [provider.name] : keys,
+                source: .direct,
+                status: "ready",
+                statusMessage: nil,
+                isDisabled: false,
+                canDelete: true,
+                canEdit: true
+            )
+            groups[.deepseek, default: []].append(data)
+        }
+
+        for provider in customProviders.filter({ $0.type == .moonshotCompatibility && $0.isEnabled }) {
+            let keys = provider.apiKeys.map {
+                MoonshotQuotaFetcher.quotaAccountKey(providerID: provider.id, apiKeyID: $0.id)
+            }
+            let data = AccountRowData(
+                id: provider.id.uuidString,
+                provider: .moonshot,
+                displayName: provider.name.isEmpty ? "Kimi" : provider.name,
+                menuBarAccountKey: keys.first ?? provider.name,
+                quotaAccountKeys: keys.isEmpty ? [provider.name] : keys,
+                source: .direct,
+                status: "ready",
+                statusMessage: nil,
+                isDisabled: false,
+                canDelete: true,
+                canEdit: true
+            )
+            groups[.moonshot, default: []].append(data)
+        }
+
+        for provider in customProviders.filter({ $0.type == .minimaxCompatibility && $0.isEnabled }) {
+            let data = AccountRowData(
+                id: provider.id.uuidString,
+                provider: .minimax,
+                displayName: provider.name.isEmpty ? "MiniMax" : provider.name,
+                menuBarAccountKey: provider.name,
+                source: .direct,
+                status: "ready",
+                statusMessage: nil,
+                isDisabled: false,
+                canDelete: true,
+                canEdit: true
+            )
+            groups[.minimax, default: []].append(data)
         }
 
         // ClinePass 沿用提供商配置的编辑／删除流程，并作为独立账号展示额度。

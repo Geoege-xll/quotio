@@ -5,6 +5,104 @@ import SwiftUI
 // 文件名身份、UTF-8 长度键、数字索引与旧字段兼容均保持原样；元数据不保存完整凭据。
 // AuthFile 的自定义解码继续放在扩展中，保留已有成员初始化器和 nonisolated 约束。
 
+// MARK: - Auth File Cooldown (from Management API)
+
+/// CPA v8 凭据与模型的未过期冷却视图。
+nonisolated struct AuthFileCooldown: Codable, Hashable, Sendable {
+    let scope: String // "credential" or "model"
+    let modelKey: String?
+    let reason: String
+    let retryAt: String?
+    let remainingSeconds: Int64
+    let backoffLevel: Int?
+    let httpStatus: Int?
+    /// 只保存该次响应的到期观测，不持有时钟或任务。优先使用服务端绝对时间；
+    /// 旧服务缺少 retry_at 时按本次读取时间加剩余秒数计算，避免倒计时永久停在快照值。
+    private let deadline: Date
+
+    enum CodingKeys: String, CodingKey {
+        case scope
+        case modelKey = "model_key"
+        case reason
+        case retryAt = "retry_at"
+        case remainingSeconds = "remaining_seconds"
+        case backoffLevel = "backoff_level"
+        case httpStatus = "http_status"
+    }
+
+    init(
+        scope: String,
+        modelKey: String? = nil,
+        reason: String = "quota",
+        retryAt: String? = nil,
+        remainingSeconds: Int64 = 0,
+        backoffLevel: Int? = nil,
+        httpStatus: Int? = nil,
+        observedAt: Date = Date()
+    ) {
+        self.scope = scope
+        self.modelKey = modelKey
+        self.reason = reason
+        self.retryAt = retryAt
+        self.remainingSeconds = remainingSeconds
+        self.backoffLevel = backoffLevel
+        self.httpStatus = httpStatus
+        self.deadline = retryAt.flatMap { value in
+            (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
+                ?? (try? Date.ISO8601FormatStyle().parse(value))
+        } ?? observedAt.addingTimeInterval(TimeInterval(max(0, remainingSeconds)))
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(scope: try values.decode(String.self, forKey: .scope),
+                  modelKey: try values.decodeIfPresent(String.self, forKey: .modelKey),
+                  reason: try values.decode(String.self, forKey: .reason),
+                  retryAt: try values.decodeIfPresent(String.self, forKey: .retryAt),
+                  remainingSeconds: try values.decode(Int64.self, forKey: .remainingSeconds),
+                  backoffLevel: try values.decodeIfPresent(Int.self, forKey: .backoffLevel),
+                  httpStatus: try values.decodeIfPresent(Int.self, forKey: .httpStatus))
+    }
+
+    func secondsRemaining(at date: Date) -> Int64 {
+        guard remainingSeconds > 0 else { return 0 }
+        let seconds = deadline.timeIntervalSince(date)
+        guard seconds > 0 else { return 0 }
+        return seconds >= Double(Int64.max) ? Int64.max : Int64(ceil(seconds))
+    }
+
+    /// 账号行、汇总横幅和批量重置共用同一份纯投影，调用方传入可见 UI 的时间。
+    static func active(_ values: [Self]?, at date: Date) -> [Self] {
+        (values ?? []).compactMap { value in
+            let remaining = value.secondsRemaining(at: date)
+            guard remaining > 0 else { return nil }
+            return Self(scope: value.scope, modelKey: value.modelKey, reason: value.reason,
+                        retryAt: value.retryAt, remainingSeconds: remaining,
+                        backoffLevel: value.backoffLevel, httpStatus: value.httpStatus, observedAt: date)
+        }
+    }
+
+    static func summary(_ active: [Self]) -> String? {
+        guard let first = active.first else { return nil }
+        let remaining = first.remainingSeconds
+        let text: String
+        if remaining >= 3600 { text = "\(remaining / 3600)h\((remaining % 3600) / 60)m" }
+        else if remaining >= 60 {
+            text = "\(remaining / 60)m" + (remaining % 60 > 0 ? "\(remaining % 60)s" : "")
+        } else { text = "\(remaining)s" }
+        return first.modelKey.flatMap { $0.isEmpty ? nil : "\($0) (\(text))" } ?? text
+    }
+
+    static func tooltip(_ active: [Self]) -> String? {
+        guard !active.isEmpty else { return nil }
+        let items = active.map { value in
+            let scope = value.scope == "model" ? (value.modelKey ?? "model") : "credentials.cooldown.scopeAll".localizedStatic()
+            return "\(scope): \(value.remainingSeconds)s (\(value.reason))"
+        }
+        return "credentials.cooldown.activeTooltip".localizedStatic() + "\n" + items.joined(separator: "\n")
+    }
+}
+
 // MARK: - Auth File (from Management API)
 
 extension String {
@@ -178,6 +276,9 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
     let updatedAt: String?
     let lastRefresh: String?
     var quotaMetadata: AuthFileQuotaMetadata = .init()
+    let weight: Int?
+    let priority: Int?
+    let cooldowns: [AuthFileCooldown]?
 
     var quotaProjectID: String? { quotaMetadata.projectID }
     var quotaAccountID: String? { quotaMetadata.accountID }
@@ -189,7 +290,61 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
         [email, label, account, name].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty } ?? name
     }
-    
+
+    /// 展示和批量重置均使用当前时刻投影，不能把上次读取的 remaining_seconds 当永久状态。
+    var activeCooldowns: [AuthFileCooldown] { AuthFileCooldown.active(cooldowns, at: Date()) }
+    var hasActiveCooldown: Bool { !activeCooldowns.isEmpty }
+    var cooldownSummary: String? { AuthFileCooldown.summary(activeCooldowns) }
+    var cooldownTooltip: String? { AuthFileCooldown.tooltip(activeCooldowns) }
+
+    init(
+        id: String,
+        name: String,
+        provider: String,
+        label: String? = nil,
+        status: String = "ready",
+        statusMessage: String? = nil,
+        disabled: Bool = false,
+        unavailable: Bool = false,
+        runtimeOnly: Bool? = nil,
+        source: String? = nil,
+        path: String? = nil,
+        email: String? = nil,
+        accountType: String? = nil,
+        account: String? = nil,
+        authIndex: String? = nil,
+        createdAt: String? = nil,
+        updatedAt: String? = nil,
+        lastRefresh: String? = nil,
+        quotaMetadata: AuthFileQuotaMetadata = .init(),
+        weight: Int? = nil,
+        priority: Int? = nil,
+        cooldowns: [AuthFileCooldown]? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.provider = provider
+        self.label = label
+        self.status = status
+        self.statusMessage = statusMessage
+        self.disabled = disabled
+        self.unavailable = unavailable
+        self.runtimeOnly = runtimeOnly
+        self.source = source
+        self.path = path
+        self.email = email
+        self.accountType = accountType
+        self.account = account
+        self.authIndex = authIndex
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.lastRefresh = lastRefresh
+        self.quotaMetadata = quotaMetadata
+        self.weight = weight
+        self.priority = priority
+        self.cooldowns = cooldowns
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, name, provider, label, status, disabled, unavailable, source, path, email, account
         case authIndex = "auth_index"
@@ -200,6 +355,7 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
         case updatedAt = "updated_at"
         case lastRefresh = "last_refresh"
         case quotaMetadata = "quota_metadata"
+        case weight, priority, cooldowns
     }
     
     var providerType: AIProvider? {
@@ -316,6 +472,9 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
         hasher.combine(status)
         // 错误状态不变但上游原因或重试时间变化时，SwiftUI 仍须重新绘制详情。
         hasher.combine(statusMessage)
+        hasher.combine(weight)
+        hasher.combine(priority)
+        hasher.combine(cooldowns)
     }
 
     static func == (lhs: AuthFile, rhs: AuthFile) -> Bool {
@@ -326,7 +485,10 @@ nonisolated struct AuthFile: Codable, Identifiable, Hashable, Sendable {
         lhs.account == rhs.account &&
         lhs.disabled == rhs.disabled &&
         lhs.status == rhs.status &&
-        lhs.statusMessage == rhs.statusMessage
+        lhs.statusMessage == rhs.statusMessage &&
+        lhs.weight == rhs.weight &&
+        lhs.priority == rhs.priority &&
+        lhs.cooldowns == rhs.cooldowns
     }
 }
 
@@ -356,6 +518,9 @@ extension AuthFile {
         updatedAt = aliases.quotaString(["updated_at", "updatedAt"])
         lastRefresh = aliases.quotaString(["last_refresh", "lastRefresh"])
         quotaMetadata = (try? AuthFileQuotaMetadata(from: decoder)) ?? .init()
+        weight = try values.decodeIfPresent(Int.self, forKey: .weight)
+        priority = try values.decodeIfPresent(Int.self, forKey: .priority)
+        cooldowns = try values.decodeIfPresent([AuthFileCooldown].self, forKey: .cooldowns)
     }
 }
 

@@ -18,6 +18,17 @@ Quotio 是原生 macOS 菜单栏与窗口应用，用于管理本机 CLIProxyAPI
 | cpa-auto-refresh-cadence | 取消定时重复节流，防止迟到初始化覆盖 CPA 轮询，密钥失败不阻断账号与菜单额度更新 | [周期调度与同步修复](features/cpa-auto-refresh-cadence-2026-10-17.md) |
 | built-in-model-candidates | 历史静态候选清理记录；默认行为已由下方动态目录方案替代 | [候选与默认值清理](features/built-in-model-candidates-2026-10-16.md) |
 | dynamic-model-defaults | 动态目录、首次配置与失败重试、旧配置合并、认证与会话隔离、并发提交 | [实施记录](features/dynamic-model-defaults-2026-10-16.md) |
+| model-candidate-catalog-validation | 当前服务 ID 与别名公开核对、旧值未确认标记、账号启停及 v8 连接同步后刷新目录 | [候选与联动记录](features/model-candidate-catalog-validation-2026-10-19.md) |
+| claude-configuration-compatibility | 按当前后端 ID 统一角色与追加菜单、保留合法前缀和旧字段、真实 CLI 假网关请求验证 | [兼容性重构记录](features/claude-configuration-compatibility-2026-10-19.md) |
+| claude-catalog-migration | Claude 当前目录菜单接管、旧引用归档、普通“应用”内自动备份迁移及首次弹窗会话修复 | [统一迁移记录](features/claude-catalog-migration-2026-10-19.md) |
+| claude-configuration-system-refactor | 管理凭证持久化、官方恢复联合事务、来源及位置统一、模型语义、真实 CLI 保存与账号同步 | [四组系统重构](features/claude-configuration-system-refactor-2026-10-19.md) |
+| claude-context-window-policy | 默认跟随 Claude Code、显式窗口兼容、JSON／Shell 覆盖清理及高级分段交互 | [上下文配置记录](features/claude-context-window-policy-2026-10-19.md) |
+| claude-role-menu-synchronization | 固定角色说明随实际目标同步、同型号各槽独立上下文回显、独立菜单预览；逐槽开关已由下方只读自动投影替代 | [角色与菜单同步修复](features/claude-role-menu-synchronization-2026-10-19.md) |
+| claude-menu-source-and-auto-context | 追加菜单统一名称与账号／账号池来源、清理明确 Magpie 旧行、上下文改为只读自动投影；保留历史声明与备份策略 | [来源与自动上下文记录](features/claude-menu-source-and-auto-context-2026-10-20.md) |
+| claude-menu-lifecycle-audit | 生成值来源跨 CLI 保存持久化、同名凭据准确读取、账号新增／恢复可用联动、生命周期撤销排队提交；兼容显式声明与未知字段 | [生命周期复审与修复](features/claude-menu-lifecycle-audit-2026-10-20.md) |
+| cross-agent-compatibility-fixes | 1M 语义、角色链、账号目录提交隔离、提供商模型注册、连接测试、币种与冷却到期 | [八项交叉修复](features/cross-agent-compatibility-fixes-2026-10-19.md) |
+| claude-subagent-settings | 子代理默认规则与强制覆盖回显、JSON/Shell 冲突屏障及真实子请求验证 | [子代理配置修复](features/claude-subagent-settings-2026-10-19.md) |
+| client-card-layout | 客户端卡片两行信息、下排平铺操作与安装详情、窄窗口自适应及兼容提示本地化 | [布局与交互记录](features/client-card-layout-2026-10-19.md) |
 
 ## Controlled documents
 

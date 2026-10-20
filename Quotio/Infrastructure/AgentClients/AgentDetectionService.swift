@@ -9,6 +9,16 @@ actor AgentDetectionService {
     private var cachedStatuses: [AgentStatus]?
     private var cacheTimestamp: Date?
     private let cacheValidity: TimeInterval = 60
+    /// 配置探测与生成服务共用位置契约，隧道／反代地址不能被 localhost 文本搜索漏掉。
+    /// 仅注入只读位置；缓存和检测任务仍由原 actor 持有。
+    private let claudeLocation: ClaudeConfigurationLocation
+
+    init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+         environment: [String: String]? = nil) {
+        let inherited = environment ?? (homeDirectory == FileManager.default.homeDirectoryForCurrentUser
+            ? ProcessInfo.processInfo.environment : [:])
+        claudeLocation = ClaudeConfigurationLocation(homeDirectory: homeDirectory, environment: inherited)
+    }
     
     // MARK: - Common Binary Paths
     
@@ -244,9 +254,15 @@ actor AgentDetectionService {
         if agent == .pi {
             return PiAgentSupport.isConfigured(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
         }
+        if agent == .claudeCode {
+            guard let data = try? Data(contentsOf: claudeLocation.settings),
+                  let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let env = settings["env"] as? [String: Any] else { return false }
+            return ClaudeConfigurationSource.isProxyEndpoint(env["ANTHROPIC_BASE_URL"] as? String)
+        }
         let fileManager = FileManager.default
         let home = fileManager.homeDirectoryForCurrentUser.path
-        
+
         for configPath in agent.configPaths {
             let expandedPath = configPath.replacingOccurrences(of: "~", with: home)
             

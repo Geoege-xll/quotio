@@ -23,11 +23,14 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
     case amp = "amp"
     case trae = "trae"
     case glm = "glm"
+    case deepseek = "deepseek"
+    case moonshot = "moonshot"
+    case minimax = "minimax"
     case warp = "warp"
     case clinePass = "clinepass"
-    
+
     var id: String { rawValue }
-    
+
     var displayName: String {
         switch self {
         case .claude: return "Claude Code"
@@ -45,12 +48,15 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
         case .openRouter: return "OpenRouter"
         case .amp: return "Amp"
         case .trae: return "Trae"
-        case .glm: return "Z.ai"
+        case .glm: return "GLM"
+        case .deepseek: return "DeepSeek"
+        case .moonshot: return "Kimi"
+        case .minimax: return "MiniMax"
         case .warp: return "Warp"
         case .clinePass: return "ClinePass"
         }
     }
-    
+
     var iconName: String {
         switch self {
         case .claude: return "brain.head.profile"
@@ -69,11 +75,14 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
         case .amp: return "bolt.fill"
         case .trae: return "cursorarrow.rays"
         case .glm: return "brain"
+        case .deepseek: return "fish.fill"
+        case .moonshot: return "moon.stars.fill"
+        case .minimax: return "waveform"
         case .warp: return "terminal.fill"
         case .clinePass: return "cpu"
         }
     }
-    
+
     /// Logo file name in ProviderIcons asset catalog
     var logoAssetName: String {
         switch self {
@@ -93,11 +102,14 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
         case .amp: return "amp"
         case .trae: return "trae"
         case .glm: return "glm"
+        case .deepseek: return "deepseek"
+        case .moonshot: return "moonshot"
+        case .minimax: return "minimax"
         case .warp: return "warp"
         case .clinePass: return "clinepass"
         }
     }
-    
+
     var color: Color {
         switch self {
         case .claude: return Color(hex: "D97706") ?? .orange
@@ -116,6 +128,9 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
         case .amp: return Color(hex: "FF5543") ?? .red
         case .trae: return Color(hex: "00B4D8") ?? .cyan
         case .glm: return Color(hex: "3B82F6") ?? .blue
+        case .deepseek: return Color(hex: "1E88E5") ?? .blue
+        case .moonshot: return Color(hex: "6366F1") ?? .indigo
+        case .minimax: return Color(hex: "FF4D4F") ?? .red
         case .warp: return Color(hex: "01E5FF") ?? .cyan
         case .clinePass: return Color(hex: "61A3FA") ?? .blue
         }
@@ -151,11 +166,14 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
         case .amp: return "AM"
         case .trae: return "TR"
         case .glm: return "G"
+        case .deepseek: return "DS"
+        case .moonshot: return "KM"
+        case .minimax: return "MM"
         case .warp: return "W"
         case .clinePass: return "CL"
         }
     }
-    
+
     /// Menu bar icon asset name (nil if should use SF Symbol fallback)
     var menuBarIconAsset: String? {
         switch self {
@@ -170,18 +188,18 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
         case .vertex: return "vertex-menubar"
         case .cursor: return "cursor-menubar"
         case .amp: return "amp-menubar"
-        case .factoryDroid, .devin, .grok, .openRouter: return nil
+        case .factoryDroid, .devin, .grok, .openRouter, .deepseek, .moonshot, .minimax: return nil
         case .trae: return "trae-menubar"
         case .glm: return "glm-menubar"
         case .warp: return "warp-menubar"
         case .clinePass: return "clinepass-menubar"
         }
     }
-    
+
     /// Whether this provider supports quota tracking in quota-only mode
     var supportsQuotaOnlyMode: Bool {
         switch self {
-        case .claude, .codex, .cursor, .factoryDroid, .antigravity, .copilot, .devin, .grok, .openRouter, .amp, .trae, .glm, .warp, .kiro, .clinePass:
+        case .claude, .codex, .cursor, .factoryDroid, .antigravity, .copilot, .devin, .grok, .openRouter, .amp, .trae, .glm, .deepseek, .moonshot, .minimax, .warp, .kiro, .clinePass:
             return true
         case .qwen, .iflow, .vertex:
             return false
@@ -231,11 +249,11 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
     
     /// Whether this provider can be added manually (via OAuth, CLI login, or file import)
     /// Cursor and Trae are excluded because they only read from local app databases
-    /// GLM and ClinePass are excluded because they should only be added via Custom Providers
+    /// API-key managed providers (GLM, DeepSeek, Moonshot, MiniMax, ClinePass) are excluded from generic manual auth
     var supportsManualAuth: Bool {
         switch self {
-        case .cursor, .trae, .glm, .clinePass:
-            return false  // API-key providers: Custom Providers; Cursor/Trae: local app databases
+        case .cursor, .trae, .glm, .deepseek, .moonshot, .minimax, .clinePass:
+            return false  // API-key providers: Custom/Managed Providers; Cursor/Trae: local app databases
         default:
             return true
         }
@@ -260,7 +278,7 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
     /// Whether this provider uses API key authentication
     var usesAPIKeyAuth: Bool {
         switch self {
-        case .glm, .warp, .clinePass, .factoryDroid, .openRouter, .amp:
+        case .glm, .deepseek, .moonshot, .minimax, .warp, .clinePass, .factoryDroid, .openRouter, .amp:
             return true
         default:
             return false

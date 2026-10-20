@@ -242,7 +242,8 @@ final class CustomProviderService {
             }
             guard !ambiguous else { return nil }
             let found: Bool
-            if provider.type == .openaiCompatibility || provider.type == .clinePass {
+            if provider.type == .openaiCompatibility || provider.type == .clinePass
+                || provider.type == .deepseekCompatibility || provider.type == .moonshotCompatibility || provider.type == .minimaxCompatibility {
                 found = groups.contains { group in
                     let keys = (group["api-key-entries"] as? [[String: Any]] ?? [])
                         .compactMap { $0["api-key"] as? String }
@@ -267,7 +268,8 @@ final class CustomProviderService {
         for type in CustomProviderType.allCases {
             let groups = block[type.yamlSectionKey] as? [[String: Any]] ?? []
             let keys: [String]
-            if type == .openaiCompatibility || type == .clinePass {
+            if type == .openaiCompatibility || type == .clinePass
+                || type == .deepseekCompatibility || type == .moonshotCompatibility || type == .minimaxCompatibility {
                 keys = groups.flatMap { ($0["api-key-entries"] as? [[String: Any]] ?? [])
                     .compactMap { $0["api-key"] as? String } }
             } else {
@@ -574,13 +576,15 @@ final class CustomProviderService {
         return result
     }
 
-    /// 把 UI 保留的服务商类型映射到 CPA 8 的凭据族；GLM 与 ClinePass 使用 OpenAI 兼容执行器。
+    /// 把 UI 保留的服务商类型映射到 CPA 8 的凭据族；GLM、ClinePass 与主流 OpenAI 兼容平台使用 openai-compatibility 执行器。
     private func v8Family(for type: CustomProviderType) -> String {
         switch type {
         case .claudeCompatibility: return "claude"
         case .geminiCompatibility: return "gemini"
         case .codexCompatibility: return "codex"
-        case .openaiCompatibility, .clinePass, .glmCompatibility: return "openai-compatibility"
+        case .openaiCompatibility, .clinePass, .glmCompatibility,
+             .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility:
+            return "openai-compatibility"
         }
     }
 
@@ -600,6 +604,128 @@ final class CustomProviderService {
         }
         
         return errors
+    }
+
+    // MARK: - Connection Testing
+
+    /// 专用账号弹窗读取上游公开目录，不使用 CPA 管理密钥，不注入固定型号。
+    /// 目录解析与原连接测试分开：200 的非目录正文仍可通过连接测试，但不能当作可注册模型。
+    static func fetchProviderModels(providerType: CustomProviderType, baseURL: String, apiKey: String,
+                                    session: URLSession? = nil) async throws -> [AvailableModel] {
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw CustomProviderTestError.noAPIKey }
+        guard let url = makeModelsURL(baseURL: baseURL, providerType: providerType) else {
+            throw CustomProviderTestError.invalidURL
+        }
+        let (data, response) = try await ModelCatalogClient.fetch(url: url, apiKey: key, session: session)
+        guard let http = response as? HTTPURLResponse else { throw CustomProviderTestError.invalidResponse }
+        guard http.statusCode == 200 else {
+            if http.statusCode == 401 || http.statusCode == 403 { throw CustomProviderTestError.unauthorized }
+            if http.statusCode == 404 { throw CustomProviderTestError.endpointNotFound }
+            throw CustomProviderTestError.serverError(http.statusCode, "HTTP \(http.statusCode)")
+        }
+        return ModelCatalog.agentSetupModels(from: try ModelCatalog.parse(data))
+    }
+
+    /// 刷新只追加新发现的上游身份，已有 UUID、别名、思考预算和旧型号保持不变。
+    /// CPA 必须显式注册 models；用户可在弹窗删除不需要的条目，不能把空目录当作删除旧配置。
+    static func mergingProviderModels(_ existing: [ModelMapping], catalog: [AvailableModel]) -> [ModelMapping] {
+        var output = existing
+        var names = Set(existing.map(\.name))
+        for model in catalog where !model.id.isEmpty && names.insert(model.id).inserted {
+            output.append(ModelMapping(name: model.id, alias: model.id))
+        }
+        return output
+    }
+
+    /// 统一的服务商连接性测试：向目标服务商的模型列表接口发起轻量探测，返回连通性与响应延迟。
+    static func testConnection(
+        providerType: CustomProviderType,
+        baseURL rawBaseURL: String,
+        apiKey: String,
+        customHeaders: [CustomHeader] = []
+    ) async throws -> (success: Bool, latencyMs: Int?) {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else {
+            throw CustomProviderTestError.noAPIKey
+        }
+
+        if providerType == .clinePass {
+            let start = Date()
+            let quota = try await ClinePassQuotaFetcher().fetchQuota(apiKey: trimmedKey)
+            guard !quota.isForbidden else {
+                throw CustomProviderTestError.unauthorized
+            }
+            let latency = Int(Date().timeIntervalSince(start) * 1000)
+            return (true, latency)
+        }
+
+        let effectiveBaseURL = rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? (providerType.defaultBaseURL ?? "")
+            : rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let modelsURL = makeModelsURL(baseURL: effectiveBaseURL, providerType: providerType) else {
+            throw CustomProviderTestError.invalidURL
+        }
+
+        var request = URLRequest(url: modelsURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 12
+
+        switch providerType {
+        case .openaiCompatibility, .codexCompatibility, .clinePass,
+             .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility, .glmCompatibility:
+            request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+        case .claudeCompatibility:
+            request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        case .geminiCompatibility:
+            var components = URLComponents(url: modelsURL, resolvingAgainstBaseURL: false)
+            components?.queryItems = [URLQueryItem(name: "key", value: trimmedKey)]
+            if let newURL = components?.url {
+                request.url = newURL
+            }
+        }
+
+        for header in customHeaders where !header.key.trimmingCharacters(in: .whitespaces).isEmpty {
+            request.setValue(header.value, forHTTPHeaderField: header.key.trimmingCharacters(in: .whitespaces))
+        }
+
+        let start = Date()
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let latency = max(1, Int(Date().timeIntervalSince(start) * 1000))
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CustomProviderTestError.invalidResponse
+        }
+
+        switch httpResponse.statusCode {
+        case 200..<300:
+            return (true, latency)
+        case 401, 403:
+            throw CustomProviderTestError.unauthorized
+        case 404:
+            throw CustomProviderTestError.endpointNotFound
+        default:
+            if let errorMessage = String(data: data, encoding: .utf8), !errorMessage.isEmpty {
+                let trimmed = errorMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                let shortError = trimmed.count > 120 ? String(trimmed.prefix(120)) + "..." : trimmed
+                throw CustomProviderTestError.serverError(httpResponse.statusCode, shortError)
+            }
+            throw CustomProviderTestError.serverError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
+        }
+    }
+
+    /// 规范化构建各服务商的模型探测 URL
+    static func makeModelsURL(baseURL rawBaseURL: String, providerType: CustomProviderType) -> URL? {
+        let trimmed = rawBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed) else { return nil }
+        let path = url.path
+        let hasVersion = path.split(separator: "/").last.map { segment in
+            segment.first == "v" && segment.dropFirst().first?.isNumber == true
+        } ?? false
+        let endpoint = hasVersion ? "models" : "v1/models"
+        return url.appendingPathComponent(endpoint)
     }
 
 }

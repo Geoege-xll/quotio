@@ -73,7 +73,8 @@ nonisolated enum AuthFileIdentity {
             source: stored?.source ?? primary.source, path: stored?.path ?? primary.path,
             email: value(\.email), accountType: value(\.accountType), account: value(\.account),
             authIndex: value(\.authIndex), createdAt: value(\.createdAt), updatedAt: value(\.updatedAt),
-            lastRefresh: value(\.lastRefresh), quotaMetadata: metadata)
+            lastRefresh: value(\.lastRefresh), quotaMetadata: metadata,
+            weight: primary.weight, priority: primary.priority, cooldowns: primary.cooldowns)
     }
 
     /// 目录身份与缓存身份分开：账号只来自当前目录，旧邮箱／文件名缓存附属到凭据。

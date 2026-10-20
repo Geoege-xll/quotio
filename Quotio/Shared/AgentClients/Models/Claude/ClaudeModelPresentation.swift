@@ -1,10 +1,10 @@
-// Claude 模型说明和 Magpie 菜单格式化规则同时服务预览与文件生成，归入共享客户端模型。
-// 本次整文件迁移并保留全部原实现；只读展示不改变模型请求 ID、账号路由或外部菜单中的未知字段。
+// Claude 角色说明和追加菜单的展示规则同时服务预览与文件生成，归入共享客户端模型。
+// 只读展示不改变模型请求 ID 或账号路由；旧 Magpie 格式识别仅用于兼容与已授权的条目清理。
 
 import Foundation
 
 /// Claude 的展示元数据规则，不参与模型选择、账号路由或请求 ID 的改写。
-/// 固定角色使用“平台/模型”，Magpie 追加项使用“模型名称｜平台与账号”。
+/// 固定角色使用“平台/模型”，追加项使用“模型名称｜平台与账号／账号池”。
 nonisolated enum ClaudeModelPresentation {
     static func platformSlug(_ value: String) -> String? {
         let raw = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -57,6 +57,44 @@ nonisolated enum ClaudeModelPresentation {
         case "group": return ("路由组", ["routing group", "路由组"])
         default: return (raw.capitalized, [raw, raw.capitalized])
         }
+    }
+
+    /// 新目录行与已有普通行共用名称／来源投影；model、UUID 与未知扩展完全不动。
+    /// 目录不存在来源时不重复模型 ID，协议 provider 的历史 openai 兜底也不能充当平台证据。
+    static func catalogOption(_ option: ClaudeModelPickerOption, models: [AvailableModel]) -> ClaudeModelPickerOption {
+        var result = option
+        let reference = ClaudeModelReference(option.selector)
+        let matches = models.filter { $0.id == reference.base }
+        let originalLabel = option.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if originalLabel.isEmpty || originalLabel == option.selector || originalLabel == reference.base {
+            let names = Set(matches.map(\.name).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty })
+            let name = names.count == 1 ? names.first! : reference.base
+            result.label = name + (reference.uses1M && !name.lowercased().hasSuffix("[1m]") ? "[1m]" : "")
+        }
+        let sources = Set(matches.compactMap(\.displaySource))
+        if sources.count == 1, let source = sources.first {
+            let titles = Array(Set(source.platforms.map { platformNames($0).title })).sorted()
+            let platform = titles.joined(separator: " / ")
+            if source.isAccountPool {
+                result.description = [platform, "agents.claudeMenu.accountPool".localizedStatic()].filter { !$0.isEmpty }.joined(separator: " · ")
+            } else if let account = source.account, !account.isEmpty, !platform.isEmpty {
+                result.description = platform + " · " + account
+            } else {
+                result.description = platform.isEmpty ? "agents.claudeMenu.sourceUnknown".localizedStatic() : platform
+            }
+        } else {
+            let owners = Array(Set(matches.compactMap(\.displayPlatform).compactMap(platformSlug))).sorted()
+            result.description = owners.isEmpty ? "agents.claudeMenu.sourceUnknown".localizedStatic()
+                : owners.map { platformNames($0).title }.joined(separator: " / ")
+        }
+        return result
+    }
+
+    /// 只凭明确来源标记清理旧 Magpie 行，不按 codex/ 等前缀误删仍合法的后端 ID。
+    static func isLegacyMagpie(_ option: ClaudeModelPickerOption) -> Bool {
+        let note = option.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return note == "via magpie" || note.hasSuffix(" · via magpie")
     }
 
     /// 仅处理带 Magpie 明确说明标记的条目；用户自定义文本和已经格式化的条目不会被再次改写。

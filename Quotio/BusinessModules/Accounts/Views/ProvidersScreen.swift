@@ -26,10 +26,14 @@ struct ProvidersScreen: View {
     @State private var editingWarpToken: WarpService.WarpToken?
     @State private var showGLMConnectionSheet = false
     @State private var editingGLMProvider: CustomProvider?
+    @State private var showMainstreamConnectionSheet = false
+    @State private var mainstreamTargetProvider: AIProvider = .deepseek
+    @State private var editingMainstreamProvider: CustomProvider?
     @State private var monitorAPIKeyProvider: AIProvider?
     @State private var editingMonitorAPIKeyAccount: MonitorAccount?
     @State private var showAddProviderPopover = false
     @State private var switchingAccount: AccountRowData?
+    @State private var isResettingAllCooldowns = false
     // nil 表示“全部服务商”，此筛选状态与 OAuth 弹窗的 selectedProvider 完全独立。
     @State private var selectedAccountProvider: AIProvider?
     @State private var isDropTargeted = false
@@ -38,19 +42,21 @@ struct ProvidersScreen: View {
 
     private let customProviderService = CustomProviderService.shared
     private let warpService = WarpService.shared
-    
+
     // MARK: - Computed Properties
-    
+
     /// Providers that can be added manually
     private var addableProviders: [AIProvider] {
+        let mainstreamExtra: Set<AIProvider> = [.glm, .clinePass, .deepseek, .moonshot, .minimax]
         if modeManager.isLocalProxyMode {
             return AIProvider.allCases.filter {
-                ![.factoryDroid, .openRouter, .amp].contains($0) && ($0.supportsManualAuth(in: .localProxy) || $0 == .clinePass)
+                ![.factoryDroid, .openRouter, .amp].contains($0)
+                    && ($0.supportsManualAuth(in: .localProxy) || mainstreamExtra.contains($0))
             }
         } else {
             return AIProvider.allCases.filter {
                 $0.supportsQuotaOnlyMode
-                    && ($0.supportsManualAuth(in: .monitor) || $0 == .glm || $0 == .clinePass)
+                    && ($0.supportsManualAuth(in: .monitor) || mainstreamExtra.contains($0))
                     && ($0 != .amp || modeManager.isMonitorMode)
             }
         }
@@ -78,7 +84,7 @@ struct ProvidersScreen: View {
     private var sortedProviders: [AIProvider] {
         groupedAccounts.keys.sorted { $0.displayName < $1.displayName }
     }
-    
+
     /// Total account count across all providers
     private var totalAccountCount: Int {
         groupedAccounts.values.reduce(0) { $0 + $1.count }
@@ -239,6 +245,30 @@ struct ProvidersScreen: View {
             }
             .environment(viewModel)
         }
+        .sheet(isPresented: $showMainstreamConnectionSheet) {
+            MainstreamProviderAPIKeySheet(
+                targetProvider: mainstreamTargetProvider,
+                provider: editingMainstreamProvider
+            ) { provider in
+                let previous = customProviderService.providers.first { $0.id == provider.id }
+                viewModel.prepareCustomProviderQuotaMutation(previous: previous, replacement: provider,
+                    legacyNameIsUnique: previous.map { old in
+                        customProviderService.providers.filter { $0.type == old.type && $0.name == old.name }.count == 1
+                    } ?? false)
+                if previous != nil {
+                    customProviderService.updateProvider(provider)
+                } else {
+                    customProviderService.addProvider(provider)
+                }
+                editingMainstreamProvider = nil
+                syncCustomProvidersToConfig()
+                let target = mainstreamTargetProvider
+                if target == .deepseek || target == .moonshot {
+                    Task { await viewModel.refreshQuota(for: target, waitForAvailability: true) }
+                }
+            }
+            .environment(viewModel)
+        }
         .sheet(item: $monitorAPIKeyProvider) { provider in
             MonitorAPIKeyConnectionSheet(provider: provider, account: editingMonitorAPIKeyAccount) { label, apiKey in
                 if provider == .factoryDroid {
@@ -382,6 +412,15 @@ struct ProvidersScreen: View {
             }
             .padding(.horizontal, 4)
 
+            // 横幅只更新时间投影；到期后自动消失，不借 UI 时钟创建第二轮账号刷新。
+            let cooldownAccounts = groupedAccounts.values.flatMap { $0 }.filter { $0.cooldowns?.isEmpty == false }
+            if modeManager.isLocalProxyMode, !cooldownAccounts.isEmpty {
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    let count = cooldownAccounts.filter { !$0.activeCooldowns(at: timeline.date).isEmpty }.count
+                    if count > 0 { coolingAlertBanner(count: count) }
+                }
+            }
+
             if groupedAccounts.isEmpty {
                 // Empty state
                 AccountsEmptyState(
@@ -405,6 +444,8 @@ struct ProvidersScreen: View {
                                 handleEditGlmAccount(account)
                             } else if account.provider == .clinePass {
                                 handleEditClinePassAccount(account)
+                            } else if account.provider == .deepseek || account.provider == .moonshot || account.provider == .minimax {
+                                handleEditMainstreamAccount(account)
                             } else if account.provider == .warp {
                                 handleEditWarpAccount(account)
                             } else if [.factoryDroid, .openRouter, .amp].contains(account.provider) {
@@ -416,12 +457,64 @@ struct ProvidersScreen: View {
                         onDownload: { account in Task { await downloadAccountAuthFile(account) } }
                     )
                 }
-
-                MenuBarHintView()
-                    .padding(.top, 4)
-                    .padding(.horizontal, 4)
             }
         }
+    }
+
+    @ViewBuilder
+    private func coolingAlertBanner(count: Int) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Color.orange.opacity(colorScheme == .dark ? 0.25 : 0.15))
+                    .frame(width: 30, height: 30)
+                Image(systemName: "snowflake")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.orange)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(String(format: "credentials.cooldown.bannerTitle".localized(), Int64(count)))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text("credentials.cooldown.bannerSubtitle".localized())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                Task {
+                    isResettingAllCooldowns = true
+                    defer { isResettingAllCooldowns = false }
+                    await viewModel.resetAllCooldowns()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    if isResettingAllCooldowns {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 10, weight: .bold))
+                    }
+                    Text("credentials.cooldown.resetAll".localized())
+                        .font(.system(size: 11, weight: .semibold))
+                }
+            }
+            .buttonStyle(.quotioPrimaryCapsule)
+            .disabled(isResettingAllCooldowns)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                .fill(Color.orange.opacity(colorScheme == .dark ? 0.12 : 0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.3), lineWidth: 0.5)
+        )
     }
 
     // MARK: - Custom Providers Section
@@ -430,7 +523,11 @@ struct ProvidersScreen: View {
     private var customProvidersSection: some View {
         // API-key providers with first-class quota tracking are shown in Your Accounts.
         let genericProviders = customProviderService.providers.filter {
-            $0.type != .glmCompatibility && $0.type != .clinePass
+            $0.type != .glmCompatibility
+                && $0.type != .clinePass
+                && $0.type != .deepseekCompatibility
+                && $0.type != .moonshotCompatibility
+                && $0.type != .minimaxCompatibility
         }
 
         VStack(alignment: .leading, spacing: 12) {
@@ -494,6 +591,12 @@ struct ProvidersScreen: View {
         if provider == .glm {
             editingGLMProvider = nil
             showGLMConnectionSheet = true
+            return
+        }
+        if provider == .deepseek || provider == .moonshot || provider == .minimax {
+            editingMainstreamProvider = nil
+            mainstreamTargetProvider = provider
+            showMainstreamConnectionSheet = true
             return
         }
         if [.factoryDroid, .openRouter, .amp].contains(provider) {
@@ -566,7 +669,20 @@ struct ProvidersScreen: View {
             }
             return
         }
-        
+
+        if account.provider == .deepseek || account.provider == .moonshot || account.provider == .minimax {
+            if let target = customProviderService.providers.first(where: { $0.id.uuidString == account.id }) {
+                viewModel.prepareCustomProviderQuotaMutation(previous: target, replacement: nil,
+                    legacyNameIsUnique: customProviderService.providers.filter {
+                        $0.type == target.type && $0.name == target.name
+                    }.count == 1)
+                customProviderService.deleteProvider(id: target.id)
+                viewModel.syncMenuBarSelection()
+                syncCustomProvidersToConfig()
+            }
+            return
+        }
+
         // Handle Warp accounts (stored in WarpService)
         if account.provider == .warp {
             if let uuid = UUID(uuidString: account.id) {
@@ -585,6 +701,14 @@ struct ProvidersScreen: View {
     private func toggleAccountDisabled(_ account: AccountRowData) async {
         if modeManager.isMonitorMode, case .monitor = account.source {
             await viewModel.setMonitorAccountDisabled(!account.isDisabled, accountID: account.id)
+            return
+        }
+
+        if [.glm, .clinePass, .deepseek, .moonshot, .minimax].contains(account.provider) {
+            if let uuid = UUID(uuidString: account.id) {
+                customProviderService.toggleProvider(id: uuid)
+                syncCustomProvidersToConfig()
+            }
             return
         }
 
@@ -617,6 +741,14 @@ struct ProvidersScreen: View {
         if let glmProvider = customProviderService.providers.first(where: { $0.id.uuidString == account.id }) {
             editingGLMProvider = glmProvider
             showGLMConnectionSheet = true
+        }
+    }
+
+    private func handleEditMainstreamAccount(_ account: AccountRowData) {
+        if let target = customProviderService.providers.first(where: { $0.id.uuidString == account.id }) {
+            editingMainstreamProvider = target
+            mainstreamTargetProvider = account.provider
+            showMainstreamConnectionSheet = true
         }
     }
 
@@ -695,8 +827,18 @@ struct ProvidersScreen: View {
     private func syncCustomProvidersToConfig() {
         // 服务运行时使用 CPA 8 的局部配置接口；停止时由下一次启动统一同步。
         Task { @MainActor in
-            do { try await viewModel.proxyManager.syncCustomProvidersToConfig() }
-            catch { viewModel.errorMessage = error.localizedDescription }
+            let source = viewModel.refreshContext()
+            do {
+                try await viewModel.proxyManager.syncCustomProvidersToConfig()
+                guard viewModel.proxyManager.proxyStatus.running else { return }
+                // API Key 连接的启停／编辑也会改变 CPA 暴露的模型；必须等 v8 同步成功后再读目录。
+                // 复用本任务及两个目录原宿主，旧代理／模式响应不能废弃新目录；停止时不额外请求。
+                let refresh = viewModel.invalidateModelsAfterCPAAccountChange(source: source)
+                await viewModel.refreshModelsAfterCPAAccountChange(refresh)
+            } catch {
+                guard viewModel.canUseRefreshSource(source) else { return }
+                viewModel.errorMessage = error.localizedDescription
+            }
         }
     }
 }
@@ -901,23 +1043,6 @@ struct MenuBarBadge: View {
         .help(isSelected ? "menubar.hideFromMenuBar".localized() : "menubar.showOnMenuBar".localized())
     }
 }
-
-// MARK: - Menu Bar Hint View
-
-struct MenuBarHintView: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "chart.bar.fill")
-                .foregroundStyle(.blue)
-                .font(.caption2)
-            Text("menubar.hint".localized())
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
-
 
 // MARK: - Custom Provider Sheet Mode
 

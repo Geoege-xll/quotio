@@ -364,4 +364,34 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertEqual(state.entries.map(\.id), ["latest"])
     }
 
+    func testRefinedOwnerResolvesCrossProtocolThirdPartyModels() {
+        // 验证智谱 GLM 挂在 Claude 兼容端点下被 CPA 标记为 anthropic 时，智能纠正为 GLM 分组
+        let glm1 = ModelCatalogEntry(id: "glm-5.3", owner: "anthropic")
+        let glm2 = ModelCatalogEntry(id: "glm/glm-5.3", owner: "anthropic")
+        XCTAssertEqual(glm1.displayOwner, "GLM")
+        XCTAssertEqual(glm2.displayOwner, "GLM")
+
+        let groups = ModelCatalog.groups([glm1, glm2])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].owner, "GLM")
+        XCTAssertEqual(groups[0].entries.count, 2)
+
+        // 验证其他国产模型（DeepSeek、Moonshot、MiniMax、Qwen）在第三方代理下能正确识别归属
+        let deepseek = ModelCatalogEntry(id: "deepseek-chat", owner: "openai")
+        let moonshot = ModelCatalogEntry(id: "moonshot-v1-8k", owner: "openai")
+        let minimax = ModelCatalogEntry(id: "abab6.5s-chat", owner: "openai")
+        let qwen = ModelCatalogEntry(id: "qwen-max", owner: "openai")
+
+        XCTAssertEqual(deepseek.displayOwner, "DeepSeek")
+        XCTAssertEqual(moonshot.displayOwner, "Moonshot")
+        XCTAssertEqual(minimax.displayOwner, "MiniMax")
+        XCTAssertEqual(qwen.displayOwner, "Qwen")
+
+        // 验证原生 Claude 与 OpenAI 仍保持原有协议归属
+        let claude = ModelCatalogEntry(id: "claude-3-5-sonnet", owner: "anthropic")
+        let gpt = ModelCatalogEntry(id: "gpt-4o", owner: "openai")
+        XCTAssertEqual(claude.displayOwner, "anthropic")
+        XCTAssertEqual(gpt.displayOwner, "openai")
+    }
+
 }

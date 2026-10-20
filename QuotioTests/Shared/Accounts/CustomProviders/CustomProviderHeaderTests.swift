@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import QuotioPlus
 
@@ -35,6 +37,9 @@ final class CustomProviderHeaderTests: XCTestCase {
         XCTAssertTrue(CustomProviderType.codexCompatibility.supportsCustomHeaders)
         XCTAssertFalse(CustomProviderType.glmCompatibility.supportsCustomHeaders)
         XCTAssertFalse(CustomProviderType.clinePass.supportsCustomHeaders)
+        XCTAssertFalse(CustomProviderType.deepseekCompatibility.supportsCustomHeaders)
+        XCTAssertFalse(CustomProviderType.moonshotCompatibility.supportsCustomHeaders)
+        XCTAssertFalse(CustomProviderType.minimaxCompatibility.supportsCustomHeaders)
     }
 
     // MARK: - Request-building path (the path the reviewer reproduced against CFNetwork)
@@ -86,7 +91,7 @@ final class CustomProviderHeaderTests: XCTestCase {
     }
 
     func testEffectiveHeadersAreEmptyForUnsupportedProviderTypes() {
-        for type in [CustomProviderType.glmCompatibility, .clinePass] {
+        for type in [CustomProviderType.glmCompatibility, .clinePass, .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility] {
             let provider = makeProvider(type: type, baseURL: "", headers: sampleHeaders)
             XCTAssertTrue(provider.effectiveHeaders.isEmpty, "\(type) must not send custom headers")
         }
@@ -238,5 +243,47 @@ final class CustomProviderHeaderTests: XCTestCase {
         XCTAssertEqual(decoded.headers, provider.headers)
     }
 
+    // MARK: - Models URL Resolution & Sheets
+
+    func testCustomProviderMakeModelsURL() {
+        let deepseekURL = CustomProviderService.makeModelsURL(baseURL: "https://api.deepseek.com", providerType: .deepseekCompatibility)
+        XCTAssertEqual(deepseekURL?.absoluteString, "https://api.deepseek.com/v1/models")
+
+        let moonshotURL = CustomProviderService.makeModelsURL(baseURL: "https://api.moonshot.cn/v1", providerType: .moonshotCompatibility)
+        XCTAssertEqual(moonshotURL?.absoluteString, "https://api.moonshot.cn/v1/models")
+
+        let minimaxURL = CustomProviderService.makeModelsURL(baseURL: "https://api.minimaxi.com/v1", providerType: .minimaxCompatibility)
+        XCTAssertEqual(minimaxURL?.absoluteString, "https://api.minimaxi.com/v1/models")
+
+        let glmURL = CustomProviderService.makeModelsURL(baseURL: "https://open.bigmodel.cn/api/paas/v4", providerType: .glmCompatibility)
+        XCTAssertEqual(glmURL?.absoluteString, "https://open.bigmodel.cn/api/paas/v4/models")
+    }
+
+    func testGLMAndMainstreamProviderSheetsRendering() {
+        let glmSheet = GLMAPIKeySheet(provider: nil, onSave: { _ in })
+        let glmHost = NSHostingView(rootView: glmSheet)
+        XCTAssertNotNil(glmHost)
+
+        let mainstreamSheet = MainstreamProviderAPIKeySheet(targetProvider: .moonshot, provider: nil, onSave: { _ in })
+        let mainstreamHost = NSHostingView(rootView: mainstreamSheet)
+        XCTAssertNotNil(mainstreamHost)
+    }
+
+    func testCPAProviderWeightsSectionRendering() {
+        let singleKey = [CustomAPIKeyEntry(apiKey: "sk-test-1")]
+        var drafts: [UUID: String] = [:]
+        let cardWeightsSection = CPAProviderWeightsSection(keys: singleKey, drafts: Binding(get: { drafts }, set: { drafts = $0 }), isCard: true)
+        let cardHost = NSHostingView(rootView: cardWeightsSection)
+        XCTAssertNotNil(cardHost)
+
+        let multiKeys = [
+            CustomAPIKeyEntry(apiKey: "sk-test-1"),
+            CustomAPIKeyEntry(apiKey: "sk-test-2")
+        ]
+        let inlineWeightsSection = CPAProviderWeightsSection(keys: multiKeys, drafts: Binding(get: { drafts }, set: { drafts = $0 }), isCard: false)
+        let inlineHost = NSHostingView(rootView: inlineWeightsSection)
+        XCTAssertNotNil(inlineHost)
+    }
 }
+
 

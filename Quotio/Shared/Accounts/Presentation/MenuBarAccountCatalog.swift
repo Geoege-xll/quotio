@@ -12,23 +12,39 @@ enum MenuBarAccountCatalog {
     static func aliases(mode: OperatingMode, proxyRunning: Bool, authFiles: [AuthFile],
                         directFiles: [DirectAuthFile], monitorAccounts: [MonitorAccount],
                         customProviders: [CustomProvider] = []) -> [AIProvider: [String: String]] {
-        // GLM 旧版按连接名称固定。只有名称唯一且连接仅含一个 Key 时才能迁移，
+        // GLM、DeepSeek 与 Moonshot 旧版按连接名称固定。只有名称唯一且连接仅含一个 Key 时才能迁移，
         // 多 Key 的旧名称无法证明具体凭据归属，继续保留独立缓存，不选首 Key 猜测。
-        let glm = customProviders.filter { $0.type == .glmCompatibility }
-        let canonicalKeys = Set(glm.flatMap { provider in provider.apiKeys.map {
-            GLMQuotaFetcher.quotaAccountKey(providerID: provider.id, apiKeyID: $0.id)
-        } })
-        var connectionAliases: [String: String] = [:]
-        for provider in glm where provider.isEnabled && provider.apiKeys.count == 1
-            && !provider.name.isEmpty && !canonicalKeys.contains(provider.name)
-            && glm.filter({ $0.name == provider.name }).count == 1 {
-            connectionAliases[provider.name] = GLMQuotaFetcher.quotaAccountKey(
-                providerID: provider.id, apiKeyID: provider.apiKeys[0].id)
+        func extractCustomAliases(
+            type: CustomProviderType,
+            keyBuilder: (UUID, UUID) -> String
+        ) -> [String: String] {
+            let matched = customProviders.filter { $0.type == type }
+            let canonicalKeys = Set(matched.flatMap { provider in provider.apiKeys.map {
+                keyBuilder(provider.id, $0.id)
+            } })
+            var aliases: [String: String] = [:]
+            for provider in matched where provider.isEnabled && provider.apiKeys.count == 1
+                && !provider.name.isEmpty && !canonicalKeys.contains(provider.name)
+                && matched.filter({ $0.name == provider.name }).count == 1 {
+                aliases[provider.name] = keyBuilder(provider.id, provider.apiKeys[0].id)
+            }
+            return aliases
         }
+
+        let glmAliases = extractCustomAliases(type: .glmCompatibility, keyBuilder: GLMQuotaFetcher.quotaAccountKey)
+        let deepseekAliases = extractCustomAliases(type: .deepseekCompatibility, keyBuilder: DeepSeekQuotaFetcher.quotaAccountKey)
+        let moonshotAliases = extractCustomAliases(type: .moonshotCompatibility, keyBuilder: MoonshotQuotaFetcher.quotaAccountKey)
+
+        func mergeCustomAliases(into dict: inout [AIProvider: [String: String]]) {
+            if !glmAliases.isEmpty { dict[.glm, default: [:]].merge(glmAliases) { current, _ in current } }
+            if !deepseekAliases.isEmpty { dict[.deepseek, default: [:]].merge(deepseekAliases) { current, _ in current } }
+            if !moonshotAliases.isEmpty { dict[.moonshot, default: [:]].merge(moonshotAliases) { current, _ in current } }
+        }
+
         guard mode == .monitor else {
             var aliases = AuthFileIdentity.quotaAliases(mode: mode, proxyRunning: proxyRunning,
                 authFiles: authFiles, directFiles: directFiles)
-            if !connectionAliases.isEmpty { aliases[.glm, default: [:]].merge(connectionAliases) { current, _ in current } }
+            mergeCustomAliases(into: &aliases)
             return aliases
         }
         let active = monitorAccounts.filter { !$0.isDisabled }
@@ -50,7 +66,7 @@ enum MenuBarAccountCatalog {
         }.reduce(into: [:]) { result, entry in
             result[entry.key] = entry.value.filter { !canonical[entry.key, default: []].contains($0.key) }
         }
-        if !connectionAliases.isEmpty { result[.glm, default: [:]].merge(connectionAliases) { current, _ in current } }
+        mergeCustomAliases(into: &result)
         return result
     }
 
@@ -88,6 +104,15 @@ enum MenuBarAccountCatalog {
                 return (keys.isEmpty ? [provider.name] : keys).map { MenuBarQuotaItem(provider: AIProvider.glm.rawValue, accountKey: $0) }
             }
             if provider.type == .clinePass { return [MenuBarQuotaItem(provider: AIProvider.clinePass.rawValue, accountKey: provider.name)] }
+            if provider.type == .deepseekCompatibility {
+                let keys = provider.apiKeys.map { DeepSeekQuotaFetcher.quotaAccountKey(providerID: provider.id, apiKeyID: $0.id) }
+                return (keys.isEmpty ? [provider.name] : keys).map { MenuBarQuotaItem(provider: AIProvider.deepseek.rawValue, accountKey: $0) }
+            }
+            if provider.type == .moonshotCompatibility {
+                let keys = provider.apiKeys.map { MoonshotQuotaFetcher.quotaAccountKey(providerID: provider.id, apiKeyID: $0.id) }
+                return (keys.isEmpty ? [provider.name] : keys).map { MenuBarQuotaItem(provider: AIProvider.moonshot.rawValue, accountKey: $0) }
+            }
+            if provider.type == .minimaxCompatibility { return [MenuBarQuotaItem(provider: AIProvider.minimax.rawValue, accountKey: provider.name)] }
             return []
         }
         let counts = configured.reduce(into: [MenuBarQuotaItem: Int]()) { $0[$1, default: 0] += 1 }

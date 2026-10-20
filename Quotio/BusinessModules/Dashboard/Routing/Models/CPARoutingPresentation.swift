@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // 本文件维护路由页面的活动与展示规则；共享查询快照归 CPA 统计领域，原查询和消费任务不变。
 // 光流身份、时钟、账号映射和状态回退保持原实现，不在本次归位中调整。
@@ -16,6 +17,8 @@ nonisolated struct CPARoutingActivity: Identifiable, Sendable {
     let targetID: String
     let outcome: CPAUsageOutcome
     let receivedAt: Date
+    /// 调用方智能体客户端名称（如 "Claude Code"、"Codex"、"Cursor"、"OpenCode"），用于动态色彩呈现
+    let client: String?
 
     init(event: CPAUsageEvent, receivedAt: Date) {
         id = event.id
@@ -23,6 +26,21 @@ nonisolated struct CPARoutingActivity: Identifiable, Sendable {
         targetID = CPARoutingPresentation.targetID(for: event)
         outcome = event.outcome
         self.receivedAt = receivedAt
+        client = event.context.client
+    }
+
+    init(id: String, sourceID: String, targetID: String, outcome: CPAUsageOutcome, receivedAt: Date, client: String? = nil) {
+        self.id = id
+        self.sourceID = sourceID
+        self.targetID = targetID
+        self.outcome = outcome
+        self.receivedAt = receivedAt
+        self.client = client
+    }
+
+    /// 对应的智能体品牌特征色彩（出站请求粒子与光晕渲染）
+    var agentColor: Color {
+        CPARoutingPresentation.agentColor(for: client)
     }
 
     func isRecent(at date: Date, duration: TimeInterval = emphasisDuration) -> Bool {
@@ -93,6 +111,36 @@ nonisolated enum CPARoutingPresentation {
     static func isRecent(_ event: CPAUsageEvent, now: Date) -> Bool {
         let age = now.timeIntervalSince(event.timestamp)
         return age >= 0 && age < 12
+    }
+
+    /// 根据调用端智能体识别身份返回专属品牌色彩。
+    /// 未知或未识别智能体使用系统主色 (accentColor) 兜底。
+    static func agentColor(for client: String?) -> Color {
+        guard let client else { return Color.accentColor }
+        let lower = client.lowercased()
+        if lower.contains("claude") {
+            // Claude Code 官方专属暖橙色
+            return Color(hex: "D97706") ?? .orange
+        } else if lower.contains("codex") {
+            // OpenAI Codex 官方翠绿色
+            return Color(hex: "10A37F") ?? .green
+        } else if lower.contains("cursor") {
+            // Cursor 经典科技蓝
+            return Color(hex: "007AFF") ?? .blue
+        } else if lower.contains("opencode") {
+            // OpenCode 典雅紫
+            return Color(hex: "8B5CF6") ?? .purple
+        } else if lower.contains("pi") {
+            // Pi 活力珊瑚橙
+            return Color(hex: "F97316") ?? .orange
+        } else if lower.contains("amp") {
+            // Amp 烈焰红
+            return Color(hex: "FF5543") ?? .red
+        } else if lower.contains("droid") || lower.contains("factory") {
+            // Factory Droid 翠绿
+            return Color(hex: "238636") ?? .green
+        }
+        return Color.accentColor
     }
 
     private static func provider(_ value: String) -> String {

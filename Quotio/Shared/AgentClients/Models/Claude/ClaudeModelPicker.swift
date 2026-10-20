@@ -127,27 +127,17 @@ extension AgentConfiguration {
     /// 只为说明和预览解析角色；输出到菜单的 model 仍保留角色引用。
     /// 显式角色[1m]覆盖该次选择的上下文，不改变角色本身的开关。
     nonisolated func claudeResolvedSelector(_ selector: String) -> String {
-        let parsed = Self.normalizedClaudeModelID(selector)
-        guard let role = ModelSlot(rawValue: parsed.base) else { return selector }
-        let target = claudeRequestModel(for: role)
-        return parsed.uses1M ? Self.normalizedClaudeModelID(target).base + "[1m]" : target
+        resolvedClaudeReference(selector)?.selector ?? selector
     }
 
     /// 已有菜单只读预览完整保留顺序，同一个模型可能来自不同账号，不能按模型去掉账号行。
     /// 用户明确编辑并写入菜单时沿用既有选择器去重规则；普通模型、1M 变体和各角色仍独立。
     nonisolated var claudeEffectivePickerOptions: [ClaudeModelPickerOption] {
-        if !claudeModelPicker.shouldWrite {
+        if !claudeModelPicker.shouldWrite || claudeCatalogManaged {
             return claudeModelPicker.options.filter { !$0.selector.isEmpty }
         }
         var seen = Set<String>()
         return claudeModelPicker.options.filter { !$0.selector.isEmpty && seen.insert($0.selector).inserted }
-    }
-
-    /// nil 表示跟随当前会话，生成器会移除旧变量，而不是写入一个固定的启动模型。
-    nonisolated var claudeSubagentSelector: String? {
-        guard let model = claudeSubagentModel?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty else { return nil }
-        let parsed = Self.normalizedClaudeModelID(model)
-        return parsed.base + (parsed.uses1M ? "[1m]" : "")
     }
 
     /// 输出和面板预览使用同一份规则，未知扩展字段在重新生成时原样保留。
@@ -158,7 +148,11 @@ extension AgentConfiguration {
         }
         var fields = claudeModelPicker.extraFields
         fields["replaceBuiltInOptions"] = .bool(claudeModelPicker.mode == .curated)
-        if claudeModelPicker.isQuotioManaged { fields["quotioManaged"] = .bool(true) }
+        if claudeCatalogManaged {
+            // 新托管凭证位于根命名空间，CLI 正常保存会剥离 modelPicker 的未知嵌套键。
+            // 这里只迁出我们自己认识的历史键；用户及其他工具的扩展字段仍原样保留。
+            for key in ClaudeCatalogOwnership.legacyKeys { fields.removeValue(forKey: key) }
+        } else if claudeModelPicker.isQuotioManaged { fields["quotioManaged"] = .bool(true) }
         fields["options"] = .array(claudeEffectivePickerOptions.map { option in
             var row = option.extraFields
             row["model"] = .string(option.selector)

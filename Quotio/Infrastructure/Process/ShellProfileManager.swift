@@ -7,6 +7,16 @@ import Foundation
 
 actor ShellProfileManager {
     private let fileManager = FileManager.default
+    /// 原管理器继续持有 Shell 事务；只读路径和原子写入依赖供临时 home／失败回归注入。
+    private let profilePath: @Sendable (ShellType) -> String
+    private let writeProfile: @Sendable (String, String) throws -> Void
+    init(profilePath: @escaping @Sendable (ShellType) -> String = { $0.profilePath },
+         writeProfile: @escaping @Sendable (String, String) throws -> Void = { text, path in
+             try text.write(toFile: path, atomically: true, encoding: .utf8)
+         }) {
+        self.profilePath = profilePath
+        self.writeProfile = writeProfile
+    }
     
     func detectShell() -> ShellType {
         if let shell = ProcessInfo.processInfo.environment["SHELL"] {
@@ -18,7 +28,7 @@ actor ShellProfileManager {
     }
     
     func getProfilePath(for shell: ShellType) -> String {
-        shell.profilePath
+        profilePath(shell)
     }
     
     func addToProfile(
@@ -30,23 +40,11 @@ actor ShellProfileManager {
         let marker = "# CLIProxyAPI Configuration for \(agent.displayName)"
         let endMarker = "# End CLIProxyAPI Configuration for \(agent.displayName)"
         
-        var content: String
-        if fileManager.fileExists(atPath: profilePath) {
-            content = try String(contentsOfFile: profilePath, encoding: .utf8)
-            
-            if let startRange = content.range(of: marker),
-               let endRange = content.range(of: endMarker) {
-                // Safe bounds check: only advance if not at end
-                let endBound = endRange.upperBound < content.endIndex
-                    ? content.index(after: endRange.upperBound)
-                    : endRange.upperBound
-                let fullRange = startRange.lowerBound..<endBound
-                content.removeSubrange(fullRange)
-            }
-        } else {
-            content = ""
-        }
-        
+        if agent == .claudeCode, fileManager.fileExists(atPath: profilePath) { _ = try createBackup(shell: shell) }
+        let before = fileManager.fileExists(atPath: profilePath)
+            ? try String(contentsOfFile: profilePath, encoding: .utf8) : ""
+        var content = try removingManagedBlocks(before, marker: marker, endMarker: endMarker)
+
         let newConfig = """
         
         \(marker)
@@ -56,9 +54,15 @@ actor ShellProfileManager {
         
         content.append(newConfig)
         
-        try content.write(toFile: profilePath, atomically: true, encoding: .utf8)
+        if fileManager.fileExists(atPath: profilePath) {
+            let current = try String(contentsOfFile: profilePath, encoding: .utf8)
+            guard current == before else {
+                throw ShellProfileError.changed
+            }
+        }
+        try writeProfile(content, URL(fileURLWithPath: profilePath).resolvingSymlinksInPath().path)
     }
-    
+
     func removeFromProfile(
         shell: ShellType,
         agent: CLIAgent
@@ -66,34 +70,45 @@ actor ShellProfileManager {
         let profilePath = getProfilePath(for: shell)
         let marker = "# CLIProxyAPI Configuration for \(agent.displayName)"
         let endMarker = "# End CLIProxyAPI Configuration for \(agent.displayName)"
-        
+
         guard fileManager.fileExists(atPath: profilePath) else { return }
-        
-        var content = try String(contentsOfFile: profilePath, encoding: .utf8)
-        
-        if let startRange = content.range(of: marker),
-           let endRange = content.range(of: endMarker) {
-            var startIndex = startRange.lowerBound
-            if startIndex > content.startIndex {
-                let prevIndex = content.index(before: startIndex)
-                if content[prevIndex] == "\n" {
-                    startIndex = prevIndex
-                }
+
+        let before = try String(contentsOfFile: profilePath, encoding: .utf8)
+        let content = try removingManagedBlocks(before, marker: marker, endMarker: endMarker)
+        guard content != before else { return }
+        if agent == .claudeCode { _ = try createBackup(shell: shell) }
+        let currentAfter = try String(contentsOfFile: profilePath, encoding: .utf8)
+        guard currentAfter == before else {
+            throw ShellProfileError.changed
+        }
+        try writeProfile(content, URL(fileURLWithPath: profilePath).resolvingSymlinksInPath().path)
+    }
+
+    /// 历史版本可能重复追加管理段；逐段撤下，保留区间外每个字节及命令换行。
+    /// 标记不成对时禁止追加／清理，避免保留旧高优先级变量却报告成功，或误删后续用户命令。
+    private func removingManagedBlocks(_ original: String, marker: String, endMarker: String) throws -> String {
+        var content = original
+        while let start = content.range(of: marker) {
+            guard let end = content.range(of: endMarker, range: start.upperBound..<content.endIndex) else {
+                throw ShellProfileError.incompleteBlock
             }
-            
-            var endIndex = endRange.upperBound
-            if endIndex < content.endIndex {
-                let nextIndex = content.index(after: endIndex)
-                if nextIndex <= content.endIndex && content[endIndex] == "\n" {
-                    endIndex = nextIndex
-                }
+            var upper = end.upperBound
+            if upper < content.endIndex, content[upper] == "\n" { upper = content.index(after: upper) }
+            content.removeSubrange(start.lowerBound..<upper)
+        }
+        return content
+    }
+
+    enum ShellProfileError: LocalizedError {
+        case incompleteBlock, changed
+        var errorDescription: String? {
+            switch self {
+            case .incompleteBlock: "agents.catalog.shellMalformed".localizedStatic()
+            case .changed: "agents.catalog.fileChanged".localizedStatic()
             }
-            
-            content.removeSubrange(startIndex..<endIndex)
-            try content.write(toFile: profilePath, atomically: true, encoding: .utf8)
         }
     }
-    
+
     func isConfiguredInProfile(
         shell: ShellType,
         agent: CLIAgent
@@ -110,10 +125,17 @@ actor ShellProfileManager {
     
     func createBackup(shell: ShellType) throws -> String {
         let profilePath = getProfilePath(for: shell)
-        let backupPath = "\(profilePath).backup.\(Int(Date().timeIntervalSince1970))"
+        var timestamp = Int(Date().timeIntervalSince1970)
+        var backupPath = "\(profilePath).backup.\(timestamp)"
+        // 同秒内保存／恢复也必须保留每份备份，不能覆盖旧文件或因重名跳过保护。
+        while fileManager.fileExists(atPath: backupPath) {
+            timestamp += 1
+            backupPath = "\(profilePath).backup.\(timestamp)"
+        }
         
         if fileManager.fileExists(atPath: profilePath) {
-            try fileManager.copyItem(atPath: profilePath, toPath: backupPath)
+            try Data(contentsOf: URL(fileURLWithPath: profilePath)).write(to: URL(fileURLWithPath: backupPath), options: .withoutOverwriting)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backupPath)
         }
         
         return backupPath

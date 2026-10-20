@@ -48,18 +48,22 @@ struct AddProviderPopover: View {
                 .accessibilityLabel("action.cancel".localized())
             }
 
-            // Provider grid
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(providers) { provider in
-                    ProviderButton(
-                        provider: provider,
-                        existingCount: existingCounts[provider] ?? 0
-                    ) {
-                        onSelectProvider(provider)
-                        onDismiss()
+            // Provider grid with scroll container for responsive height
+            ScrollView(.vertical, showsIndicators: true) {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(providers) { provider in
+                        ProviderButton(
+                            provider: provider,
+                            existingCount: existingCounts[provider] ?? 0
+                        ) {
+                            onSelectProvider(provider)
+                            onDismiss()
+                        }
                     }
                 }
+                .padding(.vertical, 2)
             }
+            .frame(maxHeight: 320)
 
             // Inset well for utility entries (zero-divider architecture)
             VStack(spacing: 6) {

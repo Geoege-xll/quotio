@@ -185,7 +185,10 @@ struct QuotioCircularIconButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button(action: {
+            TooltipWindow.shared.hide()
+            action()
+        }) {
             ZStack {
                 Circle()
                     .fill(fillColor)
@@ -213,6 +216,9 @@ struct QuotioCircularIconButton: View {
         .buttonStyle(TactileCircularButtonStyle())
         .disabled(isLoading)
         .onHover { hovering in
+            if !hovering {
+                TooltipWindow.shared.hide()
+            }
             withAnimation(.easeInOut(duration: 0.12)) {
                 isHovered = hovering
             }
@@ -276,6 +282,9 @@ struct QuotioCircularMenu<Content: View>: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .onHover { hovering in
+            if !hovering {
+                TooltipWindow.shared.hide()
+            }
             withAnimation(.easeInOut(duration: 0.12)) {
                 isHovered = hovering
             }
@@ -293,17 +302,23 @@ struct QuotioCircularMenu<Content: View>: View {
 
 // MARK: - Native Tooltip Support
 
-class TooltipWindow: NSWindow {
+@MainActor
+final class TooltipWindow: NSWindow {
     static let shared = TooltipWindow()
     private weak var activeView: NSView?
+    private weak var activeHostWindow: NSWindow?
+    private var localEventMonitor: Any?
+    private var globalEventMonitor: Any?
+    private var notificationObservers: [NSObjectProtocol] = []
 
     private let label: NSTextField = {
         let label = NSTextField(labelWithString: "")
-        label.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
         label.textColor = .labelColor
         label.backgroundColor = .clear
         label.isBezeled = false
         label.isEditable = false
+        label.lineBreakMode = .byTruncatingTail
         return label
     }()
 
@@ -317,13 +332,14 @@ class TooltipWindow: NSWindow {
         self.isOpaque = false
         self.backgroundColor = .clear
         self.level = .floating
+        self.collectionBehavior = [.canJoinAllSpaces, .transient]
         self.ignoresMouseEvents = true
 
         let visualEffect = NSVisualEffectView()
         visualEffect.material = .toolTip
         visualEffect.state = .active
         visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 4
+        visualEffect.layer?.cornerRadius = 5
 
         label.translatesAutoresizingMaskIntoConstraints = false
         visualEffect.addSubview(label)
@@ -338,49 +354,156 @@ class TooltipWindow: NSWindow {
     }
 
     func show(text: String, near view: NSView) {
-        guard !text.isEmpty else {
+        guard !text.isEmpty, let hostWindow = view.window, hostWindow.isVisible else {
             hide(from: view)
             return
         }
+
+        cleanupMonitors()
         activeView = view
+        activeHostWindow = hostWindow
+
         label.stringValue = text
         label.sizeToFit()
 
         let labelSize = label.fittingSize
-        let windowSize = NSSize(width: labelSize.width + 16, height: labelSize.height + 8)
+        let windowSize = NSSize(width: min(labelSize.width + 16, 400), height: labelSize.height + 8)
 
-        guard let screen = view.window?.screen ?? NSScreen.main else { return }
-        let viewFrameInScreen = view.window?.convertToScreen(view.convert(view.bounds, to: nil)) ?? .zero
+        guard let screen = hostWindow.screen ?? NSScreen.main else { return }
+        let screenFrame = screen.visibleFrame
+        let viewFrameInScreen = hostWindow.convertToScreen(view.convert(view.bounds, to: nil))
+
         var origin = NSPoint(
             x: viewFrameInScreen.midX - windowSize.width / 2,
             y: viewFrameInScreen.minY - windowSize.height - 4
         )
 
         // Keep tooltip on screen
-        if origin.x < screen.visibleFrame.minX {
-            origin.x = screen.visibleFrame.minX
+        if origin.x < screenFrame.minX {
+            origin.x = screenFrame.minX
         }
-        if origin.x + windowSize.width > screen.visibleFrame.maxX {
-            origin.x = screen.visibleFrame.maxX - windowSize.width
+        if origin.x + windowSize.width > screenFrame.maxX {
+            origin.x = screenFrame.maxX - windowSize.width
         }
-        if origin.y < screen.visibleFrame.minY {
+        if origin.y < screenFrame.minY {
             origin.y = viewFrameInScreen.maxY + 4
         }
 
         setFrame(NSRect(origin: origin, size: windowSize), display: true)
         orderFront(nil)
+
+        // Fail-safe 1: Local mouse & keyboard monitor
+        // Clicks, scrolls, or key presses anywhere instantly dismiss the tooltip.
+        // Mouse moves outside the active view bounds instantly dismiss the tooltip.
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [
+            .leftMouseDown, .rightMouseDown, .otherMouseDown,
+            .scrollWheel, .keyDown,
+            .mouseMoved, .leftMouseDragged, .rightMouseDragged
+        ]) { [weak self] event in
+            guard let self else { return event }
+            switch event.type {
+            case .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .keyDown:
+                self.hide()
+            case .mouseMoved, .leftMouseDragged, .rightMouseDragged:
+                guard let currentView = self.activeView, let currentWindow = currentView.window, !currentView.isHiddenOrHasHiddenAncestor else {
+                    self.hide()
+                    return event
+                }
+                if event.window !== currentWindow {
+                    self.hide()
+                    return event
+                }
+                let mouseInView = currentView.convert(event.locationInWindow, from: nil)
+                if !currentView.bounds.insetBy(dx: -3, dy: -3).contains(mouseInView) {
+                    self.hide()
+                }
+            default:
+                break
+            }
+            return event
+        }
+
+        // Fail-safe 2: Global mouse monitor
+        // Clicks or scrolls in other apps/outside Quotio immediately dismiss the tooltip.
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [
+            .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel
+        ]) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.hide()
+            }
+        }
+
+        // Fail-safe 3: Window and App lifecycle notifications
+        let center = NotificationCenter.default
+        notificationObservers.append(
+            center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.hide()
+            }
+        )
+        notificationObservers.append(
+            center.addObserver(forName: NSWindow.didResignKeyNotification, object: hostWindow, queue: .main) { [weak self] _ in
+                self?.hide()
+            }
+        )
+        notificationObservers.append(
+            center.addObserver(forName: NSWindow.willMiniaturizeNotification, object: hostWindow, queue: .main) { [weak self] _ in
+                self?.hide()
+            }
+        )
+        notificationObservers.append(
+            center.addObserver(forName: NSWindow.willCloseNotification, object: hostWindow, queue: .main) { [weak self] _ in
+                self?.hide()
+            }
+        )
+        notificationObservers.append(
+            center.addObserver(forName: NSWindow.didMoveNotification, object: hostWindow, queue: .main) { [weak self] _ in
+                self?.hide()
+            }
+        )
+        notificationObservers.append(
+            center.addObserver(forName: NSWindow.didResizeNotification, object: hostWindow, queue: .main) { [weak self] _ in
+                self?.hide()
+            }
+        )
+
+        // Fail-safe 4: ScrollView scrolling detection
+        if let clipView = view.enclosingScrollView?.contentView {
+            clipView.postsBoundsChangedNotifications = true
+            notificationObservers.append(
+                center.addObserver(forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main) { [weak self] _ in
+                    self?.hide()
+                }
+            )
+        }
     }
 
     func hide(from view: NSView? = nil) {
-        if let view = view, activeView !== view {
+        if let view, let current = activeView, current !== view {
             return
         }
+        cleanupMonitors()
         activeView = nil
+        activeHostWindow = nil
         orderOut(nil)
+    }
+
+    private func cleanupMonitors() {
+        if let localEventMonitor {
+            NSEvent.removeMonitor(localEventMonitor)
+            self.localEventMonitor = nil
+        }
+        if let globalEventMonitor {
+            NSEvent.removeMonitor(globalEventMonitor)
+            self.globalEventMonitor = nil
+        }
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        notificationObservers.removeAll()
     }
 }
 
-class TooltipTrackingView: NSView {
+final class TooltipTrackingView: NSView {
     var text: String = ""
 
     override func updateTrackingAreas() {
@@ -388,7 +511,7 @@ class TooltipTrackingView: NSView {
         trackingAreas.forEach { removeTrackingArea($0) }
         addTrackingArea(NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         ))
@@ -398,12 +521,43 @@ class TooltipTrackingView: NSView {
         TooltipWindow.shared.show(text: text, near: self)
     }
 
+    override func mouseMoved(with event: NSEvent) {
+        let mouseInView = convert(event.locationInWindow, from: nil)
+        if !bounds.insetBy(dx: -2, dy: -2).contains(mouseInView) {
+            TooltipWindow.shared.hide(from: self)
+        }
+    }
+
     override func mouseExited(with event: NSEvent) {
         TooltipWindow.shared.hide(from: self)
     }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            TooltipWindow.shared.hide(from: self)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            TooltipWindow.shared.hide(from: self)
+        }
+    }
+
+    override func removeFromSuperview() {
+        TooltipWindow.shared.hide(from: self)
+        super.removeFromSuperview()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        TooltipWindow.shared.hide(from: self)
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
-        return nil
+        nil
     }
 }
 
@@ -418,6 +572,10 @@ struct NativeTooltipView: NSViewRepresentable {
 
     func updateNSView(_ nsView: TooltipTrackingView, context: Context) {
         nsView.text = text
+    }
+
+    static func dismantleNSView(_ nsView: TooltipTrackingView, coordinator: ()) {
+        TooltipWindow.shared.hide(from: nsView)
     }
 }
 

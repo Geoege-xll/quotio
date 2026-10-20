@@ -18,13 +18,16 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
     case codexCompatibility = "codex-api-key"
     case glmCompatibility = "glm-api-key"
     case clinePass = "clinepass"
+    case deepseekCompatibility = "deepseek-compatibility"
+    case moonshotCompatibility = "moonshot-compatibility"
+    case minimaxCompatibility = "minimax-compatibility"
 
     var id: String { rawValue }
 
     /// CLIProxyAPI section key. Kept separate from rawValue, which is persisted.
     var yamlSectionKey: String {
         switch self {
-        case .clinePass:
+        case .clinePass, .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility:
             return CustomProviderType.openaiCompatibility.rawValue
         default:
             return rawValue
@@ -37,11 +40,14 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
         case .claudeCompatibility: return "Claude Compatible"
         case .geminiCompatibility: return "Gemini Compatible"
         case .codexCompatibility: return "Codex Compatible"
-        case .glmCompatibility: return "Z.ai / GLM"
+        case .glmCompatibility: return "GLM"
         case .clinePass: return "ClinePass"
+        case .deepseekCompatibility: return "DeepSeek"
+        case .moonshotCompatibility: return "Kimi"
+        case .minimaxCompatibility: return "MiniMax"
         }
     }
-    
+
     @MainActor
     var localizedDisplayName: String {
         switch self {
@@ -51,9 +57,12 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
         case .codexCompatibility: return "customProviders.type.codex".localized()
         case .glmCompatibility: return "customProviders.type.glm".localized()
         case .clinePass: return "customProviders.type.clinepass".localized()
+        case .deepseekCompatibility: return "DeepSeek"
+        case .moonshotCompatibility: return "Kimi"
+        case .minimaxCompatibility: return "MiniMax"
         }
     }
-    
+
     var description: String {
         switch self {
         case .openaiCompatibility:
@@ -68,9 +77,15 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
             return "Z.ai GLM Coding Plan API"
         case .clinePass:
             return "ClinePass subscription with OpenAI-compatible routing"
+        case .deepseekCompatibility:
+            return "DeepSeek API (deepseek-chat, deepseek-reasoner)"
+        case .moonshotCompatibility:
+            return "Kimi / Moonshot API (moonshot-v1, kimi-latest)"
+        case .minimaxCompatibility:
+            return "MiniMax API (MiniMax-Text-01, abab6.5s)"
         }
     }
-    
+
     @MainActor
     var localizedDescription: String {
         switch self {
@@ -80,9 +95,12 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
         case .codexCompatibility: return "customProviders.type.codex.desc".localized()
         case .glmCompatibility: return "customProviders.type.glm.desc".localized()
         case .clinePass: return "customProviders.type.clinepass.desc".localized()
+        case .deepseekCompatibility: return "DeepSeek API (deepseek-chat, deepseek-reasoner)"
+        case .moonshotCompatibility: return "Kimi / Moonshot API (moonshot-v1, kimi-latest)"
+        case .minimaxCompatibility: return "MiniMax API (MiniMax-Text-01, abab6.5s)"
         }
     }
-    
+
     var providerIconName: String {
         switch self {
         case .openaiCompatibility: return "openai"
@@ -91,9 +109,12 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
         case .codexCompatibility: return "openai"
         case .glmCompatibility: return "glm"
         case .clinePass: return "clinepass"
+        case .deepseekCompatibility: return "deepseek"
+        case .moonshotCompatibility: return "moonshot"
+        case .minimaxCompatibility: return "minimax"
         }
     }
-    
+
     var menuBarIconName: String {
         switch self {
         case .openaiCompatibility: return "openai-menubar"
@@ -102,9 +123,12 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
         case .codexCompatibility: return "openai-menubar"
         case .glmCompatibility: return "glm-menubar"
         case .clinePass: return "clinepass-menubar"
+        case .deepseekCompatibility: return "deepseek-menubar"
+        case .moonshotCompatibility: return "moonshot-menubar"
+        case .minimaxCompatibility: return "minimax-menubar"
         }
     }
-    
+
     var color: Color {
         switch self {
         case .openaiCompatibility: return Color(hex: "10A37F") ?? .green
@@ -113,19 +137,23 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
         case .codexCompatibility: return Color(hex: "10A37F") ?? .green
         case .glmCompatibility: return Color(hex: "3B82F6") ?? .blue
         case .clinePass: return Color(hex: "61A3FA") ?? .blue
+        case .deepseekCompatibility: return Color(hex: "1E88E5") ?? .blue
+        case .moonshotCompatibility: return Color(hex: "6366F1") ?? .indigo
+        case .minimaxCompatibility: return Color(hex: "FF4D4F") ?? .red
         }
     }
-    
+
     /// Whether this provider type requires a base URL
     var requiresBaseURL: Bool {
         switch self {
         case .openaiCompatibility, .codexCompatibility:
             return true
-        case .claudeCompatibility, .geminiCompatibility, .glmCompatibility, .clinePass:
+        case .claudeCompatibility, .geminiCompatibility, .glmCompatibility, .clinePass,
+             .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility:
             return false // Has default base URL
         }
     }
-    
+
     /// Default base URL for this provider type (if any)
     var defaultBaseURL: String? {
         switch self {
@@ -137,15 +165,22 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
             return "https://api.z.ai"
         case .clinePass:
             return "https://api.cline.bot/api/v1"
+        case .deepseekCompatibility:
+            return "https://api.deepseek.com"
+        case .moonshotCompatibility:
+            return "https://api.moonshot.cn/v1"
+        case .minimaxCompatibility:
+            return "https://api.minimaxi.com/v1"
         case .openaiCompatibility, .codexCompatibility:
             return nil
         }
     }
-    
+
     /// Whether this provider type supports model alias mapping
     var supportsModelMapping: Bool {
         switch self {
-        case .openaiCompatibility, .claudeCompatibility, .clinePass:
+        case .openaiCompatibility, .claudeCompatibility, .clinePass,
+             .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility:
             return true
         case .geminiCompatibility, .codexCompatibility, .glmCompatibility:
             return false
@@ -155,13 +190,14 @@ enum CustomProviderType: String, CaseIterable, Codable, Identifiable, Sendable {
     /// Whether this provider type supports custom headers.
     /// CLIProxyAPI accepts a `headers` map for `openai-compatibility` providers (provider level)
     /// and for `claude-api-key`, `gemini-api-key`, and `codex-api-key` entries (per key).
-    /// GLM and ClinePass are excluded: `glm-api-key` has no documented headers support,
-    /// and ClinePass is a managed service with fixed authentication.
+    /// GLM, ClinePass, and dedicated mainstream providers are excluded:
+    /// they are managed API-key services with fixed authentication.
     var supportsCustomHeaders: Bool {
         switch self {
         case .openaiCompatibility, .claudeCompatibility, .geminiCompatibility, .codexCompatibility:
             return true
-        case .glmCompatibility, .clinePass:
+        case .glmCompatibility, .clinePass,
+             .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility:
             return false
         }
     }
@@ -511,3 +547,32 @@ struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
         }
     }
 }
+
+// MARK: - Custom Provider Test Error
+
+enum CustomProviderTestError: LocalizedError {
+    case noAPIKey
+    case invalidURL
+    case invalidResponse
+    case unauthorized
+    case endpointNotFound
+    case serverError(Int, String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noAPIKey:
+            return "No API key provided"
+        case .invalidURL:
+            return "Invalid base URL"
+        case .invalidResponse:
+            return "Invalid response from server"
+        case .unauthorized:
+            return "API key is invalid or unauthorized"
+        case .endpointNotFound:
+            return "Models endpoint not found at this URL"
+        case .serverError(let code, let message):
+            return "Server error (\(code)): \(message)"
+        }
+    }
+}
+

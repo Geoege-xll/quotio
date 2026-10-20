@@ -7,8 +7,8 @@ import SwiftUI
 
 struct AgentSetupScreen: View {
     @Environment(QuotaViewModel.self) private var quotaViewModel
-    @State private var selectedAgentForConfig: CLIAgent?
-    @State private var sheetPresentationID = UUID()
+    /// 只保留本页面原有的弹窗状态；通过同一个值传递客户端和会话，不在 sheet 闭包读取独立 UUID。
+    @State private var configurationPresentation: AgentConfigurationPresentation?
     @State private var hasLoadedOnce = false
     
     private var viewModel: AgentSetupViewModel {
@@ -62,12 +62,12 @@ struct AgentSetupScreen: View {
                 hasLoadedOnce = true
             }
         }
-        .sheet(item: $selectedAgentForConfig) { (agent: CLIAgent) in
-            let sessionID = sheetPresentationID
-            AgentConfigSheet(viewModel: viewModel, agent: agent, configurationSessionID: sessionID)
-                .id(sessionID)
+        .sheet(item: $configurationPresentation) { presentation in
+            AgentConfigSheet(viewModel: viewModel, agent: presentation.agent, configurationSessionID: presentation.id)
+                .id(presentation.id)
                 .onDisappear {
-                    viewModel.dismissConfiguration(sessionID: sessionID)
+                    // 仍按本次身份收尾；旧弹窗迟到的消失事件不能清空重开的草稿。
+                    viewModel.dismissConfiguration(sessionID: presentation.id)
                 }
         }
     }
@@ -141,8 +141,8 @@ struct AgentSetupScreen: View {
                         onConfigure: {
                             // 客户端目录和配置只使用客户端 API key，不能以 v8 管理密钥代替。
                             let apiKey = quotaViewModel.apiKeys.first ?? ""
-                            sheetPresentationID = viewModel.startConfiguration(for: status.agent, apiKey: apiKey)
-                            selectedAgentForConfig = status.agent
+                            let sessionID = viewModel.startConfiguration(for: status.agent, apiKey: apiKey)
+                            configurationPresentation = AgentConfigurationPresentation(id: sessionID, agent: status.agent)
                         }
                     )
                 }

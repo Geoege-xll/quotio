@@ -5,6 +5,15 @@
 
 import SwiftUI
 
+/// 配置弹窗的只读呈现契约，由客户端列表和仪表盘快捷入口实际复用。
+/// 客户端与 startConfiguration 返回的 UUID 必须一起传给 sheet(item:)；分开用两个 State 传递时，
+/// 首次呈现闭包可能读取旧 UUID，使真实按钮被会话保护静默拒绝。两个页面仍各自持有呈现状态，
+/// 原 ViewModel 继续唯一持有草稿、请求世代和 Task；本值不生成身份，也不承接任何业务状态。
+struct AgentConfigurationPresentation: Identifiable {
+    let id: UUID
+    let agent: CLIAgent
+}
+
 struct AgentConfigSheet: View {
     @Bindable var viewModel: AgentSetupViewModel
     let agent: CLIAgent
@@ -25,6 +34,30 @@ struct AgentConfigSheet: View {
     @State private var aliasStore = CPAModelAliasesViewModel()
     @State private var showModelAliases = false
     @FocusState private var isCloseFocused: Bool
+    /// 手动预览是整份草稿的投影，不能靠列举若干字段或 Picker 内部随机身份碰巧触发。
+    /// 本值只用于比较输入，不持有业务状态；实际取消和执行仍复用原 previewTask。
+    private struct PreviewInput: Equatable {
+        let configuration: AgentConfiguration
+        let models: [AvailableModel]
+        let legacy: ClaudeLegacyModelReferences
+        let shell: ShellType
+        let sessionID: UUID
+    }
+    private var previewInput: PreviewInput? {
+        guard isManualMode, !viewModel.isLoadingConfiguration,
+              viewModel.isCurrentConfigurationSession(configurationSessionID),
+              let configuration = viewModel.currentConfiguration else { return nil }
+        return PreviewInput(configuration: configuration,
+            models: agent == .claudeCode ? viewModel.claudeCompatibilityModels : viewModel.availableModels,
+            legacy: viewModel.savedConfig?.claudeLegacyModelReferences ?? .init(),
+            shell: viewModel.detectedShell, sessionID: configurationSessionID)
+    }
+    /// 元数据只属于同一 CPA；候选是否公开由选择器统一与实时目录核对。
+    /// 仍把同源配置规则交给 Codex 推理强度等原功能，避免目录失败时丢失已保存的服务端约束说明。
+    /// 更换外部服务时不沿用本机 CPA 映射，也不因隐藏旧别名而删除其配置。
+    private var serviceAliases: [CPAModelAlias] {
+        viewModel.usesCPAModelService ? aliasStore.aliases : []
+    }
     private var hasResult: Bool {
         viewModel.configResult != nil
     }
@@ -47,7 +80,7 @@ struct AgentConfigSheet: View {
                         resultView
                     } else {
                         configurationView
-                            .disabled(viewModel.isLoadingConfiguration)
+                            .disabled(viewModel.isLoadingConfiguration || viewModel.isConfiguring)
                     }
                 }
                 .padding(20)
@@ -59,7 +92,13 @@ struct AgentConfigSheet: View {
         // Claude 新增菜单编辑和子代理区域，增加可用宽度，避免模型 ID 与名称互相挤压。
         .frame(width: agent == .claudeCode ? 720 : 580, height: agent == .claudeCode ? 780 : 620)
         .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
-        .task { await aliasStore.load(client: viewModel.quotaViewModel?.apiClient) }
+        .task(id: viewModel.currentModelCatalogRevision) {
+            // 复用弹窗原有任务槽：目录刷新成功后也读取最新别名定义，避免名称仍有效但目标说明过期。
+            // 首次仍允许独立读取配置规则；加载中已有快照不重复取数，关闭页面由 SwiftUI 取消。
+            guard viewModel.isCurrentConfigurationSession(configurationSessionID),
+                  viewModel.currentModelCatalogRevision != nil || aliasStore.aliases.isEmpty else { return }
+            await aliasStore.load(client: viewModel.quotaViewModel?.apiClient)
+        }
         .sheet(isPresented: $showModelAliases, onDismiss: {
             // 关闭管理窗口后读取 CPA 最新目录，保留用户尚未保存的槽位和默认模型选择。
             Task {
@@ -73,41 +112,10 @@ struct AgentConfigSheet: View {
         }
         .onAppear {
             viewModel.resetSheetState(sessionID: configurationSessionID)
-            if isManualMode {
-                generatePreview()
-            }
         }
-        .onChange(of: viewModel.isLoadingConfiguration) { _, isLoading in
-            // 回填完成后重建手动预览，避免把加载前的默认模型展示成已有配置。
-            if !isLoading && isManualMode { generatePreview() }
-        }
-        // 目录型客户端的手动预览也必须跟随本次真实目录，不能停留在加载前的空结果。
-        .onChange(of: viewModel.availableModels) {
-            if isManualMode { generatePreview() }
-        }
-        // 重试可能只补入迟到 key 而目录仍为空；凭据与地址都是预览输入，不能仅靠数组变化重建。
-        .onChange(of: viewModel.currentConfiguration?.apiKey) {
-            if isManualMode { generatePreview() }
-        }
-        .onChange(of: viewModel.currentConfiguration?.proxyURL) {
-            if isManualMode { generatePreview() }
-        }
-        .onChange(of: viewModel.currentConfiguration?.modelSlots) {
-            if isManualMode { generatePreview() }
-        }
-        .onChange(of: viewModel.currentConfiguration?.claudeModelDisplayNames) {
-            if isManualMode { generatePreview() }
-        }
-        .onChange(of: viewModel.currentConfiguration?.claudeModelPicker) {
-            if isManualMode { generatePreview() }
-        }
-        .onChange(of: viewModel.currentConfiguration?.claudeSubagentModel) {
-            if isManualMode { generatePreview() }
-        }
-        .onChange(of: viewModel.configurationMode) { _, newMode in
-            if newMode == .manual {
-                generatePreview()
-            } else {
+        .onChange(of: previewInput, initial: true) { _, input in
+            if input != nil { generatePreview() }
+            else {
                 previewTask?.cancel()
                 previewConfig = nil
             }
@@ -122,9 +130,11 @@ struct AgentConfigSheet: View {
     
     private func generatePreview() {
         previewTask?.cancel()
+        guard let input = previewInput else { previewConfig = nil; return }
         previewTask = Task {
             let result = await viewModel.generatePreviewConfig(sessionID: configurationSessionID)
-            guard !Task.isCancelled else { return }
+            // 输入变化时即使旧服务不响应取消，也不能让旧 FORCE／1M／上下文结果覆盖当前预览。
+            guard !Task.isCancelled, previewInput == input else { return }
             previewConfig = result
         }
     }
@@ -184,17 +194,21 @@ struct AgentConfigSheet: View {
             
             // Only show proxy-specific options when in proxy mode
             if viewModel.selectedSetupMode == .proxy {
-                connectionInfoSection
-                
+                // Claude Code 场景下移除冗余的连接信息（本地代理地址与掩码密钥）
+                if agent != .claudeCode {
+                    connectionInfoSection
+                }
+
+                // 状态警示与目录加载提示（如 CPA 代理未运行、目录加载失败带刷新按钮等）统一置于模型槽上方
+                proxyAndCatalogStatusSection
+
                 if agent == .codexCLI {
                     CodexModelConfigSection(
                         viewModel: viewModel,
                         configurationSessionID: configurationSessionID,
-                        aliases: aliasStore.aliases,
+                        aliases: serviceAliases,
                         onManageAliases: { showModelAliases = true },
-                        onModelOrEffortChange: {
-                            if isManualMode { generatePreview() }
-                        }
+                        onModelOrEffortChange: {}
                     )
                 } else if agent == .pi {
                     VStack(alignment: .leading, spacing: 12) {
@@ -210,13 +224,12 @@ struct AgentConfigSheet: View {
                                 get: { viewModel.currentConfiguration?.modelSlots[.sonnet] ?? "" },
                                 set: { model in
                                     viewModel.updateDefaultModel(model)
-                                    if isManualMode { generatePreview() }
                                 }
                             ),
-                            availableModels: viewModel.availableModels,
+                            availableModels: viewModel.currentModelCandidates,
                             isFetchingModels: viewModel.isFetchingModels,
                             onRefresh: { Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) } },
-                            aliases: aliasStore.aliases,
+                            aliases: serviceAliases,
                             showsHeader: false
                         )
                     }
@@ -224,38 +237,24 @@ struct AgentConfigSheet: View {
                 }
 
                 if agent == .claudeCode {
-                    ClaudeModelMappingView(viewModel: viewModel, configurationSessionID: configurationSessionID, aliases: aliasStore.aliases, onManageAliases: { showModelAliases = true }) {
-                        if isManualMode { generatePreview() }
+                    ClaudeModelMappingView(viewModel: viewModel, configurationSessionID: configurationSessionID, aliases: serviceAliases, onManageAliases: { showModelAliases = true }, onOneMillionChange: {})
+                    if let plan = viewModel.claudeCompatibilityPlan {
+                        ClaudeCompatibilityNotice(plan: plan)
                     }
-                    ClaudeAdvancedSettingsSection(viewModel: viewModel) {
-                        if isManualMode { generatePreview() }
+                    // 菜单预览属于角色配置的直接核对入口，独立于高级参数；沿用原组件的折叠与分段状态。
+                    // 继续读取同一份纯值计划，不新增目录请求、配置副本或后台任务。
+                    if let configuration = viewModel.currentConfiguration {
+                        ClaudeModelPanelPreview(configuration: configuration, availableModels: viewModel.claudeCompatibilityModels,
+                                                configurationPlan: viewModel.claudeCompatibilityPlan)
+                            .quotioInsetCard()
                     }
-                }
-
-                if let error = aliasStore.errorMessage, agent == .claudeCode || agent == .codexCLI || agent == .pi {
-                    Label(error, systemImage: "info.circle")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                // 失败／空目录仅提示，不替换模型槽；刷新入口与手动输入继续使用原选择器。
-                if let message = viewModel.modelLoadMessage {
-                    HStack(alignment: .top) {
-                        Label(message, systemImage: "info.circle")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 8)
-                        Button("agents.models.refresh".localized()) {
-                            Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) }
-                        }
-                        .buttonStyle(.quotioMicroCapsule)
-                        .disabled(viewModel.isFetchingModels)
-                    }
+                    ClaudeAdvancedSettingsSection(viewModel: viewModel, onSettingsChange: {})
                 }
 
                 if isManualMode {
                     manualPreviewSection
                 }
-                
+
                 if let validation = viewModel.configurationValidationMessage {
                     Label(validation, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
@@ -375,6 +374,59 @@ struct AgentConfigSheet: View {
             }
         }
         .quotioInsetCard()
+    }
+
+    @ViewBuilder
+    private var proxyAndCatalogStatusSection: some View {
+        // 若 CPA 代理未启动，且为 Claude Code 页面（connectionInfoSection 已省略），顶部展示醒目警告与启动按钮
+        if agent == .claudeCode, viewModel.proxyManager?.proxyStatus.running == false {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.body)
+
+                Text("agents.proxyNotRunning.message".localized())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer()
+
+                Button {
+                    Task { try? await viewModel.proxyManager?.start() }
+                } label: {
+                    Text("agents.proxy.start".localized())
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.quotioPrimaryMicroCapsule(height: 24, tint: .orange))
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous))
+        }
+
+        if let error = aliasStore.errorMessage, agent == .claudeCode || agent == .codexCLI || agent == .pi {
+            Label(error, systemImage: "info.circle")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+
+        // 失败／空目录仅提示，不替换模型槽；刷新入口与手动输入继续使用原选择器。
+        if let message = viewModel.modelLoadMessage {
+            HStack(alignment: .center, spacing: 8) {
+                Label(message, systemImage: "info.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("agents.models.refresh".localized()) {
+                    Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) }
+                }
+                .buttonStyle(.quotioMicroCapsule)
+                .disabled(viewModel.isFetchingModels)
+            }
+            .padding(8)
+            .background(QuotioTheme.Colors.cardInset(for: colorScheme))
+            .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous))
+        }
     }
 
     private var connectionInfoSection: some View {
@@ -526,12 +578,44 @@ struct AgentConfigSheet: View {
 
     private var testConnectionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("agents.testConnection".localized())
+            HStack(alignment: .center) {
+                Label("agents.testConnection".localized(), systemImage: "network")
                     .font(.subheadline)
                     .fontWeight(.medium)
 
                 Spacer()
+
+                // 定态连接状态反馈（测试中 / 成功带耗时 / 失败）
+                if viewModel.isTesting {
+                    HStack(spacing: 5) {
+                        SmallProgressView()
+                        Text("customProviders.testing".localized())
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(Capsule())
+                } else if let result = viewModel.testResult {
+                    HStack(spacing: 5) {
+                        Image(systemName: result.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(result.success ? .green : .red)
+                        Text(result.success ? "remote.test.success".localized() : "remote.test.failed".localized())
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(result.success ? .green : .red)
+                        if let latency = result.latencyMs {
+                            Text("\(latency)ms")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(result.success ? .green.opacity(0.8) : .red.opacity(0.8))
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background((result.success ? Color.green : Color.red).opacity(0.12))
+                    .clipShape(Capsule())
+                }
 
                 Button {
                     Task { await viewModel.testConnection(sessionID: configurationSessionID) }
@@ -540,9 +624,9 @@ struct AgentConfigSheet: View {
                         if viewModel.isTesting {
                             SmallProgressView()
                         } else {
-                            Image(systemName: "bolt.fill")
+                            Image(systemName: viewModel.testResult == nil ? "bolt.fill" : "arrow.clockwise")
                         }
-                        Text("agents.test".localized())
+                        Text(viewModel.testResult == nil ? "agents.test".localized() : "action.retry".localized())
                     }
                     .font(.caption)
                 }
@@ -552,8 +636,36 @@ struct AgentConfigSheet: View {
                 .opacity(viewModel.isTesting ? 0.5 : 1)
             }
 
-            if let result = viewModel.testResult {
-                TestResultView(result: result)
+            // 测试失败时展开详细原因诊断条
+            if let result = viewModel.testResult, !result.success {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.top, 2)
+                    Text(result.message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous))
+            } else if let result = viewModel.testResult, result.success, !result.message.isEmpty, result.message != "OK" {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                    Text(result.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.green.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous))
             }
         }
         .quotioInsetCard()
@@ -721,6 +833,8 @@ struct AgentConfigSheet: View {
                         } else {
                             Image(systemName: viewModel.configurationMode == .automatic ? "gearshape.2" : "square.and.arrow.down")
                         }
+                        // 保存入口统一显示“应用”。备份、目录核对和旧配置兼容仍在原保存事务内部完成，
+                        // 不因磁盘是否带有受管菜单标记而要求用户理解或执行额外的迁移操作。
                         Text(viewModel.configurationMode == .automatic ? "agents.apply".localized() : "agents.saveConfig".localized())
                     }
                 }
@@ -740,6 +854,26 @@ struct AgentConfigSheet: View {
 struct ClaudeAdvancedSettingsSection: View {
     @Bindable var viewModel: AgentSetupViewModel
     let onSettingsChange: () -> Void
+    /// 仅管理本组件的折叠外观；新旧配置均默认收起，不因回填值而擅自展开或修改草稿。
+    @State private var isExpanded = false
+
+    private enum ContextMode: String, CaseIterable {
+        case automatic, custom
+        var title: String { "agents.claude.advanced.context.\(rawValue)".localized() }
+    }
+
+    private var contextMode: ContextMode {
+        viewModel.currentConfiguration?.claudeMaxContextTokens == nil ? .automatic : .custom
+    }
+
+    private var contextModeBinding: Binding<ContextMode> {
+        Binding(get: { contextMode }, set: { mode in
+            guard mode != contextMode else { return }
+            // 切到自定义只建立空输入，不猜一个模型容量；0 是尚未填写的本轮草稿，保存前必须通过校验。
+            viewModel.updateClaudeMaxContextTokens(mode == .automatic ? nil : 0)
+            onSettingsChange()
+        })
+    }
 
     private var uses1MContext: Bool {
         guard let configuration = viewModel.currentConfiguration else { return false }
@@ -748,14 +882,18 @@ struct ClaudeAdvancedSettingsSection: View {
             || ModelSlot.allCases.contains { configuration.usesClaude1MContext(for: $0) }
     }
 
-    private var maxContextBinding: Binding<Int> {
+    private var maxContextBinding: Binding<String> {
         Binding(
             get: {
-                viewModel.currentConfiguration?.claudeMaxContextTokens
-                    ?? AgentConfiguration.defaultClaudeMaxContextTokens
+                guard let tokens = viewModel.currentConfiguration?.claudeMaxContextTokens, tokens != 0 else { return "" }
+                return String(tokens)
             },
             set: {
-                viewModel.updateClaudeMaxContextTokens($0)
+                // 切回跟随后 SwiftUI 会撤下输入框，原生 field editor 此时仍可能回写空文本。
+                // 不能让这个迟到的结束编辑把 nil 重新改成 0，恢复用户刚刚关闭的自定义模式。
+                guard contextMode == .custom else { return }
+                let value = $0.replacingOccurrences(of: ",", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                viewModel.updateClaudeMaxContextTokens(Int(value) ?? 0)
                 onSettingsChange()
             }
         )
@@ -785,23 +923,41 @@ struct ClaudeAdvancedSettingsSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
-            contextField
-            autoCompactField
-            disableAutoCompactToggle
-            // 删除的是精选菜单编辑卡片，原有网关发现和只读预览功能仍在高级设置中可用。
-            // 已有替换菜单本就隐藏网关发现，继续保留该条件与存量开关值，不改变运行语义。
-            if let configuration = viewModel.currentConfiguration {
-                Divider()
-                if configuration.claudeModelPicker.mode == .native || configuration.claudeModelPicker.mode == .append {
-                    Toggle("agents.modelMapping.gatewayModels".localized(), isOn: Binding(
-                        get: { viewModel.currentConfiguration?.claudeGatewayModelDiscovery ?? false },
-                        set: { viewModel.updateClaudeGatewayModelDiscovery($0); onSettingsChange() }
-                    ))
-                    .toggleStyle(.switch).controlSize(.small).font(.caption)
+        VStack(alignment: .leading, spacing: 0) {
+            // 沿用本页菜单预览的整行折叠按钮，标题、空白和箭头都能展开，避免 macOS 仅小箭头可点。
+            Button { isExpanded.toggle() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    header
                 }
-                ClaudeModelPanelPreview(configuration: configuration, availableModels: viewModel.availableModels)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("claude.advanced.toggle")
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 14) {
+                    QuotioCapsuleSegmentedControl(ContextMode.allCases, selection: contextModeBinding,
+                        size: .small, tint: .accentColor, isEqualWidth: false, title: { $0.title })
+                        .accessibilityLabel("agents.claude.advanced.context".localized())
+                    Text("agents.claude.advanced.context.info".localized())
+                        .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if contextMode == .custom { contextField }
+                    autoCompactField
+                    disableAutoCompactToggle
+                    // 高级区仅保留原网关发现开关；菜单预览已作为上方独立区块展示。
+                    // 替换菜单仍隐藏发现选项，不能因布局移动改变存量开关或网关运行语义。
+                    if let configuration = viewModel.currentConfiguration, !configuration.claudeCatalogManaged,
+                       configuration.claudeModelPicker.mode == .native || configuration.claudeModelPicker.mode == .append {
+                        Divider()
+                        Toggle("agents.modelMapping.gatewayModels".localized(), isOn: Binding(
+                            get: { viewModel.currentConfiguration?.claudeGatewayModelDiscovery ?? false },
+                            set: { viewModel.updateClaudeGatewayModelDiscovery($0); onSettingsChange() }
+                        ))
+                        .toggleStyle(.switch).controlSize(.small).font(.caption)
+                    }
+                }
+                .padding(.top, 10)
             }
         }
         .quotioInsetCard()
@@ -823,6 +979,9 @@ struct ClaudeAdvancedSettingsSection: View {
 
             Spacer()
 
+            // 折叠时仍能看出已有显式覆盖，避免用户误以为旧自定义值已被清除。
+            Text(contextMode.title).font(.caption2).foregroundStyle(.secondary)
+
             if uses1MContext {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.up.right.circle.fill")
@@ -843,18 +1002,14 @@ struct ClaudeAdvancedSettingsSection: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("agents.claude.advanced.context".localized())
                     .font(.subheadline.weight(.medium))
-                Text("agents.claude.advanced.context.info".localized())
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 8)
 
             HStack(spacing: 6) {
                 TextField(
-                    "agents.claude.advanced.context".localized(),
-                    value: maxContextBinding,
-                    format: .number
+                    "agents.claude.advanced.context.placeholder".localized(),
+                    text: maxContextBinding
                 )
                 .multilineTextAlignment(.trailing)
                 .font(.system(size: 12, design: .monospaced))
@@ -1303,7 +1458,7 @@ struct CodexModelConfigSection: View {
                                 onModelOrEffortChange()
                             }
                         ),
-                        availableModels: viewModel.availableModels,
+                        availableModels: viewModel.currentModelCandidates,
                         isFetchingModels: viewModel.isFetchingModels,
                         onRefresh: { Task { await viewModel.loadModels(forceRefresh: true, sessionID: configurationSessionID) } },
                         aliases: aliases,

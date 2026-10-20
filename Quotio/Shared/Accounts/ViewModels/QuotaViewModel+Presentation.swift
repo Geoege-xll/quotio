@@ -29,7 +29,7 @@ extension QuotaViewModel {
     /// 保持原提供商能力规则，主类槽位申请与界面继续调用同一方法，不另设能力列表。
     func supportsScopedRefresh(for provider: AIProvider) -> Bool {
         switch provider {
-        case .qwen, .iflow, .vertex:
+        case .qwen, .iflow, .vertex, .minimax:
             return false
         default:
             return true

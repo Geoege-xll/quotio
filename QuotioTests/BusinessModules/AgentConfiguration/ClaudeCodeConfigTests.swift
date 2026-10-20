@@ -146,13 +146,17 @@ final class ClaudeCodeConfigTests: XCTestCase {
         var config = configuration()
         config.setupMode = .defaultSetup
         let result = try await generate(config, mode: .manual)
-        // 手动恢复也必须说明受管菜单的移除条件，不能让用户误删其他工具的菜单。
-        XCTAssertTrue(result.instructions.contains("modelPicker"))
-        XCTAssertTrue(result.instructions.contains("quotioManaged"))
+        // 手动恢复直接提供按最新文件生成的完整 JSON，不再要求用户自行猜测删除哪些键。
+        // 验证结果与真实目标路径，避免把实现键名是否出现在说明文案当成正确性证据。
+        let output = try XCTUnwrap(result.rawConfigs.first { $0.format == .json })
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.content.utf8)) as? [String: Any])
+        XCTAssertEqual(output.targetPath, settingsURL.path)
+        XCTAssertNil(object["modelPicker"])
+        let env = object["env"] as? [String: Any] ?? [:]
         for slot in ModelSlot.legacyCases {
             let key = "ANTHROPIC_DEFAULT_\(slot.envSuffix)_MODEL"
-            XCTAssertTrue(result.instructions.contains(key + "_NAME"))
-            XCTAssertTrue(result.instructions.contains(key + "_DESCRIPTION"))
+            XCTAssertNil(env[key + "_NAME"])
+            XCTAssertNil(env[key + "_DESCRIPTION"])
         }
     }
     func testDefaultModelIsIndependentOfSlotMappingsAndRoundTrips() async throws {
@@ -719,5 +723,56 @@ final class ClaudeCodeConfigTests: XCTestCase {
         XCTAssertEqual(decoded.claudeDefaultModelSelector, "custom/model[1m]")
         let restored = try JSONDecoder().decode(AgentConfiguration.self, from: JSONEncoder().encode(decoded))
         XCTAssertEqual(restored.claudeDefaultModelSelector, decoded.claudeDefaultModelSelector)
+    }
+
+    // MARK: - Auto 1M Model Detection Tests
+
+    func testAuto1MModelDetection() {
+        // 仅明确的末尾声明可启用；名称含容量、路由别名或中间 [1m] 不代表 CLI 上下文设置。
+        for model in ["custom/model[1m]", "custom/model[1M]"] {
+            XCTAssertTrue(AgentConfiguration.is1MSupported(by: model))
+        }
+        for model in ["moonshot-v1-128k", "kimi-1m", "qwen-max-1m", "provider/model:1m",
+                      "glm-4-1000k", "model-1024k", "route[1m]/ordinary", "opus", ""] {
+            XCTAssertFalse(AgentConfiguration.is1MSupported(by: model), model)
+        }
+        var existing = configuration()
+        existing.modelSlots[.opus] = "moonshot-v1-128k"
+        existing.claudeModel1M[.opus] = false
+        XCTAssertEqual(existing.claudeRequestModel(for: .opus), "moonshot-v1-128k")
+        existing.modelSlots[.opus] = "kimi-1m"
+        XCTAssertFalse(existing.usesClaude1MContext(for: .opus))
+        existing.claudeModel1M[.opus] = true
+        XCTAssertEqual(existing.claudeRequestModel(for: .opus), "kimi-1m[1m]", "已有明确开启仍保留")
+    }
+
+    @MainActor
+    func testUpdatingModelSlotAutoEnables1M() {
+        let viewModel = AgentSetupViewModel()
+        viewModel.selectedAgent = .claudeCode
+        viewModel.currentConfiguration = configuration()
+
+        // 初始 Opus 槽未启用 1M
+        XCTAssertFalse(viewModel.currentConfiguration?.usesClaude1MContext(for: .opus) ?? true)
+
+        // 切换为带 [1m] 模型 -> 自动识别并激活 1M 上下文
+        viewModel.updateModelSlot(.opus, model: "gemini-3.8-flash-high[1m]")
+        XCTAssertTrue(viewModel.currentConfiguration?.usesClaude1MContext(for: .opus) ?? false)
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeRequestModel(for: .opus), "gemini-3.8-flash-high[1m]")
+
+        // 切换为普通 deepseek 模型 -> 自动关闭 1M
+        viewModel.updateModelSlot(.opus, model: "deepseek-chat")
+        XCTAssertFalse(viewModel.currentConfiguration?.usesClaude1MContext(for: .opus) ?? true)
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeRequestModel(for: .opus), "deepseek-chat")
+
+        // 切换为显式 [1m] 模型 -> 自动激活 1M
+        viewModel.updateModelSlot(.sonnet, model: "claude-3-7-sonnet[1m]")
+        XCTAssertTrue(viewModel.currentConfiguration?.usesClaude1MContext(for: .sonnet) ?? false)
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeRequestModel(for: .sonnet), "claude-3-7-sonnet[1m]")
+
+        // 名称中的 -1m 是完整后端身份，不能自动改变 CLI 声明。
+        viewModel.updateDefaultModel("kimi-1m")
+        XCTAssertFalse(viewModel.currentConfiguration?.claudeDefaultUses1MContext ?? true)
+        XCTAssertEqual(viewModel.currentConfiguration?.claudeDefaultRequestModel, "kimi-1m")
     }
 }

@@ -70,8 +70,10 @@ Quotio/
 | CPA 授权协调与共享弹窗 | [CPAOAuthSessionCoordinator.swift](../Quotio/Shared/Accounts/Services/CPAOAuthSessionCoordinator.swift)、[OAuthSheet.swift](../Quotio/Shared/Accounts/Views/OAuthSheet.swift)：原协调器与两个紧密视图类型完整保留 |
 | 共享运行模式与 App 导航 | [OperatingMode.swift](../Quotio/Shared/AppSettings/OperatingMode.swift) 保留模式、单例、偏好和私有 setter；[OperatingMode+Navigation.swift](../Quotio/App/Navigation/OperatingMode+Navigation.swift) 维护原两个只读导航成员 |
 | 客户端枚举与配置模型 | [AgentClients/Models](../Quotio/Shared/AgentClients/Models) |
-| Claude 菜单与模型显示规则 | [AgentClients/Models/Claude](../Quotio/Shared/AgentClients/Models/Claude) |
-| 共享模型目录读取、候选筛选与连接探测 | [AgentModelCatalogService.swift](../Quotio/Shared/ModelManagement/Services/AgentModelCatalogService.swift) 保留三种结果语义；[DashboardModelCatalogLoader.swift](../Quotio/Shared/ModelManagement/Services/DashboardModelCatalogLoader.swift) 保留原凭据先行事务，状态仍归 QuotaViewModel |
+| Claude 菜单、显示与后端身份兼容规则 | [AgentClients/Models/Claude](../Quotio/Shared/AgentClients/Models/Claude)；`ClaudeModelReference` 统一角色／1M／wire ID，`ClaudeConfigurationPlan` 统一预览与输出；归属、有效操作及来源为同目录纯规则，位置契约归 Infrastructure，目录和任务仍归原 ViewModel，磁盘事务仍归原配置 actor |
+| 共享模型目录读取、候选筛选与连接探测 | [AgentModelCatalogService.swift](../Quotio/Shared/ModelManagement/Services/AgentModelCatalogService.swift) 保留三种结果语义；配置页同次读取分别取得注册证据与筛选候选；[DashboardModelCatalogLoader.swift](../Quotio/Shared/ModelManagement/Services/DashboardModelCatalogLoader.swift) 保留原凭据先行事务，状态仍归 QuotaViewModel |
+| Claude 目录来源与自动上下文 | [AgentModelSourceCatalog.swift](../Quotio/Shared/ModelManagement/Services/AgentModelSourceCatalog.swift) 从同一 CPA 的 v8 凭据注册精确投影名称、单账号或账号池，不增加型号或改变路由；上下文纯规则由原 Claude 计划共享，状态与 Task 仍归原配置 VM，备份策略不变；[实施记录](features/claude-menu-source-and-auto-context-2026-10-20.md) |
+| Claude 自动值跨文件回读协议 | `ClaudeCatalogOwnership.swift` 中的 `ClaudeCatalogProjection` 与归属同文件，记录已生成名称和上下文的精确来源绑定，供原配置 actor 回读和写盘；生命周期经原模型 VM 同步撤销许可，不新增状态／Task；[生命周期复审](features/claude-menu-lifecycle-audit-2026-10-20.md) |
 | 外观、刷新、额度偏好与菜单栏设置 | [Shared/AppSettings](../Quotio/Shared/AppSettings) |
 | 隐私脱敏与数值格式化 | [Shared/Formatting](../Quotio/Shared/Formatting) |
 | 统计入口及导航状态 | [Analytics](../Quotio/BusinessModules/Analytics) |
@@ -79,6 +81,8 @@ Quotio/
 | 客户端用量和调用分析 | [Analytics/ClientCalls](../Quotio/BusinessModules/Analytics/ClientCalls) |
 | 唯一 CPA 队列消费者、账本与事件模型 | [Shared/Analytics/CPA](../Quotio/Shared/Analytics/CPA) |
 | Claude Code 等客户端配置界面 | [AgentConfiguration](../Quotio/BusinessModules/AgentConfiguration) |
+| Claude 上下文声明与覆盖处理 | 沿用原 `AgentConfiguration` 可选字段、`AgentSetupViewModel` 提交及配置 actor／Shell 管理器，不新增容量状态宿主；[上下文配置记录](features/claude-context-window-policy-2026-10-19.md) |
+| 配置页模型候选与旧值确认 | [AgentModelCandidatePolicy.swift](../Quotio/BusinessModules/AgentConfiguration/Models/AgentModelCandidatePolicy.swift)：仅由当前服务公开 ID 投影候选与已确认别名；原生角色和旧草稿分开保留，状态与请求仍归原 AgentSetupViewModel；[账号联动记录](features/model-candidate-catalog-validation-2026-10-19.md) |
 | 工作区入口、会话、技能与存储 | [Workspace](../Quotio/BusinessModules/Workspace) |
 | 工作区会话门面与客户端 Provider | [WorkspaceSessionService.swift](../Quotio/BusinessModules/Workspace/Sessions/Services/WorkspaceSessionService.swift) 保留原 actor 装配和分发；[Sessions/Services](../Quotio/BusinessModules/Workspace/Sessions/Services) 下协议、`SessionIOUtils` 及五个 Provider 按同名文件维护 |
 | 设置导航、分区与诊断维护 | [SettingsScreen.swift](../Quotio/BusinessModules/Settings/Views/SettingsScreen.swift)、[Views/Sections](../Quotio/BusinessModules/Settings/Views/Sections)、[Views/Components](../Quotio/BusinessModules/Settings/Views/Components)；版本维护弹窗在 [ProxyVersionManagerSheet.swift](../Quotio/BusinessModules/Settings/Views/Sheets/ProxyVersionManagerSheet.swift) |
@@ -113,6 +117,8 @@ Quotio/
 
 ## 模型目录读取与客户端本地环境边界
 
+2026-10-19 Claude 配置入口按用户授权启用[目录菜单统一迁移](features/claude-catalog-migration-2026-10-19.md)：原 `ClaudeConfigurationPlan` 生成已确认菜单及迁移报告，原 VM、配置 actor 和 Shell 管理器继续各持有原状态与事务。旧配置完整进入备份，未确认引用退出生效菜单；其他客户端及未接管的旧序列化调用保留原兼容路径。
+
 2026-10-16 按用户最新授权改为[动态目录默认方案](features/dynamic-model-defaults-2026-10-16.md)：所有页面候选取消静态补型号，Codex 新配置待明确选择，只有 Claude 保留原生角色。请求世代、加载说明与表单继续归原 AgentSetupViewModel；服务层保留目录缺失时的旧配置模型，不将其包装为实时目录。以下第五批迁移描述中的“原页面兜底”是当时历史边界，已被本次功能调整取代。
 
 第三轮第五批按仪表盘、客户端配置和 Pi 的实际使用抽出共享模型读取业务；共用传输只负责构造和发送请求。实时目录保留空结果、原顺序和重复项，候选继续用原模型投影与 Copilot 可用性证据筛选，连接探测仍以 HTTP 200 判断成功。原页面兜底、加载互斥和回填 Task 不下沉；旧 `AgentConfigurationService` 的三个读取签名保留兼容，配置读写、备份及私有状态仍由原 actor 持有。完整 Loader 与原测试整体归 `Shared/ModelManagement`，不把其两个闭包再拆成服务。
@@ -130,7 +136,7 @@ Pi 的路径展开、agent 目录和会话根整体归客户端本地环境契�
 | `Models.swift` 中的纯扩展与校验 | `Shared/UI/Theme/Color+Hex.swift`、`Shared/Formatting/Int+CompactFormatting.swift`、`Infrastructure/Networking/ProxyURLValidator.swift` |
 | `MenuBarSettings.swift` | `Shared/AppSettings/AppearanceSettings.swift`、`RefreshSettings.swift`、`QuotaDisplayPreferences.swift`、`MenuBarSettingsManager.swift`、`MenuBarSettingsManager+QuotaSummary.swift`；账号展示模型在 `Shared/Accounts/Models/MenuBarQuotaModels.swift`，脱敏扩展在 `Shared/Formatting/String+PrivacyMasking.swift` |
 | `AgentModels.swift` | `Shared/AgentClients/Models/CLIAgent.swift`、`AgentConfigurationOptions.swift`、`CodexReasoningEffort.swift`、`AgentConfiguration.swift`、`AgentConfigurationResult.swift`；可用模型在 `Shared/ModelManagement/Models/AvailableModel.swift`，Shell 类型在 `Infrastructure/Process/ShellType.swift` |
-| 两个 Claude 模型文件 | `Shared/AgentClients/Models/Claude/ClaudeModelPicker.swift`、`ClaudeModelPresentation.swift` |
+| Claude 配置领域模型 | `Shared/AgentClients/Models/Claude/ClaudeModelPicker.swift`、`ClaudeModelPresentation.swift`、`ClaudeConfigurationPlan.swift`；子代理默认值、强制覆盖及 Shell 冲突纯规则归 `ClaudeSubagentSettings.swift` |
 | 取数器与额度页中的公共纯模型 | `ModelQuota`、`ProviderQuotaData` 归 `Shared/Accounts/Models/QuotaModels.swift`；`QuotaPercentagePresentation` 归 `Shared/Accounts/Presentation` |
 
 菜单栏设置 manager 的原有类型、单例和持久化键保留；拆出的额度汇总扩展继续作用于原 manager。共享类型的迁移不增加任务、状态容器、数据转换或序列化层。完整实施范围与验证见[公共模型及纯规则拆分](features/public-model-split-2026-10-15.md)。
@@ -333,6 +339,8 @@ Antigravity 周期取数归 `Infrastructure/Providers/Antigravity/AntigravityQuo
 
 ## 测试目录与共享夹具
 
+2026-10-19 的[八项交叉修复](features/cross-agent-compatibility-fixes-2026-10-19.md)将两个账号表单共用的纯值测试提交规则放在 `BusinessModules/Accounts/Models/ProviderConnectionTestState.swift`，状态仍由原 Sheet 持有。专用提供商的目录读取／映射归原 `CustomProviderService`；冷却到期纯投影与原 `AuthFileCooldown` 成组，可见行与横幅仅提供展示时钟。单次 `ClaudeCatalogCommitAuthorization` 与原配置 actor 同文件维护，由原配置 VM 持有并随原世代失效，不增加任务或后台轮询。新增测试按职责归 Accounts、CustomProviders 及既有客户端配置测试目录。
+
 布局重入与近期同步改动的[专项复审记录](features/appkit-layout-reentry-and-followup-audit-2026-10-15.md)说明了弹窗尺寸、Copilot 主机／占位身份、历史重键和期限、CLI 渠道与终端参数的边界。`Infrastructure/Process/ShellCommand.swift` 由终端和 CLI 渠道复用，不持有运行状态；历史 Timeline 只驱动可见 UI，不增加取数或采集任务。
 
 Antigravity 全模型弹窗仍由 `BusinessModules/Accounts/Views/AccountQuotaContent.swift` 的原状态呈现，弹窗及私有卡片保留在同目录 `AntigravityModelsDetailSheet.swift`。展示模式与隐私以值从调用方注入；加载／空数据不能卸载 presenter。定向原生布局测试归 `QuotioTests/BusinessModules/Accounts/AntigravityModelsDetailSheetTests.swift`，见[PR #558 适配与布局回归](features/antigravity-models-sheet-layout-2026-10-15.md)。
@@ -356,3 +364,5 @@ xcodebuild test -project Quotio.xcodeproj -scheme QuotioPlus \
 新增功能先确认业务归属，再根据真实复用关系选择 `Shared`。业务内部的专用服务与模型跟随业务；外部系统接入跟随 `Infrastructure`。不要恢复顶层集中式 `Views / ViewModels / Models / Services`，也不要新增一个无职责边界的 `Common` 或 `Utils` 目录。
 
 新增、移动文件后同步更新本页、[项目索引](PROJECT.md)、[二次开发维护入口](SECONDARY_DEVELOPMENT.md)及受影响的本地文档链接。历史审计的日期、上游提交、原始 GitHub URL 和原始验证事实保留；已经移除的历史文件名称不伪装为当前入口。
+
+2026-10-19 [Claude 配置系统重构](features/claude-configuration-system-refactor-2026-10-19.md)将根归属、官方恢复、来源／位置、有效操作与模型语义统一到各自现有业务边界。原 VM、配置 actor 与 Shell 管理器继续持有状态、Task 和事务；`ClaudeConfigurationLocation` 是注入位置契约，既不扫描账号也不持有状态。

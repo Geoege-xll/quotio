@@ -6,8 +6,8 @@
 import Foundation
 
 // Shell 类型及配置文件定位直接访问进程环境和文件系统，与 ShellProfileManager 一起归入进程基础设施。
-// 完整保留 ZDOTDIR、XDG 配置目录和默认路径的判断次序，以及 zsh、bash、fish 的原始值和 export 语法。
-// 本次只移动完整声明，不迁移或改写用户磁盘上的 Shell 配置文件，也不改变运行时路径。
+// 保留 ZDOTDIR、XDG 配置目录和默认路径的判断次序，以及 zsh、bash、fish 的原始值。
+// 环境声明由目标 Shell 原生生成；真正的用户 Profile 事务仍由 ShellProfileManager 执行。
 
 // MARK: - Shell Profile
 
@@ -39,6 +39,14 @@ nonisolated enum ShellType: String, CaseIterable, Sendable {
         case .zsh, .bash: return "export"
         case .fish: return "set -gx"
         }
+    }
+
+    /// Claude 的显式覆盖与撤销使用目标 Shell 的原生语法；nil 表示撤下旧 export。
+    /// 值始终作为单引号字面量输出，内嵌引号拆分拼接，不能执行模型名或密钥中的命令替换。
+    func environmentStatement(key: String, value: String?) -> String {
+        guard let value else { return self == .fish ? "set -e \(key)" : "unset \(key)" }
+        let quoted = value.replacingOccurrences(of: "'", with: "'\"'\"'")
+        return self == .fish ? "set -gx \(key) '\(quoted)'" : "export \(key)='\(quoted)'"
     }
 }
 

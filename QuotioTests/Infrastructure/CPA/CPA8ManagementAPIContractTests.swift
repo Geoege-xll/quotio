@@ -491,4 +491,90 @@ final class CPA8ManagementAPIContractTests: XCTestCase {
         XCTAssertEqual(files.first?.status, "active", "兼容判断不应把服务端状态重写成旧 ready")
         XCTAssertEqual(files.first?.providerType, .grok)
     }
+
+    func testFetchAndSetAuthFileRoutingSendsPriorityAndWeight() async throws {
+        let (client, state) = fixture { request, _ in
+            if request.httpMethod == "GET" {
+                return .reply(#"{"files":[{"name":"target.json","weight":5,"priority":100}]}"#)
+            }
+            return .reply(#"{"status":"ok"}"#)
+        }
+        let routing = try await client.fetchAuthFileRouting(name: "target.json")
+        XCTAssertEqual(routing.weight, 5)
+        XCTAssertEqual(routing.priority, 100)
+
+        try await client.setAuthFileRouting(name: "target.json", weight: 3, priority: 50)
+        XCTAssertEqual(state.requests.map(\.method), ["GET", "PATCH"])
+        XCTAssertEqual(state.requests[1].url.path, "/v8/management/credentials/fields")
+        let body = try XCTUnwrap(try json(state.requests[1]) as? [String: Any])
+        XCTAssertEqual(body["name"] as? String, "target.json")
+        XCTAssertEqual(body["weight"] as? Int, 3)
+        XCTAssertEqual(body["priority"] as? Int, 50)
+
+        // 校验超出上限或负数优先级失败且不发送请求
+        let count = state.requestCount
+        do { try await client.setAuthFileRouting(name: "target.json", weight: 1, priority: -1); XCTFail("负数优先级应校验失败") }
+        catch CPASettingsValidationError.invalidPriority {}
+        do { try await client.setAuthFileRouting(name: "target.json", weight: 1, priority: 1_000_001); XCTFail("超出优先级上限应校验失败") }
+        catch CPASettingsValidationError.invalidPriority {}
+        XCTAssertEqual(state.requestCount, count)
+    }
+
+    func testResetCredentialCooldownPostsAuthIndex() async throws {
+        let (client, state) = fixture { _, _ in .reply(#"{"status":"ok"}"#) }
+        try await client.resetCredentialCooldown(authIndex: "fixture-auth-123")
+        XCTAssertEqual(state.requests.count, 1)
+        let record = try XCTUnwrap(state.requests.first)
+        XCTAssertEqual(record.method, "POST")
+        XCTAssertEqual(record.url.path, "/v8/management/routing/cooldown/reset")
+        let body = try XCTUnwrap(try json(record) as? [String: String])
+        XCTAssertEqual(body["auth_index"], "fixture-auth-123")
+
+        // 空 authIndex 必须失败且不发送网络请求
+        do { try await client.resetCredentialCooldown(authIndex: "   "); XCTFail("空 authIndex 应拒绝") }
+        catch APIError.invalidResponse {}
+        XCTAssertEqual(state.requestCount, 1)
+    }
+
+    @MainActor
+    func testAuthFileCooldownDecodingAndSummary() throws {
+        let jsonStr = """
+        {
+            "id": "c1",
+            "name": "cool.json",
+            "provider": "claude",
+            "auth_index": "idx-1",
+            "weight": 2,
+            "priority": 10,
+            "cooldowns": [
+                {
+                    "scope": "model",
+                    "model_key": "claude-3-5-sonnet",
+                    "reason": "rate_limit",
+                    "remaining_seconds": 125
+                },
+                {
+                    "scope": "credential",
+                    "reason": "quota_exhausted",
+                    "remaining_seconds": 0
+                }
+            ]
+        }
+        """
+        let file = try JSONDecoder().decode(AuthFile.self, from: Data(jsonStr.utf8))
+        XCTAssertEqual(file.weight, 2)
+        XCTAssertEqual(file.priority, 10)
+        XCTAssertEqual(file.cooldowns?.count, 2)
+        XCTAssertTrue(file.hasActiveCooldown)
+        XCTAssertEqual(file.activeCooldowns.count, 1)
+        XCTAssertEqual(file.cooldownSummary, "claude-3-5-sonnet (2m5s)")
+        XCTAssertTrue(file.cooldownTooltip?.contains("claude-3-5-sonnet: 125s (rate_limit)") == true)
+
+        let row = AccountRowData.from(authFile: file, provider: .claude)
+        XCTAssertEqual(row.weight, 2)
+        XCTAssertEqual(row.priority, 10)
+        XCTAssertTrue(row.hasActiveCooldown)
+        XCTAssertTrue(row.canResetCooldown)
+        XCTAssertEqual(row.cooldownSummary, "claude-3-5-sonnet (2m5s)")
+    }
 }

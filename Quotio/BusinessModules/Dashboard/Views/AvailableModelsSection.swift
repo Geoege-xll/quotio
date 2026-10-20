@@ -247,7 +247,15 @@ struct ProviderGroupBrandBadge: View {
 
     private func badgeStyle(for name: String) -> (String, LinearGradient) {
         let lower = name.lowercased()
-        if lower.contains("anthropic") || lower.contains("claude") {
+        if lower.contains("glm") || lower.contains("zhipu") {
+            return (
+                "brain",
+                LinearGradient(
+                    colors: [Color(red: 0.23, green: 0.51, blue: 0.96), Color(red: 0.15, green: 0.38, blue: 0.85)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+            )
+        } else if lower.contains("anthropic") || lower.contains("claude") {
             return (
                 "sparkles",
                 LinearGradient(
@@ -276,6 +284,22 @@ struct ProviderGroupBrandBadge: View {
                 "fish.fill",
                 LinearGradient(
                     colors: [Color(red: 0.10, green: 0.45, blue: 0.85), Color(red: 0.20, green: 0.60, blue: 0.95)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+            )
+        } else if lower.contains("moonshot") || lower.contains("kimi") {
+            return (
+                "moon.stars.fill",
+                LinearGradient(
+                    colors: [Color(red: 0.18, green: 0.72, blue: 0.65), Color(red: 0.10, green: 0.58, blue: 0.52)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+            )
+        } else if lower.contains("minimax") {
+            return (
+                "bolt.horizontal.fill",
+                LinearGradient(
+                    colors: [Color(red: 0.95, green: 0.35, blue: 0.40), Color(red: 0.85, green: 0.25, blue: 0.30)],
                     startPoint: .topLeading, endPoint: .bottomTrailing
                 )
             )

@@ -160,7 +160,10 @@ private extension AIProvider {
         case .grok: return "Grok"
         case .openRouter: return "OpenRouter"
         case .amp: return "Amp"
-        case .glm: return "Z.ai"
+        case .glm: return "GLM"
+        case .deepseek: return "DeepSeek"
+        case .moonshot: return "Kimi"
+        case .minimax: return "MiniMax"
         case .warp: return "Warp"
         case .clinePass: return "ClinePass"
         }

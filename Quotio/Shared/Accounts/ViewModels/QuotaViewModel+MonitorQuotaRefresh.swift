@@ -17,7 +17,7 @@ extension QuotaViewModel {
     func refreshQuotasDirectly(force: Bool = false) async {
         let context = refreshContext()
         let providers: Set<AIProvider> = [
-            .codex, .claude, .copilot, .kiro, .glm, .clinePass, .warp,
+            .codex, .claude, .copilot, .kiro, .glm, .deepseek, .moonshot, .clinePass, .warp,
             .antigravity, .factoryDroid, .devin, .grok, .openRouter, .amp,
         ]
         guard await QuotaRefreshAvailability.acquire(wait: force, claim: {
@@ -45,6 +45,8 @@ extension QuotaViewModel {
         let copilotQuotaFetcher = copilotFetcher
         let kiroQuotaFetcher = kiroFetcher
         let glmQuotaFetcher = glmFetcher
+        let deepseekQuotaFetcher = deepseekFetcher
+        let moonshotQuotaFetcher = moonshotFetcher
         let clineQuotaFetcher = clinePassFetcher
         let warpQuotaFetcher = warpFetcher
         let antigravityQuotaFetcher = antigravityFetcher
@@ -110,6 +112,12 @@ extension QuotaViewModel {
         }
         async let glm = coordinator.refresh(provider: .glm, force: force, previous: previous[.glm] ?? [:]) {
             await glmQuotaFetcher.fetchAllQuotas()
+        }
+        async let deepseek = coordinator.refresh(provider: .deepseek, force: force, previous: previous[.deepseek] ?? [:]) {
+            await deepseekQuotaFetcher.fetchAllQuotas()
+        }
+        async let moonshot = coordinator.refresh(provider: .moonshot, force: force, previous: previous[.moonshot] ?? [:]) {
+            await moonshotQuotaFetcher.fetchAllQuotas()
         }
         async let clinePass = coordinator.refresh(provider: .clinePass, force: force, previous: previous[.clinePass] ?? [:]) {
             await clineQuotaFetcher.fetchAllQuotas()
@@ -188,6 +196,8 @@ extension QuotaViewModel {
         refreshed[.copilot] = await copilotQuotaFetcher.reconcileLegacyAliases(in: await copilot)
         refreshed[.kiro] = await kiro
         refreshed[.glm] = await glm
+        refreshed[.deepseek] = await deepseek
+        refreshed[.moonshot] = await moonshot
         refreshed[.clinePass] = await clinePass
         refreshed[.warp] = await warp
         refreshed[.antigravity] = antigravity
@@ -315,6 +325,16 @@ extension QuotaViewModel {
             fresh = await coordinatedRefresh {
                 await fetcher.fetchAllQuotas()
             }
+        case .deepseek:
+            let fetcher = deepseekFetcher
+            fresh = await coordinatedRefresh {
+                await fetcher.fetchAllQuotas()
+            }
+        case .moonshot:
+            let fetcher = moonshotFetcher
+            fresh = await coordinatedRefresh {
+                await fetcher.fetchAllQuotas()
+            }
         case .clinePass:
             let fetcher = clinePassFetcher
             fresh = await coordinatedRefresh {
@@ -374,7 +394,7 @@ extension QuotaViewModel {
             fresh = await coordinatedRefresh {
                 await fetcher.fetchAsProviderQuota()
             }
-        case .qwen, .iflow, .vertex:
+        case .qwen, .iflow, .vertex, .minimax:
             return
         }
 

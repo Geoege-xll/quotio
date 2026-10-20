@@ -23,6 +23,9 @@ final class QuotaViewModel {
             // 不创建或取消额外 Task，实际网络失效仍由原生命周期负责。
             apiKeyRequestID = UUID()
             isMutatingAPIKeys = false
+            // 同步撤销模型 VM 已排入配置 actor 的旧许可。不能只在 await 返回后检查 client，
+            // 否则 stopProxy／模式切换可能先结束会话，旧目录随后仍在磁盘生效。
+            invalidateAgentModelSource()
         }
     }
     
@@ -35,6 +38,10 @@ final class QuotaViewModel {
     @ObservationIgnored let copilotFetcher = CopilotQuotaFetcher()
     /// 取数扩展只读取主类原有的 GLMQuotaFetcher 实例；保持 let、ObservationIgnored、创建位置和实例数量。
     @ObservationIgnored let glmFetcher = GLMQuotaFetcher()
+    /// 取数扩展只读取主类原有的 DeepSeekQuotaFetcher 实例；保持 let、ObservationIgnored、创建位置和实例数量。
+    @ObservationIgnored let deepseekFetcher = DeepSeekQuotaFetcher()
+    /// 取数扩展只读取主类原有的 MoonshotQuotaFetcher 实例；保持 let、ObservationIgnored、创建位置和实例数量。
+    @ObservationIgnored let moonshotFetcher = MoonshotQuotaFetcher()
     /// 取数扩展只读取主类原有的 WarpQuotaFetcher 实例；保持 let、ObservationIgnored、创建位置和实例数量。
     @ObservationIgnored let warpFetcher = WarpQuotaFetcher()
     /// 取数扩展只读取主类原有的 ClinePassQuotaFetcher 实例；保持 let、ObservationIgnored、创建位置和实例数量。
@@ -180,6 +187,57 @@ final class QuotaViewModel {
         vm.setup(proxyManager: proxyManager, quotaViewModel: self)
         _agentSetupViewModel = vm
         return vm
+    }
+
+    /// 账号可用性变更只携带本次刷新上下文，不增加状态或 Task；两个目录仍由各自原宿主提交。
+    struct AccountModelCatalogRefresh {
+        let source: RefreshContext
+        let configuration: AgentSetupViewModel.AccountModelReload?
+        let refreshVisibleCatalog: Bool
+    }
+
+    func invalidateModelsAfterCPAAccountChange(source: RefreshContext) -> AccountModelCatalogRefresh? {
+        guard canUseRefreshSource(source), !modeManager.isMonitorMode else { return nil }
+        var endpoints = [proxyManager.baseURL]
+        if let tunnel = TunnelManager.shared.tunnelState.publicURL { endpoints.append(tunnel) }
+        let configuration = _agentSetupViewModel?.invalidateModelsForAccountChange(serviceBaseURLs: endpoints)
+        let wasLoaded = modelCatalog.hasCompletedFetch || modelCatalog.isLoading
+        // 先废弃旧目录 requestID；账号刷新期间迟到的目录不能再次被当成当前模型。
+        // 懒加载 VM 未创建、目录从未显示时不创建新宿主，页面首次出现仍由原加载入口读取。
+        if wasLoaded { modelCatalog.reset() }
+        return AccountModelCatalogRefresh(source: source, configuration: configuration, refreshVisibleCatalog: wasLoaded)
+    }
+
+    func refreshModelsAfterCPAAccountChange(_ refresh: AccountModelCatalogRefresh?) async {
+        guard let refresh, canUseRefreshSource(refresh.source), !modeManager.isMonitorMode else { return }
+        if let configuration = refresh.configuration {
+            await _agentSetupViewModel?.reloadModelsAfterAccountChange(configuration)
+        }
+        guard canUseRefreshSource(refresh.source), !modeManager.isMonitorMode else { return }
+        if refresh.refreshVisibleCatalog { await refreshDashboardModels() }
+        guard canUseRefreshSource(refresh.source), !modeManager.isMonitorMode else { return }
+        var endpoints = [proxyManager.baseURL]
+        if let tunnel = TunnelManager.shared.tunnelState.publicURL { endpoints.append(tunnel) }
+        // 使用原懒加载所有者；只有磁盘已接管的 Claude 配置才取目录，不增加持久 Task。
+        let failure = await agentSetupViewModel.synchronizeManagedClaudeCatalog(serviceBaseURLs: endpoints) { [weak self] in
+            self?.canUseRefreshSource(refresh.source) == true
+        }
+        if canUseRefreshSource(refresh.source), let failure { errorMessage = failure }
+    }
+
+    /// 生命周期扩展通过原宿主失效已存在的配置 VM，不触发懒加载，也不扩大原私有存储权限。
+    func invalidateAgentModelSource() { _agentSetupViewModel?.invalidateCPAModelSource() }
+
+    /// 账号新增／恢复可用的成功入口共用同一桥接，避免只更新账号列表却让菜单来源停在旧账号池。
+    /// 原调用链内顺序执行，不新增 Task；目录和最终提交继续校验同一模式、运行会话及管理客户端。
+    @discardableResult
+    func refreshAfterCPAAccountChange(refreshQuotas: Bool = true) async -> Bool {
+        let source = refreshContext(), client = apiClient
+        let modelRefresh = invalidateModelsAfterCPAAccountChange(source: source)
+        let refreshed = await refreshData(refreshQuotas: refreshQuotas)
+        guard canUseRefreshSource(source), apiClient === client else { return false }
+        await refreshModelsAfterCPAAccountChange(modelRefresh)
+        return refreshed
     }
     
     /// Quota data per provider per account (email -> QuotaData)
@@ -392,6 +450,7 @@ final class QuotaViewModel {
     // MARK: - Mode-Aware Initialization
 
     func initialize() async {
+        invalidateAgentModelSource()
         if modeManager.isMonitorMode {
             await initializeQuotaOnlyMode()
         } else {
@@ -769,6 +828,9 @@ final class QuotaViewModel {
 
     /// 停止事务保留在状态宿主：依次取消启动／恢复／轮询、结束授权与代理、恢复直读调度，再清空并异步失效旧客户端。
     func stopProxy() {
+        // 这是停止事务的同步线性化起点，先撤销排队的目录提交，再改变运行会话或执行停止副作用。
+        // _apiClient.didSet 仍为直接替换客户端的路径提供同一兜底，不能把撤销延迟到 stop 的末尾。
+        invalidateAgentModelSource()
         // 释放的是这一轮初始化，不能让慢请求、重试或预热阻止下一次启动。
         proxyStartFlow.cancel()
         proxyRecoveryTask?.cancel()
@@ -983,6 +1045,8 @@ final class QuotaViewModel {
     @ObservationIgnored var authImportReadHookForTesting: (@MainActor (URL) async throws -> Data)?
     @ObservationIgnored var authImportRefreshHookForTesting: (@MainActor (Bool) async -> Void)?
     func setAuthImportClientForTesting(_ client: ManagementAPIClient?) { _apiClient = client }
+    /// 离线账号启停回归复用原子 VM 所有者，仅替换外部取数依赖，不新增测试状态。
+    func setAgentSetupViewModelForTesting(_ viewModel: AgentSetupViewModel) { _agentSetupViewModel = viewModel }
     #endif
 
     /// 同一个提交令牌同时排序列表读取与编辑；有效编辑开始即废弃之前的列表快照。

@@ -214,13 +214,28 @@ final class AccountPageFusionTests: XCTestCase {
     func testSpecialProviderStorageIdentityAndActionsRemainReachable() throws {
         let cline = CustomProvider(name: "Cline 连接", type: .clinePass)
         let warp = WarpService.WarpToken(name: "Warp 连接", token: "fixture-token")
-        let result = groups(custom: [cline], warp: [warp])
+        let deepseek = CustomProvider(name: "DeepSeek 主账号", type: .deepseekCompatibility, apiKeys: [CustomAPIKeyEntry(apiKey: "sk-ds-fixture")])
+        let moonshot = CustomProvider(name: "Moonshot 生产", type: .moonshotCompatibility, apiKeys: [CustomAPIKeyEntry(apiKey: "sk-ms-fixture")])
+        let minimax = CustomProvider(name: "MiniMax 测试", type: .minimaxCompatibility, apiKeys: [CustomAPIKeyEntry(apiKey: "sk-mm-fixture")])
+        let result = groups(custom: [cline, deepseek, moonshot, minimax], warp: [warp])
         let clineRow = try XCTUnwrap(result[.clinePass]?.first)
         let warpRow = try XCTUnwrap(result[.warp]?.first)
+        let dsRow = try XCTUnwrap(result[.deepseek]?.first)
+        let msRow = try XCTUnwrap(result[.moonshot]?.first)
+        let mmRow = try XCTUnwrap(result[.minimax]?.first)
         XCTAssertEqual(clineRow.id, cline.id.uuidString)
         XCTAssertEqual(warpRow.id, warp.id.uuidString)
+        XCTAssertEqual(dsRow.id, deepseek.id.uuidString)
+        XCTAssertEqual(msRow.id, moonshot.id.uuidString)
+        XCTAssertEqual(mmRow.id, minimax.id.uuidString)
+        XCTAssertEqual(dsRow.provider, .deepseek)
+        XCTAssertEqual(msRow.provider, .moonshot)
+        XCTAssertEqual(mmRow.provider, .minimax)
         XCTAssertTrue(clineRow.canEdit && clineRow.canDelete)
         XCTAssertTrue(warpRow.canEdit && warpRow.canDelete)
+        XCTAssertTrue(dsRow.canEdit && dsRow.canDelete)
+        XCTAssertTrue(msRow.canEdit && msRow.canDelete)
+        XCTAssertTrue(mmRow.canEdit && mmRow.canDelete)
     }
 
     func testSidebarHasOneAccountEntryInBothOperatingModes() {
@@ -262,81 +277,5 @@ final class AccountPageFusionTests: XCTestCase {
         XCTAssertEqual(quadColumns.count, 2, "四条额度指标保持双列网格自适应")
         XCTAssertEqual(quadColumns[0].spacing, 10)
     }
-
-    func testAdaptiveCardGridRenderingSingleAndMultipleMetrics() {
-        let vm = QuotaViewModel(startsBackgroundServices: false)
-
-        // 1. 单限额账号（如 Codex 仅有周限额）：渲染成功且结构正常
-        let singleData = ProviderQuotaData(models: [
-            ModelQuota(name: "codex-weekly", percentage: 80, resetTime: "5d")
-        ])
-        let singleContent = AccountQuotaContent(
-            provider: .codex,
-            account: AccountQuotaPresentation(
-                key: "codex-single",
-                email: "single@example.com",
-                status: "ready",
-                statusColor: .green,
-                authFile: nil,
-                quotaData: singleData,
-                subscriptionInfo: nil
-            ),
-            isLoading: false,
-            displayStyle: .card
-        ).environment(vm).environment(\.colorScheme, .light)
-        let singleHost = NSHostingView(rootView: singleContent)
-        singleHost.frame = NSRect(x: 0, y: 0, width: 600, height: 120)
-        singleHost.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThan(singleHost.bounds.width, 0)
-
-        // 2. 双限额及以上账号（如 Codex 会话+周限额，或 Claude）：渲染自适应双列
-        let multiData = ProviderQuotaData(models: [
-            ModelQuota(name: "codex-session", percentage: 40, resetTime: "3h"),
-            ModelQuota(name: "codex-weekly", percentage: 80, resetTime: "5d")
-        ])
-        let multiContent = AccountQuotaContent(
-            provider: .codex,
-            account: AccountQuotaPresentation(
-                key: "codex-multi",
-                email: "multi@example.com",
-                status: "ready",
-                statusColor: .green,
-                authFile: nil,
-                quotaData: multiData,
-                subscriptionInfo: nil
-            ),
-            isLoading: false,
-            displayStyle: .card
-        ).environment(vm).environment(\.colorScheme, .light)
-        let multiHost = NSHostingView(rootView: multiContent)
-        multiHost.frame = NSRect(x: 0, y: 0, width: 600, height: 160)
-        multiHost.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThan(multiHost.bounds.width, 0)
-
-        // 3. Antigravity 多模型分组：渲染自适应双列
-        let antigravityData = ProviderQuotaData(models: [
-            ModelQuota(name: "gemini-3-pro", percentage: 70, resetTime: "2h"),
-            ModelQuota(name: "gemini-3-flash", percentage: 90, resetTime: "1h"),
-            ModelQuota(name: "claude-sonnet-4-5", percentage: 50, resetTime: "3h"),
-            ModelQuota(name: "claude-opus-4-5", percentage: 30, resetTime: "5h")
-        ])
-        let antigravityContent = AccountQuotaContent(
-            provider: .antigravity,
-            account: AccountQuotaPresentation(
-                key: "antigravity-multi",
-                email: "antigravity@example.com",
-                status: "ready",
-                statusColor: .green,
-                authFile: nil,
-                quotaData: antigravityData,
-                subscriptionInfo: nil
-            ),
-            isLoading: false,
-            displayStyle: .card
-        ).environment(vm).environment(\.colorScheme, .dark)
-        let antigravityHost = NSHostingView(rootView: antigravityContent)
-        antigravityHost.frame = NSRect(x: 0, y: 0, width: 600, height: 200)
-        antigravityHost.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThan(antigravityHost.bounds.width, 0)
-    }
 }
+

@@ -214,25 +214,45 @@ extension QuotaViewModel {
     /// 其它连接和用户手动选择偏好保留。名称旧键仅在目录明确唯一时清理。
     func prepareCustomProviderQuotaMutation(previous: CustomProvider?, replacement: CustomProvider?,
                                             legacyNameIsUnique: Bool = false) {
-        let relevant = [previous?.type, replacement?.type].contains { $0 == .glmCompatibility || $0 == .clinePass }
+        let isMainstream = { (type: CustomProviderType?) -> Bool in
+            guard let type else { return false }
+            return type == .glmCompatibility || type == .clinePass
+                || type == .deepseekCompatibility || type == .moonshotCompatibility || type == .minimaxCompatibility
+        }
+        let relevant = isMainstream(previous?.type) || isMainstream(replacement?.type)
         guard relevant else { return }
         _ = beginAccountMutation(accountID: "custom:" + (previous?.id ?? replacement?.id ?? UUID()).uuidString)
-        guard let previous, [.glmCompatibility, .clinePass].contains(previous.type) else { return }
-        let provider: AIProvider = previous.type == .glmCompatibility ? .glm : .clinePass
+        guard let previous, isMainstream(previous.type) else { return }
+        let provider: AIProvider
+        switch previous.type {
+        case .glmCompatibility: provider = .glm
+        case .clinePass: provider = .clinePass
+        case .deepseekCompatibility: provider = .deepseek
+        case .moonshotCompatibility: provider = .moonshot
+        case .minimaxCompatibility: provider = .minimax
+        default: return
+        }
         var removed = Set<String>()
         var preservedPins = Set<String>()
-        if previous.type == .glmCompatibility {
-            let retained = replacement?.type == .glmCompatibility ? replacement?.apiKeys ?? [] : []
+        if previous.type == .glmCompatibility || previous.type == .deepseekCompatibility || previous.type == .moonshotCompatibility {
+            let keyBuilder: (UUID, UUID) -> String
+            switch previous.type {
+            case .glmCompatibility: keyBuilder = GLMQuotaFetcher.quotaAccountKey
+            case .deepseekCompatibility: keyBuilder = DeepSeekQuotaFetcher.quotaAccountKey
+            case .moonshotCompatibility: keyBuilder = MoonshotQuotaFetcher.quotaAccountKey
+            default: keyBuilder = GLMQuotaFetcher.quotaAccountKey
+            }
+            let retained = replacement?.type == previous.type ? replacement?.apiKeys ?? [] : []
             // 编辑密钥内容不改变该条目的 UUID 身份。丢弃旧额度，但保留用户对此
             // 槽位的固定选择；只有实际删除 Key／连接才移除固定项。
-            preservedPins = Set(retained.map { GLMQuotaFetcher.quotaAccountKey(providerID: previous.id, apiKeyID: $0.id) })
+            preservedPins = Set(retained.map { keyBuilder(previous.id, $0.id) })
             for key in previous.apiKeys where !retained.contains(where: { $0.id == key.id && $0.apiKey == key.apiKey }) {
-                removed.insert(GLMQuotaFetcher.quotaAccountKey(providerID: previous.id, apiKeyID: key.id))
+                removed.insert(keyBuilder(previous.id, key.id))
             }
         } else {
-            if replacement?.type == .clinePass && replacement?.name == previous.name { preservedPins.insert(previous.name) }
+            if replacement?.type == previous.type && replacement?.name == previous.name { preservedPins.insert(previous.name) }
             let sameKeys = replacement?.apiKeys.map(\.apiKey) == previous.apiKeys.map(\.apiKey)
-            if replacement?.type != .clinePass || replacement?.name != previous.name || !sameKeys {
+            if replacement?.type != previous.type || replacement?.name != previous.name || !sameKeys {
                 removed.insert(previous.name)
             }
         }
@@ -264,6 +284,9 @@ extension QuotaViewModel {
             try await client.deleteAuthFile(name: file.name)
             guard canApplyMutation(context), modeManager.revision == context.modeRevision,
                   apiClient === client, proxyManager.runtimeSessionID == session else { return }
+            // 删除与启停共用目录失效边界。先废弃旧模型请求，再等待原扫描和目录事务，
+            // 删除前的迟到响应不能让已失去唯一账号的型号重新进入配置页或受管菜单。
+            let modelRefresh = invalidateModelsAfterCPAAccountChange(source: refreshContext())
             commitAuthFileDeletion(file)
             var disabledSet = loadDisabledAuthFiles()
             disabledSet.remove(file.name)
@@ -273,6 +296,7 @@ extension QuotaViewModel {
             // 以磁盘实际结果消除旧快照，而不是按同名误删另一认证目录的记录。
             await loadDirectAuthFiles()
             await refreshData(refreshQuotas: false)
+            await refreshModelsAfterCPAAccountChange(modelRefresh)
         } catch {
             if canApplyMutation(context), apiClient === client, proxyManager.runtimeSessionID == session {
                 errorMessage = error.localizedDescription
@@ -287,10 +311,13 @@ extension QuotaViewModel {
         }
 
         let newDisabled = !file.disabled
+        let source = refreshContext()
 
         do {
             Log.debug("toggleAuthFileDisabled: Setting \(file.name) disabled=\(newDisabled)")
             try await client.setAuthFileDisabled(name: file.name, disabled: newDisabled)
+            // 管理请求返回时可能已切模式／代理会话；旧操作不能废弃新页面的目录或修改其禁用偏好。
+            guard canUseRefreshSource(source), apiClient === client else { return }
 
             // Update local persistence
             var disabledSet = loadDisabledAuthFiles()
@@ -301,12 +328,71 @@ extension QuotaViewModel {
             }
             saveDisabledAuthFiles(disabledSet)
 
+            let modelRefresh = invalidateModelsAfterCPAAccountChange(source: source)
+
             Log.debug("toggleAuthFileDisabled: Success, refreshing data")
             await refreshData()
+            // 保留原账号刷新顺序，随后复用原目录加载入口；过期页面／手动新刷新由原世代校验拒绝。
+            await refreshModelsAfterCPAAccountChange(modelRefresh)
         } catch {
+            guard canUseRefreshSource(source), apiClient === client else { return }
             Log.error("toggleAuthFileDisabled: Failed - \(error.localizedDescription)")
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// 重置单个凭据在 CPA 内核中的冷却或配额耗尽惩罚状态。
+    func resetAuthFileCooldown(authIndex: String) async {
+        guard let client = apiClient else {
+            Log.error("resetAuthFileCooldown: No API client available")
+            return
+        }
+        let trimmed = authIndex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let source = refreshContext()
+        do {
+            Log.debug("resetAuthFileCooldown: Resetting cooldown for authIndex=\(trimmed)")
+            try await client.resetCredentialCooldown(authIndex: trimmed)
+            guard canUseRefreshSource(source), apiClient === client else { return }
+            // 冷却解除会让凭据重新加入可用来源集合，同型号可能从单账号恢复为账号池。
+            let modelRefresh = invalidateModelsAfterCPAAccountChange(source: source)
+            await refreshData(refreshQuotas: false)
+            await refreshModelsAfterCPAAccountChange(modelRefresh)
+        } catch {
+            guard canUseRefreshSource(source), apiClient === client else { return }
+            Log.error("resetAuthFileCooldown: Failed - \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// 一键解除所有当前处于冷却或限流惩罚期的凭据。
+    func resetAllCooldowns() async {
+        guard let client = apiClient else {
+            Log.error("resetAllCooldowns: No API client available")
+            return
+        }
+        let coolingIndexes = Set(authFiles.filter(\.hasActiveCooldown).compactMap(\.authIndex).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty })
+        guard !coolingIndexes.isEmpty else { return }
+        let source = refreshContext()
+        var firstError: String?
+        var didReset = false
+        for index in coolingIndexes {
+            do {
+                try await client.resetCredentialCooldown(authIndex: index)
+                didReset = true
+            } catch {
+                if firstError == nil { firstError = error.localizedDescription }
+            }
+        }
+        guard canUseRefreshSource(source), apiClient === client else { return }
+        if let firstError {
+            errorMessage = firstError
+        }
+        let modelRefresh = didReset ? invalidateModelsAfterCPAAccountChange(source: source) : nil
+        await refreshData(refreshQuotas: false)
+        await refreshModelsAfterCPAAccountChange(modelRefresh)
     }
 
     // MARK: - Antigravity IDE 账号切换

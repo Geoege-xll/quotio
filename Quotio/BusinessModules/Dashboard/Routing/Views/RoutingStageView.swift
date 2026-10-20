@@ -102,12 +102,6 @@ struct RoutingStageView: View {
 
             if isRunning {
                 kpiPill(
-                    title: "routing.kpi.failover".localized(),
-                    value: "routing.kpi.supported".localized(),
-                    tint: .purple
-                )
-
-                kpiPill(
                     title: "routing.kpi.retry".localized(),
                     value: routing.retryRounds.map { String(format: "routing.kpi.roundsValue".localized(), $0) } ?? "—",
                     tint: .orange
@@ -335,22 +329,29 @@ struct RoutingStageView: View {
                 }
             }
 
-            // 调度策略微胶囊
-            Text(routing.routingStrategy.map { CPARoutingStrategy.displayName(for: $0) } ?? "—")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(isRunning ? Color.accentColor : Color.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1.5)
-                .background((isRunning ? Color.accentColor : Color.secondary).opacity(0.12), in: Capsule())
+            // 调度策略与故障切换微胶囊
+            HStack(spacing: 4) {
+                Text(routing.routingStrategy.map { CPARoutingStrategy.displayName(for: $0) } ?? "—")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(isRunning ? Color.accentColor : Color.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background((isRunning ? Color.accentColor : Color.secondary).opacity(0.12), in: Capsule())
 
-            // 容灾保护
-            HStack(spacing: 3) {
-                Image(systemName: "shield.checkmark.fill")
-                    .font(.system(size: 7.5))
-                Text("routing.failover.active".localized())
-                    .font(.system(size: 8))
+                if isRunning {
+                    HStack(spacing: 2.5) {
+                        Image(systemName: "shield.checkmark.fill")
+                            .font(.system(size: 7))
+                        Text("routing.kpi.failover".localized())
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.purple)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Color.purple.opacity(0.12), in: Capsule())
+                    .help("routing.failover.active".localized())
+                }
             }
-            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -584,11 +585,6 @@ struct RoutingStageView: View {
     }
 
     private func agentColor(for label: String) -> Color {
-        switch label {
-        case "Claude Code": .orange
-        case "Codex": .green
-        case "Cursor", "OpenCode": .blue
-        default: .purple
-        }
+        CPARoutingPresentation.agentColor(for: label)
     }
 }

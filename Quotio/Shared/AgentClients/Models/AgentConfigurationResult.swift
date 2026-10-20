@@ -40,6 +40,10 @@ nonisolated struct AgentConfigResult: Sendable {
     var modelsConfigured: Int
     var error: String?
     var backupPath: String?
+    /// 仅在一次自动迁移尚未完成 Shell 阶段时用于安全回滚；不持久化、不进入诊断报告。
+    var claudeRollback: ClaudeConfigurationRollback? = nil
+    /// Claude 的后续动作由同一操作计划决定，官方恢复也必须撤下原受管 Shell 段。
+    var claudeShellAction: ClaudeShellProfileAction? = nil
 
     static func success(
         type: AgentConfigType,
@@ -92,4 +96,12 @@ nonisolated struct ConnectionTestResult: Sendable {
     let message: String
     let latencyMs: Int?
     let modelResponded: String?
+}
+
+/// 原配置服务创建的事务凭据，原 VM 仅在后续 Shell 失败时交还同一服务。
+/// 回滚前必须比较 written，避免覆盖其他进程随后写入的新配置；首次文件用 nil 表示不存在。
+nonisolated struct ClaudeConfigurationRollback: Sendable {
+    let original: Data?
+    let written: Data
+    let reportPath: String?
 }
