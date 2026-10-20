@@ -1,209 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "agents.claudeMenu.contextInfo": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自动使用已保存的上下文声明或服务明确提供的容量；容量未知时跟随 Claude Code。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uses the saved context declaration or an explicit capacity from the service automatically; otherwise follows Claude Code."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Utilise automatiquement la déclaration conservée ou la capacité explicite du service ; sinon suit Claude Code."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tự động dùng khai báo đã lưu hoặc dung lượng do dịch vụ xác nhận; nếu chưa biết thì theo Claude Code."
-          }
-        }
-      }
-    },
-    "agents.claudeMenu.contextAutomatic": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自动"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Auto"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Auto"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tự động"
-          }
-        }
-      }
-    },
-    "agents.claudeMenu.context": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "上下文"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Context"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contexte"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ngữ cảnh"
-          }
-        }
-      }
-    },
-    "agents.claudeMenu.sourceUnknown": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "来源未标明"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Source not specified"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Source non précisée"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chưa xác định nguồn"
-          }
-        }
-      }
-    },
-    "agents.claudeMenu.accountPool": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "账号池"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account pool"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pool de comptes"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nhóm tài khoản"
-          }
-        }
-      }
-    },
-    "agents.claude.official.manual": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "将以下内容保存到 %1$@，并移除 %2$@ 中 Claude Code 的 Quotio 管理段。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save the JSON below to %1$@, and remove the Quotio managed block for Claude Code from %2$@."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enregistrez le JSON ci-dessous dans %1$@, puis retirez le bloc Quotio de Claude Code dans %2$@."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lưu JSON bên dưới vào %1$@ và xóa khối do Quotio quản lý cho Claude Code trong %2$@."
-          }
-        }
-      }
-    },
-    "agents.claude.official.restored": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已恢复 Claude Code 默认配置。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Claude Code default configuration restored."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La configuration par défaut de Claude Code a été rétablie."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đã khôi phục cấu hình mặc định của Claude Code."
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -2516,31 +2313,91 @@
       }
     },
     "agents.claude.advanced.context" : {
-      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Custom context window"
+      "comment" : "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Custom context window"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自定义上下文窗口"
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fenêtre de contexte personnalisée"
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fenêtre de contexte personnalisée"
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cửa sổ ngữ cảnh tùy chỉnh"
           }
         },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cửa sổ ngữ cảnh tùy chỉnh"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自定义上下文窗口"
+          }
+        }
+      }
+    },
+    "agents.claude.advanced.context.automatic" : {
+      "comment" : "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow Claude Code"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suivre Claude Code"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Theo Claude Code"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随 Claude Code"
+          }
+        }
+      }
+    },
+    "agents.claude.advanced.context.custom" : {
+      "comment" : "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Custom window"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fenêtre personnalisée"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cửa sổ tùy chỉnh"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自定义窗口"
           }
         }
       }
@@ -2563,151 +2420,91 @@
       }
     },
     "agents.claude.advanced.context.info" : {
-      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Follow Claude Code unless you explicitly declare a custom window. This does not increase upstream capacity. Per-model 1M stays independent; existing compaction settings are preserved. Reopen your terminal after applying changes."
+      "comment" : "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow Claude Code unless you explicitly declare a custom window. This does not increase upstream capacity. Per-model 1M stays independent; existing compaction settings are preserved. Reopen your terminal after applying changes."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "默认跟随 Claude Code；仅自定义时声明窗口，不会提升上游容量。各模型 1M 独立生效，已有压缩设置保留。应用后请重新打开终端。"
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suivez Claude Code sauf déclaration explicite. Cela n’augmente pas la capacité amont. Le mode 1M par modèle reste indépendant et les réglages de compaction sont conservés. Rouvrez le terminal après application."
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Suivez Claude Code sauf déclaration explicite. Cela n’augmente pas la capacité amont. Le mode 1M par modèle reste indépendant et les réglages de compaction sont conservés. Rouvrez le terminal après application."
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mặc định theo Claude Code; chỉ khai báo cửa sổ khi tùy chỉnh, không tăng dung lượng máy chủ. 1M theo mô hình độc lập, giữ thiết lập nén. Mở lại terminal sau khi áp dụng."
           }
         },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mặc định theo Claude Code; chỉ khai báo cửa sổ khi tùy chỉnh, không tăng dung lượng máy chủ. 1M theo mô hình độc lập, giữ thiết lập nén. Mở lại terminal sau khi áp dụng."
-          }
-        }
-      }
-    },
-    "agents.claude.advanced.context.automatic" : {
-      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Follow Claude Code"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "跟随 Claude Code"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Suivre Claude Code"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Theo Claude Code"
-          }
-        }
-      }
-    },
-    "agents.claude.advanced.context.custom" : {
-      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Custom window"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自定义窗口"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fenêtre personnalisée"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cửa sổ tùy chỉnh"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认跟随 Claude Code；仅自定义时声明窗口，不会提升上游容量。各模型 1M 独立生效，已有压缩设置保留。应用后请重新打开终端。"
           }
         }
       }
     },
     "agents.claude.advanced.context.placeholder" : {
-      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Token count"
+      "comment" : "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Token count"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "输入令牌数"
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jetons"
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Jetons"
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Số token"
           }
         },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Số token"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入令牌数"
           }
         }
       }
     },
     "agents.claude.advanced.context.requiresJSON" : {
-      "comment": "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The context window differs from settings.json. Save JSON or JSON + Shell so the old override can be removed or replaced."
+      "comment" : "Claude 上下文声明：跟随 CLI 与显式覆盖；不根据模型 ID 猜测容量。",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The context window differs from settings.json. Save JSON or JSON + Shell so the old override can be removed or replaced."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "上下文窗口与现有 settings.json 不一致，请选择 JSON 或 JSON＋Shell 保存，才能移除或替换旧覆盖。"
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La fenêtre diffère de settings.json. Enregistrez JSON ou JSON + Shell pour retirer ou remplacer l’ancienne valeur."
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La fenêtre diffère de settings.json. Enregistrez JSON ou JSON + Shell pour retirer ou remplacer l’ancienne valeur."
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cửa sổ khác settings.json. Hãy lưu JSON hoặc JSON + Shell để xóa hoặc thay thế giá trị cũ."
           }
         },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cửa sổ khác settings.json. Hãy lưu JSON hoặc JSON + Shell để xóa hoặc thay thế giá trị cũ."
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文窗口与现有 settings.json 不一致，请选择 JSON 或 JSON＋Shell 保存，才能移除或替换旧覆盖。"
           }
         }
       }
@@ -2810,6 +2607,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fable 需要 Claude Code 2.1.257 或更新版本；请升级 CLI，或继续使用原有三个角色。"
+          }
+        }
+      }
+    },
+    "agents.claude.official.manual" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save the JSON below to %1$@, and remove the Quotio managed block for Claude Code from %2$@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistrez le JSON ci-dessous dans %1$@, puis retirez le bloc Quotio de Claude Code dans %2$@."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lưu JSON bên dưới vào %1$@ và xóa khối do Quotio quản lý cho Claude Code trong %2$@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将以下内容保存到 %1$@，并移除 %2$@ 中 Claude Code 的 Quotio 管理段。"
+          }
+        }
+      }
+    },
+    "agents.claude.official.restored" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claude Code default configuration restored."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La configuration par défaut de Claude Code a été rétablie."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã khôi phục cấu hình mặc định của Claude Code."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已恢复 Claude Code 默认配置。"
           }
         }
       }
@@ -2960,6 +2815,151 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "当前模型目录未找到以下旧模型，已保留原值："
+          }
+        }
+      }
+    },
+    "agents.claudeMenu.accountPool" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account pool"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pool de comptes"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nhóm tài khoản"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账号池"
+          }
+        }
+      }
+    },
+    "agents.claudeMenu.context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Context"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contexte"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ngữ cảnh"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下文"
+          }
+        }
+      }
+    },
+    "agents.claudeMenu.contextAutomatic" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tự động"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动"
+          }
+        }
+      }
+    },
+    "agents.claudeMenu.contextInfo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uses the saved context declaration or an explicit capacity from the service automatically; otherwise follows Claude Code."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilise automatiquement la déclaration conservée ou la capacité explicite du service ; sinon suit Claude Code."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tự động dùng khai báo đã lưu hoặc dung lượng do dịch vụ xác nhận; nếu chưa biết thì theo Claude Code."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动使用已保存的上下文声明或服务明确提供的容量；容量未知时跟随 Claude Code。"
+          }
+        }
+      }
+    },
+    "agents.claudeMenu.sourceUnknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source not specified"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source non précisée"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chưa xác định nguồn"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来源未标明"
           }
         }
       }
@@ -23598,6 +23598,41 @@
     },
     "P%lld" : {
 
+    },
+    "provider.family.openaiCompatibility" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI Compatible"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compatible OpenAI"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tương thích OpenAI"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI 兼容"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI 相容"
+          }
+        }
+      }
     },
     "providers.addAccount" : {
       "extractionState" : "stale",
@@ -47206,7 +47241,7 @@
     "刷新会话" : {
 
     },
-    "刷新技能" : {
+    "刷新技能并检测更新" : {
 
     },
     "前往「从 GitHub 发现」一键安装" : {
@@ -47387,12 +47422,6 @@
 
     },
     "检测到在各智能体独立目录中手动存放的技能。点击“纳管到统一库”可迁移至 ~/.quotio/skills/ 并在原路径建立受管链接；同名内容冲突会保留原文件并提示。" : {
-
-    },
-    "检测技能更新" : {
-
-    },
-    "检测更新" : {
 
     },
     "正在分析智能体存储与缓存..." : {

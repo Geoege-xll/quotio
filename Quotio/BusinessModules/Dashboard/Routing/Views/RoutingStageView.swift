@@ -550,7 +550,7 @@ struct RoutingStageView: View {
     private var activeTargets: [DynamicTargetNode] {
         guard hasRoutedRequests else {
             return viewModel.authFiles.filter { !$0.disabled && !$0.unavailable }.prefix(3).map { auth in
-                DynamicTargetNode(id: auth.id, providerName: auth.provider.capitalized,
+                DynamicTargetNode(id: auth.id, providerName: ProviderDisplayName.normalize(auth.provider),
                     accountName: auth.quotaDisplayName.masked(if: settings.hideSensitiveInfo),
                     statusText: "", status: .standby, isActive: false)
             }.sorted { $0.id < $1.id }
@@ -561,7 +561,9 @@ struct RoutingStageView: View {
             guard seen.insert(id).inserted else { return nil }
             let status: DynamicTargetNode.TargetStatus = event.outcome == .success ? .success
                 : (event.outcome == .canceled ? .canceled : .failure)
-            return DynamicTargetNode(id: id, providerName: event.provider.capitalized,
+            // CPA 事件只带协议家族；跨协议接入的第三方模型按模型 ID 识别真实品牌。
+            return DynamicTargetNode(id: id,
+                providerName: ProviderDisplayName.eventProviderName(provider: event.provider, model: event.model),
                 accountName: CPARoutingPresentation.accountName(for: event, files: viewModel.authFiles,
                     hidden: settings.hideSensitiveInfo),
                 statusText: CPARoutingPresentation.outcomeKey(event.outcome).localized(), status: status,

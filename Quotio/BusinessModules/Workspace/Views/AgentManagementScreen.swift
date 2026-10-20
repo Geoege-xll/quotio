@@ -136,15 +136,24 @@ public struct AgentManagementScreen: View {
             .disabled(viewModel.isLoadingSessions || viewModel.isDeletingSessions)
 
         case .skills:
+            // 原有“刷新技能”与“检测更新”是两枚圆形箭头图标，视觉上像重复的刷新按钮。
+            // 合并为单一入口：先本地重读仓库与已安装技能，再顺带检测远端更新并弹提示；
+            // 更新结论仍写入 availableSkillUpdates，仓库标题的更新入口不受影响。
             Button {
-                Task { await viewModel.refreshSkills() }
+                Task {
+                    await viewModel.refreshSkills()
+                    // 与被合并按钮的禁用规则一致：未安装任何技能时跳过远端检测。
+                    if !viewModel.installedSkills.isEmpty {
+                        await viewModel.checkForSkillUpdates()
+                    }
+                }
             } label: {
                 // 与账户管理的刷新按钮一致：加载期间用菊花替换整枚图标，不挤动导航布局。
-                if viewModel.isLoadingSkills { SmallProgressView() }
+                if viewModel.isLoadingSkills || viewModel.isCheckingSkillUpdates { SmallProgressView() }
                 else { Image(systemName: "arrow.clockwise") }
             }
-            .help("刷新技能")
-            .disabled(viewModel.isLoadingSkills || viewModel.isMutatingSkills)
+            .help("刷新技能并检测更新")
+            .disabled(viewModel.isLoadingSkills || viewModel.isMutatingSkills || viewModel.isCheckingSkillUpdates)
 
             Button {
                 viewModel.showAddRepoSheet = true
@@ -161,15 +170,6 @@ public struct AgentManagementScreen: View {
             }
             .help("导出全部技能为 .zip 归档文件")
             .disabled(viewModel.isMutatingSkills || viewModel.installedSkills.isEmpty)
-
-            Button {
-                Task { await viewModel.checkForSkillUpdates() }
-            } label: {
-                if viewModel.isCheckingSkillUpdates { SmallProgressView() }
-                else { Label("检测更新", systemImage: "arrow.triangle.2.circlepath") }
-            }
-            .help("检测技能更新")
-            .disabled(viewModel.isMutatingSkills || viewModel.isLoadingSkills || viewModel.installedSkills.isEmpty)
 
         case .storage:
             Button {

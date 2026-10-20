@@ -168,9 +168,11 @@ struct RoutingLiveRequestsView: View {
 
     /// 调用的模型与确认上游使用不同文字层次；账号名称复用已有身份解析和隐私
     /// 遮罩，缺失证据仍显示未知，不按平台首个账号推测历史执行目标。
+    /// 上游品牌按模型 ID 特征校准，跨协议接入的第三方模型不再误标协议家族名。
     private func modelRoute(event: CPAUsageEvent) -> some View {
         let account = CPARoutingPresentation.accountName(for: event, files: viewModel.authFiles,
                                                          hidden: settings.hideSensitiveInfo)
+        let upstreamBrand = ProviderDisplayName.eventProviderName(provider: event.provider, model: event.model)
         return HStack(spacing: 5) {
             Text(event.model)
                 .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
@@ -180,14 +182,14 @@ struct RoutingLiveRequestsView: View {
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
             Circle()
-                .fill(providerColor(for: event.provider))
+                .fill(providerColor(for: upstreamBrand))
                 .frame(width: 5, height: 5)
-            Text(event.provider.capitalized + " / " + account)
+            Text(upstreamBrand + " / " + account)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .help(event.model + " → " + event.provider + " / " + account)
+        .help(event.model + " → " + upstreamBrand + " / " + account)
     }
 
     private func clientSourceBadge(event: CPAUsageEvent) -> some View {
@@ -319,12 +321,17 @@ struct RoutingLiveRequestsView: View {
         }
     }
 
-    private func providerColor(for provider: String) -> Color {
-        switch provider.lowercased() {
-        case "claude", "anthropic": return Color(hex: "D97706") ?? .orange
-        case "openai", "codex": return Color(hex: "10A37F") ?? .green
-        case "vertex", "google": return Color.blue
-        case "deepseek": return Color.blue
+    /// 接收校准后的品牌展示名；第三方品牌沿用与账号目录一致的品牌色。
+    private func providerColor(for brand: String) -> Color {
+        switch brand {
+        case "Anthropic", "Claude": return Color(hex: "D97706") ?? .orange
+        case "OpenAI", "Codex": return Color(hex: "10A37F") ?? .green
+        case "GLM": return Color(hex: "3B82F6") ?? .blue
+        case "DeepSeek": return Color(hex: "1E88E5") ?? .blue
+        case "Moonshot": return Color(hex: "6366F1") ?? .indigo
+        case "Qwen": return Color(hex: "7C3AED") ?? .purple
+        case "MiniMax": return Color(hex: "FF4D4F") ?? .red
+        case "Google", "Gemini", "Vertex AI": return Color.blue
         default: return Color.purple
         }
     }

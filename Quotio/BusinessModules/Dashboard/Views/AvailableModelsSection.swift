@@ -81,7 +81,8 @@ struct AvailableModelsSection: View {
                     HStack(spacing: 7) {
                         ProviderGroupBrandBadge(ownerName: group.owner ?? "")
 
-                        Text(group.owner ?? "availableModels.unknownOwner".localized())
+                        // 展示名统一走品牌归一：英文标识规范大小写，跨协议第三方模型已按 ID 校准。
+                        Text(group.owner.map(ProviderDisplayName.normalize(_:)) ?? "availableModels.unknownOwner".localized())
                             .font(.subheadline.weight(.semibold))
 
                         Text(String(group.entries.count))
@@ -203,7 +204,8 @@ struct AvailableModelsSection: View {
             }
             Text(entry.id).font(.system(.body, design: .monospaced))
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-            Text(String(format: "availableModels.owner".localized(), entry.displayOwner ?? "availableModels.unknownOwner".localized()))
+            Text(String(format: "availableModels.owner".localized(),
+                        entry.displayOwner.map(ProviderDisplayName.normalize(_:)) ?? "availableModels.unknownOwner".localized()))
                 .font(.caption).textSelection(.enabled)
             HStack {
                 Button("availableModels.copyID".localized()) {

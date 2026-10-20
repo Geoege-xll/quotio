@@ -43,30 +43,10 @@ nonisolated struct ModelCatalogEntry: Identifiable, Equatable, Sendable {
     }
 
     /// 当 CPA 代理将跨协议上游（例如通过 Anthropic 协议接入的智谱 GLM）标记为协议家族名时，
-    /// 结合模型 ID 特征识别真实的品牌与服务商。
+    /// 结合模型 ID 特征识别真实的品牌与服务商。特征规则统一维护在
+    /// `ProviderDisplayName.brandHint`，与路由页和账号目录保持同一口径。
     static func refinedOwner(for modelID: String, reportedOwner: String?) -> String? {
-        let lowerID = modelID.lowercased()
-        // 智谱 GLM 系列（glm-4, glm-5.3, glm/glm-5.3, cogview, charglm）
-        if lowerID.contains("glm") || lowerID.hasPrefix("cogview") || lowerID.hasPrefix("charglm") {
-            return "GLM"
-        }
-        // DeepSeek 系列
-        if lowerID.contains("deepseek") {
-            return "DeepSeek"
-        }
-        // Moonshot / Kimi 系列
-        if lowerID.contains("moonshot") || lowerID.contains("kimi") {
-            return "Moonshot"
-        }
-        // MiniMax 系列
-        if lowerID.contains("minimax") || lowerID.hasPrefix("abab") {
-            return "MiniMax"
-        }
-        // Qwen 通义千问系列
-        if lowerID.contains("qwen") {
-            return "Qwen"
-        }
-        return nil
+        ProviderDisplayName.brandHint(in: modelID)
     }
 }
 
