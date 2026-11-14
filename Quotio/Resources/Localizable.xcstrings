@@ -1,6 +1,93 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "customProviders.protocol.info" : {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic uses Responses for the official OpenAI endpoint and Chat Completions for third-party services. Select Chat Completions explicitly for legacy models when needed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自动模式：OpenAI 官方地址使用 Responses，第三方兼容服务保持 Chat Completions。旧型号有需要时可明确选择 Chat Completions。"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le mode automatique utilise Responses pour OpenAI et Chat Completions pour les services tiers. Choisissez explicitement Chat Completions pour les anciens modèles si nécessaire."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tự động dùng Responses cho địa chỉ OpenAI chính thức và Chat Completions cho dịch vụ bên thứ ba. Chọn Chat Completions khi dùng mẫu cũ nếu cần."
+          }
+        }
+      }
+    },
+    "customProviders.protocol.advanced" : {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upstream protocol"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "高级：上游协议"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protocole en amont"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Giao thức thượng nguồn"
+          }
+        }
+      }
+    },
+    "customProviders.protocol.auto" : {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自动"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatique"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tự động"
+          }
+        }
+      }
+    },
     "" : {
 
     },
@@ -24621,6 +24708,35 @@
         }
       }
     },
+    "quota.reset.passed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset · refresh to update"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réinitialisé · actualiser pour mettre à jour"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã đặt lại · làm mới để cập nhật"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已重置 · 刷新以更新"
+          }
+        }
+      }
+    },
     "quota.history.open" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -40103,6 +40219,29 @@
         }
       }
     },
+    "usage.cpa.requests.unit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "requests"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次請求"
+          }
+        }
+      }
+    },
     "usage.cpa.resetFilters" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -44324,6 +44463,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "多"
+          }
+        }
+      }
+    },
+    "usage.replica.noCollectedRequests" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No requests recorded on this day"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当天未记录到请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "當天未記錄到請求"
           }
         }
       }

@@ -28,7 +28,7 @@ struct StatisticsAnalyticsScreen: View {
                     .disabled(state.tab != .usage)
                     .accessibilityHidden(state.tab != .usage)
 
-                CallAnalyticsScreen(viewModel: callAnalytics, clientUsage: clientUsage, isActive: state.tab == .calls && path.isEmpty)
+                CallAnalyticsScreen(viewModel: callAnalytics, isActive: state.tab == .calls && path.isEmpty)
                     .opacity(state.tab == .calls ? 1 : 0)
                     .allowsHitTesting(state.tab == .calls)
                     .disabled(state.tab != .calls)
@@ -91,7 +91,8 @@ struct StatisticsAnalyticsScreen: View {
 }
 
 /// 完整 CPA 分析复用现有筛选、汇总及索引查询，页面不直接请求消费式 usage-queue。
-/// 根滚动视图保留原生偏移；筛选条、趋势及排行都读取同一份由宿主持有的条件。
+/// 根滚动视图保留原生偏移；筛选条、趋势热力图及排行都读取同一份由宿主持有的条件。
+/// 热力图悬浮浮窗挂在根层叠加层，鼠标跨格时仅更新浮窗，不重绘整页滚动内容。
 private struct CPAUsageAnalysisScreen: View {
     let store: UsageStatisticsStore
     @Binding var selection: CPAUsageSelection
@@ -100,19 +101,30 @@ private struct CPAUsageAnalysisScreen: View {
     let readyAccounts: Int
     let isActive: Bool
     @Environment(\.colorScheme) private var colorScheme
+    @State private var hoverState = UsageHeatmapHoverState()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                CPADashboardCommonFilters(store: store, model: dashboardModel, selection: $selection)
-                CPAUsageStatisticsView(store: store, totalAccounts: totalAccounts, readyAccounts: readyAccounts,
-                    selection: $selection, dashboardModel: dashboardModel, isActive: isActive)
+        GeometryReader { viewport in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    CPADashboardCommonFilters(store: store, model: dashboardModel, selection: $selection)
+                    CPAUsageStatisticsView(store: store, totalAccounts: totalAccounts, readyAccounts: readyAccounts,
+                        selection: $selection, dashboardModel: dashboardModel, isActive: isActive,
+                        availableWidth: max(0, viewport.size.width - 40),
+                        onHeatmapHover: { hoverState.selection = $0 })
+                }
+                .padding(20)
             }
-            .padding(20)
+            .overlay(alignment: .topLeading) { UsageHeatmapOverlay(state: hoverState, viewportSize: viewport.size) }
         }
+        .coordinateSpace(.named("usageHeatmapPage"))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .analyticsPageChrome(colorScheme)
         .accessibilityIdentifier("analyticsCPAUsagePage")
+        .onChange(of: isActive) { _, active in
+            if !active { hoverState.selection = nil }
+        }
+        .onDisappear { hoverState.selection = nil }
     }
 }
 

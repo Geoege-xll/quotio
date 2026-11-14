@@ -275,6 +275,46 @@ final class CopilotQuotaFetcherTests: XCTestCase {
         XCTAssertEqual(scoped["marcosvrs"]?.lastUpdated, freshDate)
     }
 
+    // MARK: - Keychain Account & Token Hardening
+
+    /// 测试钥匙串账号合法性校验：允许合法 ASCII 标识，拒绝空字符串、github.com 主机名、超长字符串及非安全字符
+    func testCopilotKeychainAccountValidation() {
+        XCTAssertTrue(CopilotQuotaFetcher.isValidCopilotKeychainAccount("monalisa"))
+        XCTAssertTrue(CopilotQuotaFetcher.isValidCopilotKeychainAccount("user-name_123"))
+        XCTAssertTrue(CopilotQuotaFetcher.isValidCopilotKeychainAccount("A"))
+
+        // 拒绝非法账号
+        XCTAssertFalse(CopilotQuotaFetcher.isValidCopilotKeychainAccount(""))
+        XCTAssertFalse(CopilotQuotaFetcher.isValidCopilotKeychainAccount("github.com"))
+        XCTAssertFalse(CopilotQuotaFetcher.isValidCopilotKeychainAccount("user@github.com"))
+        XCTAssertFalse(CopilotQuotaFetcher.isValidCopilotKeychainAccount("user.name"))
+        XCTAssertFalse(CopilotQuotaFetcher.isValidCopilotKeychainAccount("user name"))
+        XCTAssertFalse(CopilotQuotaFetcher.isValidCopilotKeychainAccount(String(repeating: "a", count: 257)))
+    }
+
+    /// 测试钥匙串令牌解码：支持常规令牌与 go-keyring-base64 编码令牌
+    func testCopilotKeychainTokenDecoding() {
+        // 常规令牌
+        let plainData = "gho_1234567890abcdef".data(using: .utf8)!
+        XCTAssertEqual(CopilotQuotaFetcher.decodeCopilotKeychainToken(plainData), "gho_1234567890abcdef")
+
+        // 带有空白的令牌
+        let paddedData = "  gho_1234567890abcdef \n".data(using: .utf8)!
+        XCTAssertEqual(CopilotQuotaFetcher.decodeCopilotKeychainToken(paddedData), "gho_1234567890abcdef")
+
+        // go-keyring-base64 编码令牌
+        let rawToken = "gho_secret_token_from_keyring"
+        let base64Token = Data(rawToken.utf8).base64EncodedString()
+        let prefixedData = "go-keyring-base64:\(base64Token)".data(using: .utf8)!
+        XCTAssertEqual(CopilotQuotaFetcher.decodeCopilotKeychainToken(prefixedData), rawToken)
+
+        // 空数据或无效 base64
+        XCTAssertNil(CopilotQuotaFetcher.decodeCopilotKeychainToken(Data()))
+        XCTAssertNil(CopilotQuotaFetcher.decodeCopilotKeychainToken("   ".data(using: .utf8)!))
+        let invalidPrefixed = "go-keyring-base64:!!!invalid-base64!!!".data(using: .utf8)!
+        XCTAssertNil(CopilotQuotaFetcher.decodeCopilotKeychainToken(invalidPrefixed))
+    }
+
     // MARK: - Helpers
 
     private static func makeTemporaryAuthDirectory() throws -> String {

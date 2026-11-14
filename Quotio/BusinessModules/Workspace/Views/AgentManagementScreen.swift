@@ -195,7 +195,9 @@ public struct AgentManagementScreen: View {
     private func tabBadgeCount(for tab: WorkspaceTab) -> String {
         switch tab {
         case .sessions:
-            return viewModel.sessions.isEmpty ? "" : "\(viewModel.sessions.count)"
+            // 顶部徽标仅统计实际可浏览的主会话数量，不把 Subagent 子任务、跨客户端导入或归档空壳计入主会话总数。
+            let count = viewModel.sessions.filter(\.isMainListVisible).count
+            return count == 0 ? "" : "\(count)"
         case .skills:
             return viewModel.installedSkills.isEmpty ? "" : "\(viewModel.installedSkills.count)"
         case .storage:

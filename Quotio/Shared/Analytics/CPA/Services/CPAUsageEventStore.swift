@@ -571,26 +571,36 @@ nonisolated final class CPAUsageEventStore {
         return values
     }
 
+    private func nonTimeClauses(from query: CPAUsageQuery) -> (clauses: [String], values: [Value]) {
+        var clauses: [String] = []
+        var values: [Value] = []
+        for (column, value) in [("provider", query.provider), ("model", query.model), ("source_id", query.source), ("key_id", query.apiKey)] where !value.isEmpty {
+            if value == "__unknown__" {
+                clauses.append((column == "source_id" || column == "key_id") ? column + " IS NULL" : column + " = ''")
+            }
+            else { clauses.append(column + " = ? COLLATE NOCASE"); values.append(.text(value)) }
+        }
+        if query.outcome != .all { clauses.append("outcome = ?"); values.append(.text(query.outcome.rawValue)) }
+        return (clauses, values)
+    }
+
     private func filters(_ query: CPAUsageQuery, timeOnly: Bool) -> (sql: String, values: [Value]) {
         var clauses: [String] = []
         var values: [Value] = []
         if let start = query.start { clauses.append("ts >= ?"); values.append(.number(start.timeIntervalSince1970)) }
         if let end = query.end { clauses.append("ts <= ?"); values.append(.number(end.timeIntervalSince1970)) }
         if !timeOnly {
-            for (column, value) in [("provider", query.provider), ("model", query.model), ("source_id", query.source), ("key_id", query.apiKey)] where !value.isEmpty {
-                if value == "__unknown__" {
-                    clauses.append((column == "source_id" || column == "key_id") ? column + " IS NULL" : column + " = ''")
-                }
-                else { clauses.append(column + " = ? COLLATE NOCASE"); values.append(.text(value)) }
-            }
-            if query.outcome != .all { clauses.append("outcome = ?"); values.append(.text(query.outcome.rawValue)) }
+            let nonTime = nonTimeClauses(from: query)
+            clauses.append(contentsOf: nonTime.clauses)
+            values.append(contentsOf: nonTime.values)
         }
         return (clauses.isEmpty ? "" : " WHERE " + clauses.joined(separator: " AND "), values)
     }
 
-    /// 一次 actor 调用完成同条件总览、趋势与当前分布维度；只返回有界图形数据。
+    /// 一次 actor 调用完成同条件总览、趋势、52周热力图与当前分布维度；只返回有界图形数据。
     func dashboard(_ query: CPAUsageQuery, dimension: CPAUsageDimension,
-                   metric: CPAUsageChartMetric, limit: Int, includesHistory: Bool = false) throws -> CPAUsageDashboardReport {
+                   metric: CPAUsageChartMetric, limit: Int, includesHistory: Bool = false,
+                   calendar: Calendar = .current) throws -> CPAUsageDashboardReport {
         let summary = try self.query(query, includeEvents: false)
         sqlite3_progress_handler(database, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
         defer { sqlite3_progress_handler(database, 0, nil, nil) }
@@ -664,8 +674,39 @@ nonisolated final class CPAUsageEventStore {
             rows.append(CPAUsageCategory(key: key, title: title, provider: text(statement, column: 1) ?? "",
                 requests: Int(sqlite3_column_int64(statement, 3)), tokens: Int(sqlite3_column_int64(statement, 4))))
         }
+        // 52 周热力图按当前非时间筛选条件（提供商、模型、来源、API Key、状态）聚合，
+        // 时间窗口固定覆盖最近 52 周，不随今日 / 近24小时等摘要时间窗收缩。
+        let heatmapStart = UsageHeatmapPresentation.windowStart(now: Date(), anchorEnd: query.end, calendar: calendar)
+        let heatmapStartTimestamp = heatmapStart.timeIntervalSince1970
+        let nonTime = nonTimeClauses(from: query)
+        let heatmapClauses = ["(ledger_day >= ? OR (ledger_day IS NULL AND ts >= ?))"] + nonTime.clauses
+        let heatmapValues: [Value] = [.number(heatmapStartTimestamp), .number(heatmapStartTimestamp)] + nonTime.values
+        let heatmapSQL = """
+            SELECT COALESCE(ledger_day, CAST(strftime('%s', date(ts,'unixepoch','localtime'),'utc') AS REAL)) AS day_ts,
+                   provider, model,
+                   COUNT(*), COALESCE(SUM(outcome!='success'),0),
+                   COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+                   COALESCE(SUM(cached_tokens),0), COALESCE(SUM(reasoning_tokens),0),
+                   COALESCE(SUM(total_tokens),0), COALESCE(SUM(latency),0), COUNT(latency)
+            FROM cpa_events WHERE
+            """ + " " + heatmapClauses.joined(separator: " AND ") + """
+             GROUP BY 1, provider COLLATE BINARY, model COLLATE BINARY
+             ORDER BY day_ts, provider, model
+            """
+        let heatmapStatement = try prepare(heatmapSQL)
+        defer { sqlite3_finalize(heatmapStatement) }
+        try bind(heatmapValues, to: heatmapStatement)
+        var heatmapBuckets: [UsageBucket] = []
+        while true {
+            try Task.checkCancellation()
+            let result = sqlite3_step(heatmapStatement)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else { throw StoreError.queryFailed }
+            heatmapBuckets.append(self.bucket(heatmapStatement, startColumn: 0))
+        }
         return CPAUsageDashboardReport(summary: summary, trend: points, hourly: hourly,
-            categories: includesHistory ? rows : Array(rows.prefix(boundedLimit)), hasMoreCategories: rows.count > boundedLimit)
+            categories: includesHistory ? rows : Array(rows.prefix(boundedLimit)),
+            hasMoreCategories: rows.count > boundedLimit, heatmapBuckets: heatmapBuckets)
     }
 
     /// 仅在旧存储迁移时逐桶扣除已导入明细，得到永久历史基线；结果写入独立的数值表。

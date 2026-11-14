@@ -173,9 +173,15 @@ public nonisolated struct WorkspaceSession: Identifiable, Sendable {
     public let messageCount: Int
     public let resumeCommand: String
     public let relationship: WorkspaceSessionRelationship
+    /// 是否允许作为主会话出现在左侧浏览列表中。
+    /// 已归档、跨客户端导入、非交互子探针（如 sdk-cli / 自定义非交互 originator）及空命令壳会话设置为 false，
+    /// 但仍完整保留在 WorkspaceViewModel.sessions 中，确保级联删除、路径安全校验与磁盘空间统计不丢失记录。
+    public let isBrowseVisible: Bool
     public var parentSessionID: String? { relationship.parentSessionID }
     public var isSubagent: Bool { relationship.isSubagent }
     public var isMainSession: Bool { relationship.isMainSession }
+    /// 是否在会话管理主列表与数量徽标中作为有效主会话展示。
+    public var isMainListVisible: Bool { isMainSession && isBrowseVisible }
 
     public init(
         id: String,
@@ -192,7 +198,8 @@ public nonisolated struct WorkspaceSession: Identifiable, Sendable {
         resumeCommand: String,
         parentSessionID: String? = nil,
         isSubagent: Bool? = nil,
-        relationship: WorkspaceSessionRelationship? = nil
+        relationship: WorkspaceSessionRelationship? = nil,
+        isBrowseVisible: Bool = true
     ) {
         self.id = id
         self.agent = agent
@@ -211,6 +218,7 @@ public nonisolated struct WorkspaceSession: Identifiable, Sendable {
         self.relationship = relationship.map { value in
             parentSessionID != nil || isSubagent == true ? value.merging(legacy) : value
         } ?? legacy
+        self.isBrowseVisible = isBrowseVisible
     }
 
     /// 补充关系元数据不改变标题、正文位置和活动时间；用于同一 AGY 会话的摘要与缓存合并。
@@ -218,7 +226,7 @@ public nonisolated struct WorkspaceSession: Identifiable, Sendable {
         Self(id: id, agent: agent, title: title, summary: summary, projectDirectory: projectDirectory,
              projectName: projectName, createdAt: createdAt, lastActiveAt: lastActiveAt, filePath: filePath,
              fileSizeBytes: fileSizeBytes, messageCount: messageCount, resumeCommand: resumeCommand,
-             relationship: relationship.merging(value))
+             relationship: relationship.merging(value), isBrowseVisible: isBrowseVisible)
     }
 
     /// 数据库优先保留展示信息，但旧库缺少 rollout_path 时必须接纳文件扫描得到的正文路径。
@@ -231,7 +239,8 @@ public nonisolated struct WorkspaceSession: Identifiable, Sendable {
                     lastActiveAt: lastActiveAt, filePath: needsFile && hasFile ? other.filePath : filePath,
                     fileSizeBytes: needsFile && hasFile ? other.fileSizeBytes : fileSizeBytes,
                     messageCount: messageCount, resumeCommand: resumeCommand,
-                    relationship: relationship.merging(other.relationship))
+                    relationship: relationship.merging(other.relationship),
+                    isBrowseVisible: isBrowseVisible && other.isBrowseVisible)
     }
 }
 

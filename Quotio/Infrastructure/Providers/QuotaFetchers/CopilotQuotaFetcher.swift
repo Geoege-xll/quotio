@@ -367,14 +367,21 @@ actor CopilotQuotaFetcher {
             .map { NSString(string: $0).expandingTildeInPath }
     }
 
+    /// 请求 GitHub 用户画像以解析登录名。严格校验返回的 id 必须大于 0 且排除布尔值，
+    /// login 长度限制在 1...80 字符且不包含控制字符，请求头添加 User-Agent: Quotio。
     private func fetchGitHubLogin(accessToken: String, host: GitHubHost) async -> String? {
         var request = URLRequest(url: host.apiURL("/user"))
         request.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.addValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.addValue("Quotio", forHTTPHeaderField: "User-Agent")
         guard let (data, response) = try? await GitHubHTTP.data(for: request, using: session),
               let http = response as? HTTPURLResponse, 200...299 ~= http.statusCode,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return json["login"] as? String
+        guard let id = QuotaResponseValue.number(json["id"]), id > 0 else { return nil }
+        guard let login = QuotaResponseValue.string(json["login"]),
+              login.count <= 80,
+              !login.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        return login
     }
 
     private func loadAuthFile(from path: String) -> CopilotAuthFile? {

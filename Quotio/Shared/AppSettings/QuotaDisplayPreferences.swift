@@ -25,17 +25,13 @@ enum QuotaDisplayMode: String, Codable, CaseIterable, Identifiable {
         }
     }
     
-    /// Convert a remaining percentage to the display value based on mode.
-    /// A negative input is the "no data" sentinel and is propagated as -1 so it can
-    /// never surface as a fake percentage (e.g. 100 - (-1) = 101%). Valid input is
-    /// clamped to 0-100 before conversion.
+    /// 将剩余百分比按当前模式（已用/剩余）转换为展示数值。
+    /// 负数表示未知/无数据哨兵，继续传递 -1 避免产生虚假百分比。
+    /// 有效数值限制在 0...100 并采用向零取整截断（.towardZero），确保 100 - remaining 与 remaining 之和精确等于 100。
     func displayValue(from remainingPercent: Double) -> Double {
         guard remainingPercent >= 0 else { return -1 }
-        let clamped = min(100, max(0, remainingPercent))
-        switch self {
-        case .used: return 100 - clamped
-        case .remaining: return clamped
-        }
+        let remaining = min(100, max(0, remainingPercent)).rounded(.towardZero)
+        return self == .used ? 100 - remaining : remaining
     }
     
     var suffixKey: String {

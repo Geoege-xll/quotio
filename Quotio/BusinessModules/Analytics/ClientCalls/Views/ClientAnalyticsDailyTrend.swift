@@ -1,9 +1,10 @@
 // Copyright 2026 AIUsage contributors. Licensed under Apache-2.0.
-// 沿用原客户端 Token 趋势的折线、悬停覆盖层与明细口径；Quotio 改为双图共用日期的单卡布局。
+// 客户端调用每日趋势卡片：仅展示每日工具调用次数柱状图、悬停读数及可折叠逐日明细，
+// 已按用户要求彻底移除本地会话 Token 折线图及 Token 明细列。
 import SwiftUI
 import Charts
 
-/// 一个标题、一层卡片承载两种趋势。只有日期轴共享，Token 与次数各用独立纵轴。
+/// 单层卡片承载工具调用每日柱状趋势。
 /// 悬停状态仅由覆盖层与读数观察，鼠标移动不会重新聚合账本或构造整页图表。
 struct ClientAnalyticsDailyTrend: View {
     let data: ClientAnalyticsDailyTrendData
@@ -15,12 +16,11 @@ struct ClientAnalyticsDailyTrend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("usage.dailyTrend".localized(), systemImage: "chart.xyaxis.line").font(.headline)
+                Label("usage.dailyTrend".localized(), systemImage: "chart.bar.xaxis").font(.headline)
                 Spacer()
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }
-            plotSection(.tokens, height: 170)
-            plotSection(.tools, height: 110)
+            plotSection(.tools, height: 140)
             ClientAnalyticsTrendReadout(data: data, state: hoverState)
             ClientAnalyticsTrendDetailsDisclosure(days: data.days, isExpanded: $detailsExpanded)
         }
@@ -35,7 +35,7 @@ struct ClientAnalyticsDailyTrend: View {
             HStack {
                 Text(metric.titleKey.localized()).font(.caption.weight(.semibold))
                 Spacer()
-                Text((metric == .tokens ? "usage.tokens" : "clientAnalytics.trend.toolsUnit").localized())
+                Text("clientAnalytics.trend.toolsUnit".localized())
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if data.available(metric) {
@@ -63,8 +63,7 @@ struct ClientAnalyticsTrendDetailsDisclosure: View {
     }
 }
 
-/// 两图使用同一连续日期 domain、日期刻度和固定宽度的纵轴标签。
-/// 不能仅共享日期范围：若纵轴按文本自动占宽，较大的 Token 数会把上图推向右侧。
+/// 连续日期 domain、均匀日期刻度和固定宽度的纵轴标签，确保不同日期区间下柱体对齐稳定。
 struct ClientAnalyticsTrendPlot: View, Equatable {
     let data: ClientAnalyticsDailyTrendData
     let metric: ClientAnalyticsDailyTrendData.Metric
@@ -84,29 +83,16 @@ struct ClientAnalyticsTrendPlot: View, Equatable {
             ? .dateTime.year(.twoDigits).month(.twoDigits).day(.twoDigits)
             : .dateTime.month(.twoDigits).day(.twoDigits)
         Chart(points) { day in
-            if metric == .tokens {
-                AreaMark(x: .value("usage.day".localized(), day.date),
-                         y: .value(metric.titleKey.localized(), day.tokens ?? 0))
-                    .foregroundStyle(LinearGradient(colors: [accent.opacity(0.18), accent.opacity(0.02)],
-                                                     startPoint: .top, endPoint: .bottom))
-                LineMark(x: .value("usage.day".localized(), day.date),
-                         y: .value(metric.titleKey.localized(), day.tokens ?? 0))
-                    .foregroundStyle(accent).lineStyle(StrokeStyle(lineWidth: 2))
-                    .symbol(.circle).symbolSize(points.count < 32 ? 16 : 0)
-                    .accessibilityLabel(day.date.formatted(date: .abbreviated, time: .omitted))
-                    .accessibilityValue((day.tokens ?? 0).formatted())
-            } else {
-                // 显式给出以该日零点为中心的左右边界及从零起的上下边界。
-                // 日期分箱会默认移到中午，而 xStart／xEnd／y 的 BarMark 表示水平区间；
-                // RectangleMark 四边界才能同时保证日期对齐和真实的竖向柱高。
-                RectangleMark(xStart: .value("usage.day".localized(), day.barStart),
-                        xEnd: .value("usage.day".localized(), day.barEnd),
-                        yStart: .value(metric.titleKey.localized(), 0),
-                        yEnd: .value(metric.titleKey.localized(), day.tools ?? 0))
-                    .foregroundStyle(accent.opacity(0.7)).cornerRadius(2)
-                    .accessibilityLabel(day.date.formatted(date: .abbreviated, time: .omitted))
-                    .accessibilityValue((day.tools ?? 0).formatted())
-            }
+            // 显式给出以该日零点为中心的左右边界及从零起的上下边界。
+            // 日期分箱会默认移到中午，而 xStart／xEnd／y 的 BarMark 表示水平区间；
+            // RectangleMark 四边界才能同时保证日期对齐和真实的竖向柱高。
+            RectangleMark(xStart: .value("usage.day".localized(), day.barStart),
+                    xEnd: .value("usage.day".localized(), day.barEnd),
+                    yStart: .value(metric.titleKey.localized(), 0),
+                    yEnd: .value(metric.titleKey.localized(), day.tools ?? 0))
+                .foregroundStyle(accent.opacity(0.7)).cornerRadius(2)
+                .accessibilityLabel(day.date.formatted(date: .abbreviated, time: .omitted))
+                .accessibilityValue((day.tools ?? 0).formatted())
         }
         .chartXScale(domain: data.domain)
         .chartYScale(domain: 0...data.maximum(metric))
@@ -135,7 +121,7 @@ struct ClientAnalyticsTrendPlot: View, Equatable {
     }
 }
 
-/// 鼠标和点击均通过真实绘图区坐标命中完整日明细；两图共用一个选中日，
+/// 鼠标和点击均通过真实绘图区坐标命中完整日明细；
 /// 提示线在覆盖层绘制，不把动态 RuleMark 插入图表而引发重复坐标布局。
 private struct ClientAnalyticsTrendHoverLayer: View {
     let data: ClientAnalyticsDailyTrendData
@@ -176,7 +162,7 @@ private struct ClientAnalyticsTrendHoverLayer: View {
     }
 }
 
-/// 同日完整读数同时显示 Token 与工具次数；未知保留占位，不使用图表抽样点替代事实。
+/// 单日完整读数仅展示工具调用次数；未知保留占位，不使用图表抽样点替代事实。
 struct ClientAnalyticsTrendReadout: View {
     let data: ClientAnalyticsDailyTrendData
     let state: UsageTrendHoverState
@@ -186,7 +172,6 @@ struct ClientAnalyticsTrendReadout: View {
             if let date = state.date, let day = data.nearest(to: date) {
                 Text(day.date, format: .dateTime.year().month().day())
                 Spacer(minLength: 4)
-                Text((day.tokens?.formatted() ?? "—") + " Tokens")
                 Text(String(format: "clientAnalytics.trend.toolsReadout".localized(), day.tools?.formatted() ?? "—"))
             } else {
                 Text("clientAnalytics.trend.hoverHint".localized()).foregroundStyle(.secondary)
@@ -198,7 +183,7 @@ struct ClientAnalyticsTrendReadout: View {
     }
 }
 
-/// 一个折叠明细承载两份数值；LazyVStack 保留长历史逐日访问能力，
+/// 折叠明细仅展示日期与工具调用次数；LazyVStack 保留长历史逐日访问能力，
 /// 展开前不创建成千上万行，展示不改变已有来源与日期筛选。
 struct ClientAnalyticsTrendDetails: View {
     let days: [ClientAnalyticsDailyTrendData.Day]
@@ -207,14 +192,12 @@ struct ClientAnalyticsTrendDetails: View {
         LazyVStack(spacing: 8) {
             HStack {
                 Text("usage.day".localized()).frame(maxWidth: .infinity, alignment: .leading)
-                Text("clientAnalytics.trend.tokens".localized()).frame(maxWidth: .infinity, alignment: .trailing)
                 Text("clientAnalytics.trend.tools".localized()).frame(maxWidth: .infinity, alignment: .trailing)
             }.font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(days) { day in
                 HStack {
                     Text(day.date, format: .dateTime.year().month().day())
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(day.tokens?.formatted() ?? "—").frame(maxWidth: .infinity, alignment: .trailing)
                     Text(day.tools?.formatted() ?? "—").frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 .font(.caption).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)

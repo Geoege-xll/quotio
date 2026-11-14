@@ -10,6 +10,29 @@ nonisolated struct CopilotNativeCredential: Sendable {
 }
 
 extension CopilotQuotaFetcher {
+    /// 校验从系统钥匙串读取 Copilot 凭据时的账号名。
+    /// 排除空字符串、长度超过 256 字符的异常名称以及裸域名 "github.com"，要求必须为纯 ASCII 字母、数字、连字符或下划线。
+    nonisolated static func isValidCopilotKeychainAccount(_ account: String) -> Bool {
+        guard !account.isEmpty, account.count <= 256, account != "github.com" else { return false }
+        return account.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+    }
+
+    /// 解码从系统钥匙串（gh CLI）读取的令牌数据。
+    /// gh 工具在某些平台使用 go-keyring 存储，带 "go-keyring-base64:" 前缀的需做 Base64 解码，其余按标准 UTF-8 字符串去除空白处理。
+    nonisolated static func decodeCopilotKeychainToken(_ data: Data) -> String? {
+        guard let string = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !string.isEmpty else { return nil }
+        let prefix = "go-keyring-base64:"
+        if string.hasPrefix(prefix) {
+            let base64String = String(string.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let payload = Data(base64Encoded: base64String),
+                  let decoded = String(data: payload, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !decoded.isEmpty else { return nil }
+            return decoded
+        }
+        return string
+    }
+
     /// 路径保持调用者的原始 Unicode 拼写，不套用 Claude 的 NFC 或标准路径处理。
     /// 不读环境变量来决定 token 目的地；仅接受文件中的受支持主机键或显式主机元数据。
     nonisolated static func nativeCredentials(paths: [String]) -> [CopilotNativeCredential] {
@@ -48,11 +71,19 @@ extension CopilotQuotaFetcher {
             } else { context = inherited }
             // 未限定主机的兼容叶子才使用旧 github.com；普通包装层不提前绑定公共主机。
             let host = context ?? .githubCom
-            let token = ["oauth_token", "oauthToken", "access_token"].compactMap { dictionary[$0] as? String }
+            var token = ["oauth_token", "oauthToken", "access_token"].compactMap { dictionary[$0] as? String }
                 .first { !$0.isEmpty }
+            let username = ["user", "username", "login"].compactMap { dictionary[$0] as? String }
+                .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            // 文件内未直接配置 inline token 时，对 hosts.yml 来源且合法的账号名尝试回退至系统钥匙串（gh:<host>）查询
+            if token == nil, let user = username, isValidCopilotKeychainAccount(user),
+               (path.hasSuffix(".yml") || path.hasSuffix(".yaml")) {
+                if let raw = KeychainHelper.readExternalCredential(service: "gh:\(host.value)", account: user),
+                   let decoded = decodeCopilotKeychainToken(raw) {
+                    token = decoded
+                }
+            }
             if let token {
-                let username = ["user", "username", "login"].compactMap { dictionary[$0] as? String }
-                    .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 result.append(CopilotNativeCredential(host: host, token: token, username: username, path: path))
             }
             for (key, child) in dictionary where child is [String: Any] || child is [Any] {
@@ -83,3 +114,16 @@ extension CopilotQuotaFetcher {
         }
     }
 }
+
+extension CopilotNativeCredential {
+    /// 校验从钥匙串读取 Copilot 凭据时的账号名（限制 1...256 字符 ASCII 字母数字-_，且不为 github.com）
+    nonisolated static func isValidCopilotKeychainAccount(_ account: String) -> Bool {
+        CopilotQuotaFetcher.isValidCopilotKeychainAccount(account)
+    }
+
+    /// 解码从钥匙串读取的 Copilot 令牌（支持 go-keyring-base64: 前缀还原）
+    nonisolated static func decodeCopilotKeychainToken(_ data: Data) -> String? {
+        CopilotQuotaFetcher.decodeCopilotKeychainToken(data)
+    }
+}
+

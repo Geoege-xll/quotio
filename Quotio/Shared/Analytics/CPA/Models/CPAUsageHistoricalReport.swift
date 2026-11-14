@@ -87,12 +87,34 @@ nonisolated struct CPAUsageHistoricalReport {
     }
 
     /// 与新事件相加前，调用者已经扣除了事件索引覆盖的日桶部分。
-    /// 总览、趋势和排行都合并同一批历史，排行完成合并后才取前 N 项。
+    /// 总览、趋势和排行都合并同一批历史，排行完成合并后才取前 N 项；
+    /// 热力图独立接收 52 周非时间筛选的历史日桶，避免短时间窗（如今日）隐藏历史活跃格。
     func merging(into original: CPAUsageDashboardReport, query: CPAUsageQuery,
-                 dimension: CPAUsageDimension, metric: CPAUsageChartMetric, limit: Int) -> CPAUsageDashboardReport {
+                 dimension: CPAUsageDimension, metric: CPAUsageChartMetric, limit: Int,
+                 heatmapHistoryBuckets: [UsageBucket] = []) -> CPAUsageDashboardReport {
         var report = original
         report.omittedHistoricalRequests = omittedRequests
         report.summary = mergingSummary(into: original.summary, includeHistoricalMetrics: true)
+        if !heatmapHistoryBuckets.isEmpty {
+            var mergedHeatmap = Dictionary(uniqueKeysWithValues: report.heatmapBuckets.map { ($0.id, $0) })
+            for bucket in heatmapHistoryBuckets {
+                if var existing = mergedHeatmap[bucket.id] {
+                    existing.requests += bucket.requests
+                    existing.failures += bucket.failures
+                    existing.inputTokens += bucket.inputTokens
+                    existing.outputTokens += bucket.outputTokens
+                    existing.cachedTokens += bucket.cachedTokens
+                    existing.reasoningTokens += bucket.reasoningTokens
+                    existing.totalTokens += bucket.totalTokens
+                    existing.latencyTotal += bucket.latencyTotal
+                    existing.latencySamples += bucket.latencySamples
+                    mergedHeatmap[bucket.id] = existing
+                } else {
+                    mergedHeatmap[bucket.id] = bucket
+                }
+            }
+            report.heatmapBuckets = mergedHeatmap.values.sorted { $0.id < $1.id }
+        }
         guard !buckets.isEmpty else { return report }
         report.historicalRequests = report.summary.historicalRequests
         // 未限定完整窗口时，历史只有日期，无法重建上游首末事件跨度，吞吐量应留空。

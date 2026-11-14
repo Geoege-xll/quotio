@@ -12,9 +12,11 @@ final class UsageHeatmapPresentationTests: XCTestCase {
     private func date(_ day: Int) -> Date {
         calendar.date(from: DateComponents(year: 2026, month: 3, day: day))!
     }
-    private func bucket(_ day: Int, provider: String = "a", tokens: Int) -> UsageBucket {
-        var bucket = UsageBucket(day: date(day), provider: provider, model: "model")
+    private func bucket(_ day: Int, provider: String = "a", model: String = "model",
+                        tokens: Int, requests: Int = 1) -> UsageBucket {
+        var bucket = UsageBucket(day: date(day), provider: provider, model: model)
         bucket.totalTokens = tokens
+        bucket.requests = requests
         return bucket
     }
     func testWeekStartsOnMondayEvenWhenLocaleStartsOnSunday() {
@@ -53,5 +55,42 @@ final class UsageHeatmapPresentationTests: XCTestCase {
         let history = UsageStatisticsPresentation(buckets: buckets, interval: nil, provider: "a", model: nil)
         XCTAssertEqual(summary.totals.totalTokens, 20)
         XCTAssertEqual(history.totals.totalTokens, 30, "热力图保留来源全年数据，不被今日筛选裁掉")
+    }
+
+    func testRequestsMetricUsesRequestCountsThresholdsPeakAndModelSorting() {
+        let buckets = [
+            bucket(8, provider: "a", model: "low-req-high-tok", tokens: 9_000, requests: 2),
+            bucket(8, provider: "b", model: "high-req-low-tok", tokens: 100, requests: 25),
+            bucket(9, provider: "a", model: "zero-tok-active-req", tokens: 0, requests: 50)
+        ]
+        let requestsView = UsageHeatmapPresentation(
+            buckets: buckets,
+            now: date(10),
+            firstCollectedAt: date(8),
+            metric: .requests,
+            calendar: calendar
+        )
+        XCTAssertEqual(requestsView.totals.requests, 77)
+        XCTAssertEqual(requestsView.activeDays, 2, "0 Token 但有请求的日子在请求口径下仍算作活跃日")
+        XCTAssertEqual(requestsView.peak?.date, date(9))
+        XCTAssertEqual(requestsView.peak?.totals.requests, 50)
+        XCTAssertEqual(requestsView.intensity(0), 0)
+        XCTAssertEqual(requestsView.intensity(50), 4)
+
+        let day8 = requestsView.weeks.flatMap(\.days).first { $0.date == date(8) }!
+        XCTAssertEqual(day8.models.map(\.model), ["high-req-low-tok", "low-req-high-tok"],
+                       "请求口径下当日模型列表应按请求数降序排列")
+
+        let tokensView = UsageHeatmapPresentation(
+            buckets: buckets,
+            now: date(10),
+            firstCollectedAt: date(8),
+            metric: .tokens,
+            calendar: calendar
+        )
+        XCTAssertEqual(tokensView.activeDays, 1, "Token 口径下 0 Token 日不计入活跃日")
+        XCTAssertEqual(tokensView.peak?.date, date(8))
+        let tokenDay8 = tokensView.weeks.flatMap(\.days).first { $0.date == date(8) }!
+        XCTAssertEqual(tokenDay8.models.map(\.model), ["low-req-high-tok", "high-req-low-tok"])
     }
 }

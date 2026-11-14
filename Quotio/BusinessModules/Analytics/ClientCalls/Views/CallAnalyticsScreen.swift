@@ -1,12 +1,12 @@
 // Copyright 2026 AIUsage contributors
 // SPDX-License-Identifier: Apache-2.0
-// 合并本地客户端用量（Token账本）与调用分析（工具/MCP/Skill），统一本地日志扫描与视图呈现。
+// 客户端调用分析页面：仅保留本地工具调用（Tool / MCP / Skill / Subagent）统计，
+// 已按用户要求彻底移除所有本地会话 Token 卡片、Token 折线趋势、Token 热力图及模型 Token 分布。
 import SwiftUI
 
 struct CallAnalyticsScreen: View {
     @Environment(\.colorScheme) private var colorScheme
     let viewModel: CallAnalyticsViewModel
-    var clientUsage: ClientUsageViewModel? = nil
     /// Tab 隐藏时视图继续保留滚动和展开状态，但不再扫描本地会话。
     var isActive = true
     @AppStorage("callAnalytics.ui.range") private var rangeRaw = CallAnalyticsDateRange.month.rawValue
@@ -17,7 +17,6 @@ struct CallAnalyticsScreen: View {
     @State private var expandedServers = Set<String>()
     @State private var showCustomPopover = false
     @State private var showSourceHelp = false
-    @State private var hoverState = UsageHeatmapHoverState()
 
     private var scope: CallReplicaScope { CallReplicaScope(rawValue: scopeRaw) ?? .all }
     private var range: CallAnalyticsDateRange { CallAnalyticsDateRange(rawValue: rangeRaw) ?? .month }
@@ -30,47 +29,22 @@ struct CallAnalyticsScreen: View {
     private var scopeBinding: Binding<CallReplicaScope> { Binding(get: { scope }, set: { scopeRaw = $0.rawValue }) }
     private var rangeBinding: Binding<CallAnalyticsDateRange> { Binding(get: { range }, set: { rangeRaw = $0.rawValue }) }
 
-    private func clientDisplay(now: Date) -> ClientUsageViewModel.Presentation? {
-        guard let clientUsage else { return nil }
-        let interval = range.usagePeriod.interval(now: now, start: customStart, end: customEnd, calendar: .current)
-        return clientUsage.presentation(interval: interval, source: scope.clientUsageSource)
-    }
-
-    private func clientHistory() -> ClientUsageViewModel.Presentation? {
-        guard let clientUsage else { return nil }
-        return clientUsage.presentation(interval: nil, source: scope.clientUsageSource)
-    }
-
-    private var isAnyLoading: Bool {
-        viewModel.isLoading || (clientUsage?.isLoading ?? false)
-    }
-
     var body: some View {
-        GeometryReader { viewport in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    controlDeck
-                    if let error = viewModel.errorMessage {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.orange).accessibilityElement(children: .combine)
-                    }
-                    if let errorKey = clientUsage?.errorKey {
-                        Label(errorKey.localized(), systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.orange).accessibilityElement(children: .combine)
-                    }
-
-                    sectionContent(now: Date(), width: viewport.size.width - 40)
-
-                    collectionDetailsSection
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                controlDeck
+                if let error = viewModel.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange).accessibilityElement(children: .combine)
                 }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                sectionContent(now: Date())
+
+                collectionDetailsSection
             }
-            .overlay(alignment: .topLeading) {
-                UsageHeatmapOverlay(state: hoverState, viewportSize: viewport.size)
-            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .coordinateSpace(.named("usageHeatmapPage"))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .analyticsPageChrome(colorScheme)
         // 扫描是整页操作，使用系统导航工具栏；扫描中保留取消而不是重复启动。
@@ -82,30 +56,17 @@ struct CallAnalyticsScreen: View {
         }
         .onChange(of: isActive, initial: true) { _, active in
             viewModel.setPageActive(active)
-            clientUsage?.setPageActive(active)
-            if !active { hoverState.selection = nil }
         }
         .onDisappear {
             viewModel.setPageActive(false)
-            clientUsage?.setPageActive(false)
-            hoverState.selection = nil
         }
-        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
-            clientUsage?.reloadPresentation()
-            hoverState.selection = nil
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
-            clientUsage?.reloadPresentation()
-            hoverState.selection = nil
-        }
-        .onChange(of: scopeRaw) { applyFilters(); expandedServers.removeAll(); hoverState.selection = nil }
-        .onChange(of: rangeRaw) { applyFilters(); hoverState.selection = nil }
-        .onChange(of: customStartTS) { applyFilters(); hoverState.selection = nil }
-        .onChange(of: customEndTS) { applyFilters(); hoverState.selection = nil }
+        .onChange(of: scopeRaw) { applyFilters(); expandedServers.removeAll() }
+        .onChange(of: rangeRaw) { applyFilters() }
+        .onChange(of: customStartTS) { applyFilters() }
+        .onChange(of: customEndTS) { applyFilters() }
     }
 
-    /// 来源与时间是整页共用的筛选条件。统一看板始终展示 Token 与调用，取消旧的
-    /// 整页维度切换；旧 clientAnalytics.ui.section 偏好保留在磁盘但不再隐藏任一模块。
+    /// 来源与时间是整页共用的筛选条件。
     private var controlDeck: some View {
         VStack(alignment: .leading, spacing: 12) {
             cluster("callReplica.source", icon: "square.stack.3d.up") {
@@ -145,36 +106,22 @@ struct CallAnalyticsScreen: View {
         .quotioCard(cornerRadius: QuotioTheme.Radius.lg, padding: 14)
     }
 
-    /// 共用同一份来源／时间过滤结果，先显示融合概览，再沿用完整综合分析内容。
-    /// 合并发生在展示层，Token 和工具调用仍按各自的已有口径计算，不拼接原始账本。
+    /// 共用同一份来源／时间过滤结果，展示工具调用概览、每日调用趋势、排行榜与未使用清单。
     @ViewBuilder
-    private func sectionContent(now: Date, width: CGFloat) -> some View {
-        let display = clientDisplay(now: now)
-        ClientAnalyticsOverview(client: display, calls: derived)
-        if display?.lacksReasoning == true {
-            Text("usage.pi.reasoningUnavailable".localized()).font(.caption).foregroundStyle(.secondary)
-        }
-        if !viewModel.report.canDisplayTotals && !viewModel.isLoading && (display?.available != true) {
+    private func sectionContent(now: Date) -> some View {
+        ClientAnalyticsOverview(calls: derived)
+        if !viewModel.report.canDisplayTotals && !viewModel.isLoading {
             emptyState
         } else {
-            // 两份已筛选日汇总只在展示层对齐，使用调用筛选的包含结束日边界；
-            // 单日也保留两个独立刻度，共享一个悬停日与完整明细，不增加切换控件。
             let bounds = range.bounds(now: now, start: customStart, end: customEnd)
             ClientAnalyticsDailyTrend(
-                data: ClientAnalyticsDailyTrendData(tokenDays: display?.statistics.days ?? [],
-                    tokensAvailable: display?.available == true, calls: viewModel.report.trend,
+                data: ClientAnalyticsDailyTrendData(
+                    calls: viewModel.report.trend,
                     toolsAvailable: viewModel.report.canDisplayTotals,
                     lowerDay: bounds.0, upperDay: bounds.1, now: now),
                 subtitle: range == .custom ? customRangeLabel : range.localizationKey.localized(),
                 accent: scopeTint(scope))
-            if let history = clientHistory(), history.available {
-                dataRange(history: history.statistics)
-                heatmaps(history: history.statistics, now: now, width: width)
-            }
             rankingCard
-            if let display, display.available, !display.statistics.buckets.isEmpty {
-                UsageStatisticsInsights(presentation: display.statistics, contentWidth: max(0, width))
-            }
             zeroCallCard
         }
         if !derived.agents.isEmpty { agentCard }
@@ -215,21 +162,19 @@ struct CallAnalyticsScreen: View {
 
     private var scanButton: some View {
         Button {
-            if isAnyLoading {
+            if viewModel.isLoading {
                 viewModel.cancel()
-                clientUsage?.cancelRefresh()
             } else {
                 viewModel.refresh()
-                clientUsage?.refresh()
             }
         } label: {
             HStack(spacing: 6) {
-                if isAnyLoading { ProgressView().controlSize(.small) }
-                Label((isAnyLoading ? "callAnalytics.cancel" : "callReplica.rescan").localized(),
-                      systemImage: isAnyLoading ? "xmark.circle" : "arrow.clockwise")
+                if viewModel.isLoading { ProgressView().controlSize(.small) }
+                Label((viewModel.isLoading ? "callAnalytics.cancel" : "callReplica.rescan").localized(),
+                      systemImage: viewModel.isLoading ? "xmark.circle" : "arrow.clockwise")
             }
         }
-        .help((isAnyLoading ? "callAnalytics.cancel" : "callReplica.rescan").localized())
+        .help((viewModel.isLoading ? "callAnalytics.cancel" : "callReplica.rescan").localized())
         .accessibilityIdentifier("callAnalyticsScanButton")
     }
 
@@ -291,10 +236,6 @@ struct CallAnalyticsScreen: View {
     private func applyFilters() {
         viewModel.source = scope.source; viewModel.range = range; viewModel.kind = nil
         viewModel.customStart = customStart; viewModel.customEnd = customEnd
-        if let clientUsage {
-            let interval = range.usagePeriod.interval(now: Date(), start: customStart, end: customEnd, calendar: .current)
-            _ = clientUsage.presentation(interval: interval, source: scope.clientUsageSource)
-        }
     }
 
     private var rankingCard: some View {
@@ -334,127 +275,19 @@ struct CallAnalyticsScreen: View {
         }
     }
 
-    private func heatmaps(history: UsageStatisticsPresentation, now: Date, width: CGFloat) -> some View {
-        let groups = Dictionary(grouping: history.buckets, by: \.provider)
-        return ForEach(groups.keys.sorted(), id: \.self) { provider in
-            UsageStatisticsHeatmap(
-                title: provider.isEmpty ? "usage.unknownProvider".localized() : provider,
-                presentation: UsageHeatmapPresentation(
-                    buckets: groups[provider] ?? [],
-                    now: now,
-                    firstCollectedAt: (groups[provider] ?? []).map(\.day).min()
-                ),
-                accent: UsageStatisticsPalette.source(provider, scheme: colorScheme),
-                availableWidth: max(0, width),
-                onHover: { hoverState.selection = $0 }
-            )
-        }
-    }
-
-    @ViewBuilder
-    private func dataRange(history: UsageStatisticsPresentation) -> some View {
-        if let first = history.days.first?.day, let last = history.days.last?.day {
-            Label(
-                String(format: "usage.replica.dataRange".localized(),
-                       first.formatted(date: .numeric, time: .omitted),
-                       last.formatted(date: .numeric, time: .omitted)),
-                systemImage: "info.circle"
-            )
-            .font(.caption).foregroundStyle(.secondary)
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(QuotioTheme.Colors.cardInset(for: colorScheme), in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous))
-        }
-    }
-
     private var collectionDetailsSection: some View {
         DisclosureGroup("analytics.collectionDetails".localized()) {
             VStack(alignment: .leading, spacing: 14) {
                 sourceFooter
-                if let clientUsage {
-                    Divider()
-                    clientCollectionStatus(clientUsage)
-                }
                 if scope == .pi || scope == .all {
                     Text("callAnalytics.pi.coverage".localized()).font(.caption).foregroundStyle(.secondary)
                 }
                 Text("callAnalytics.aggregationTimeZone".localized() + " · " + viewModel.aggregationTimeZone.identifier)
                     .font(.caption2).foregroundStyle(.secondary)
-                Text("usage.client.retention".localized())
-                    .font(.caption2).foregroundStyle(.secondary)
             }
             .padding(.top, 10)
         }
         .font(.caption)
-    }
-
-    private func clientCollectionStatus(_ clientUsage: ClientUsageViewModel) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                if clientUsage.isLoading { ProgressView().controlSize(.small) }
-                Text((clientUsage.isLoading ? "usage.client.scanning" : "usage.client.localLedger").localized())
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                if let date = clientUsage.snapshot.collectedAt {
-                    Text(date, format: .dateTime.year().month().day().hour().minute().second())
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            let activeSources = ClientUsageSource.allCases.filter { scope.clientUsageSource == nil || $0 == scope.clientUsageSource }
-            ForEach(activeSources) { item in
-                clientSourceRow(clientUsage: clientUsage, source: item)
-            }
-        }
-    }
-
-    private func clientSourceRow(clientUsage: ClientUsageViewModel, source: ClientUsageSource) -> some View {
-        let status = clientUsage.snapshot.statuses.first { $0.source == source }
-        let activity = clientUsage.activities[source]
-        let busy = activity?.phase == .queued || activity?.phase == .scanning || activity?.phase == .saving
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if busy {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Circle().fill(status?.hasErrors == true ? Color.orange : (status?.available == true ? Color.green : Color.secondary.opacity(0.4)))
-                        .frame(width: 7, height: 7)
-                }
-                Text(source.title)
-                    .font(.caption.weight(.medium))
-                Text(String(format: clientStatusKey(activity: activity, status: status).localized(),
-                            Int64(status?.incompleteSessionCount ?? 0)))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if let progress = activity?.progress, progress.filesTotal > 0 {
-                    Text(String(format: "usage.client.fileProgress".localized(), progress.filesCompleted, progress.filesTotal))
-                        .font(.caption.monospacedDigit())
-                }
-            }
-            if busy, let progress = activity?.progress, progress.bytesTotal > 0 {
-                HStack {
-                    ProgressView(value: min(Double(progress.bytesRead), Double(progress.bytesTotal)), total: Double(progress.bytesTotal))
-                        .frame(maxWidth: 180)
-                    Text(ByteCountFormatter.string(fromByteCount: progress.bytesRead, countStyle: .file))
-                        .font(.caption2.monospacedDigit())
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func clientStatusKey(activity: ClientUsageActivity?, status: ClientUsageStatus?) -> String {
-        switch activity?.phase {
-        case .queued: return "usage.client.queued"
-        case .scanning: return "usage.client.scanning"
-        case .saving: return "usage.client.saving"
-        case .cancelled: return "usage.client.cancelledShort"
-        case .failed: return "usage.client.readFailed"
-        default:
-            guard let status else { return "usage.client.queued" }
-            return status.readingStatusKey
-        }
     }
 
     private var sourceFooter: some View {

@@ -181,10 +181,166 @@ enum KeychainHelper {
         readExternalCredentialRecord(service: service, account: account)?.data
     }
 
+    /// 判断是否属于由 CLI 工具（如 Claude Code、gh、Cursor、Factory）直接通过 /usr/bin/security 管理的钥匙串服务。
+    /// 这类工具使用 `security add-generic-password -U` 保存密码时会将钥匙串项的分区列表重置为 apple-tool:，
+    /// 导致应用进程内 SecItemCopyMatching 遭遇 errSecAuthFailed 或 errSecInteractionNotAllowed。
+    nonisolated static func isCLIExternalService(service: String, account: String? = nil) -> Bool {
+        if service == "Claude Code-credentials" || service.hasPrefix("Claude Code-credentials-") { return true }
+        if service == "gh:github.com" || service.hasPrefix("gh:") { return true }
+        if service == "cursor-access-token" { return true }
+        if service == "Factory CLI" && account == "auth-encryption-key-security-cli" { return true }
+        return false
+    }
+
+    /// 通过 /usr/bin/security 命令行工具读取钥匙串密码，以绕过 CLI 工具自行更新凭据后重置分区列表导致的访问权限丢失
+    nonisolated static func readCLIKeychainCredential(
+        service: String,
+        account: String? = nil,
+        timeout: TimeInterval = 10
+    ) -> (data: Data, account: String)? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        var args = ["find-generic-password", "-s", service]
+        if let account, !account.isEmpty {
+            args.append(contentsOf: ["-a", account])
+        }
+        args.append("-w")
+        process.arguments = args
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        // 防止子进程 stdout/stderr 管道缓冲区填满导致死锁，使用 DispatchGroup 在后台线程并发读取
+        let group = DispatchGroup()
+        let outputBuffer = CLIOutputBuffer()
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            outputBuffer.append(data)
+            group.leave()
+        }
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+
+        do {
+            try process.run()
+        } catch {
+            Log.keychain("Failed to spawn /usr/bin/security for service \(service): \(error)")
+            return nil
+        }
+
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            _ = exited.wait(timeout: .now() + 1)
+            Log.keychain("/usr/bin/security timed out reading service: \(service)")
+            return nil
+        }
+
+        _ = group.wait(timeout: .now() + 2)
+
+        guard process.terminationStatus == 0 else {
+            if process.terminationStatus != 44 {
+                Log.keychain("/usr/bin/security failed for service \(service) with status \(process.terminationStatus)")
+            }
+            return nil
+        }
+
+        let rawOutput = outputBuffer.snapshot()
+        guard let decodedData = decodeCLIPasswordOutput(rawOutput, service: service, account: account) else {
+            return nil
+        }
+
+        return (decodedData, account ?? "")
+    }
+
+    /// 解析 `/usr/bin/security -w` 的输出：
+    /// `security -w` 在内容包含非可打印字节（或包含非 ASCII UTF-8 字节）时会输出纯十六进制字符串。
+    /// - 对于 Claude Code：仅在解出的十六进制有效且为以 `{` 或 `[` 开头的合法 UTF-8 JSON 时才采用 hex 解码，防止误判；
+    /// - 对于 Factory CLI (auth-encryption-key-security-cli)：64 个十六进制字符解码为 32 字节的对称密钥；
+    /// - 对于 gh / cursor-access-token：保留原始 UTF-8 字符串（去除首尾空白），防止纯十六进制格式的 Token 被错误解码损坏。
+    nonisolated static func decodeCLIPasswordOutput(_ rawData: Data, service: String, account: String?) -> Data? {
+        guard let outputString = String(data: rawData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !outputString.isEmpty else {
+            return nil
+        }
+
+        // Factory CLI 的 auth-encryption-key-security-cli 是 32 字节的二进制密钥，在 security -w 下输出为 64 位十六进制
+        if service == "Factory CLI" && account == "auth-encryption-key-security-cli" {
+            if outputString.count == 64, let hexData = dataFromHexString(outputString) {
+                return hexData
+            }
+            return Data(outputString.utf8)
+        }
+
+        // Claude Code 凭据：可能是原生 JSON 字符串，也可能因包含特殊字符被 security 转为十六进制
+        if service == "Claude Code-credentials" || service.hasPrefix("Claude Code-credentials-") {
+            if outputString.count % 2 == 0,
+               let hexData = dataFromHexString(outputString),
+               let jsonStr = String(data: hexData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               (jsonStr.hasPrefix("{") || jsonStr.hasPrefix("[")) {
+                return hexData
+            }
+            return Data(outputString.utf8)
+        }
+
+        // 对于 gh:* 与 cursor-access-token 等普通文本凭据，直接作为 UTF-8 返回
+        return Data(outputString.utf8)
+    }
+
+    /// 将十六进制字符串转为 Data
+    nonisolated private static func dataFromHexString(_ hex: String) -> Data? {
+        var data = Data(capacity: hex.count / 2)
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            guard let nextIndex = hex.index(index, offsetBy: 2, limitedBy: hex.endIndex) else { return nil }
+            let byteString = hex[index..<nextIndex]
+            guard let byte = UInt8(byteString, radix: 16) else { return nil }
+            data.append(byte)
+            index = nextIndex
+        }
+        return data
+    }
+
+    /// 并发收集 CLI 子进程 stdout 输出的线程安全缓冲区，显式声明为 nonisolated 以避免默认 MainActor 隔离导致后台队列访问报错
+    nonisolated private final class CLIOutputBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = Data()
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            storage.append(chunk)
+        }
+
+        func snapshot() -> Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
     nonisolated static func readExternalCredentialRecord(
         service: String,
         account: String? = nil
     ) -> (data: Data, account: String)? {
+        // 如果是 CLI 工具管理的钥匙串项，先通过 /usr/bin/security 读取，避免分区丢失引发的权限错误
+        if isCLIExternalService(service: service, account: account) {
+            if let cliResult = readCLIKeychainCredential(service: service, account: account) {
+                return cliResult
+            }
+        }
+
         let query = externalCredentialQuery(service: service, account: account)
 
         var unmanagedResult: Unmanaged<CFTypeRef>?

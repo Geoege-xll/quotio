@@ -73,7 +73,8 @@ final class CustomProviderService {
             limitToSelectedModels: provider.limitToSelectedModels,
             isEnabled: provider.isEnabled,
             createdAt: Date(),
-            updatedAt: Date()
+            updatedAt: Date(),
+            apiProtocol: provider.apiProtocol
         )
         providers.append(newProvider)
         saveProviders()
@@ -99,7 +100,8 @@ final class CustomProviderService {
             limitToSelectedModels: provider.limitToSelectedModels,
             isEnabled: provider.isEnabled,
             createdAt: providers[index].createdAt,
-            updatedAt: Date()
+            updatedAt: Date(),
+            apiProtocol: provider.apiProtocol
         )
         providers[index] = updatedProvider
         saveProviders()
@@ -128,7 +130,8 @@ final class CustomProviderService {
             limitToSelectedModels: provider.limitToSelectedModels,
             isEnabled: !provider.isEnabled,
             createdAt: provider.createdAt,
-            updatedAt: Date()
+            updatedAt: Date(),
+            apiProtocol: provider.apiProtocol
         )
         providers[index] = updatedProvider
         saveProviders()
@@ -295,6 +298,54 @@ final class CustomProviderService {
         }
         let families = root["api-keys"] as? [String: Any] ?? [:]
         let marker = #" \(Quotio [0-9A-Fa-f-]{36}\)$"#
+        func ownerID(_ group: [String: Any]) -> UUID? {
+            guard let name = group["name"] as? String, let range = name.range(of: marker, options: .regularExpression) else { return nil }
+            return UUID(uuidString: String(name[range].dropFirst(" (Quotio ".count).dropLast()))
+        }
+        // 协议切换是同一份 v8 PATCH 内的迁移：先取得旧组的完整高级字段作为目标组基线，
+        // 再由原循环只撤下原族中本应用拥有的密钥；手工密钥留在旧族，不复制到新通道。
+        var protocolSeeds: [UUID: [String: Any]] = [:]
+        var departingLegacyKeys: [String: Set<String>] = [:]
+        var protocolMigrations: [CPAModelAliasService.ProtocolMigration] = []
+        for provider in managedProviders where provider.type == .openaiCompatibility || provider.type == .codexCompatibility {
+            let target = v8Family(for: provider)
+            let source = target == "codex" ? "openai-compatibility" : "codex"
+            let sourceGroups = families[source] as? [[String: Any]] ?? []
+            var sources = sourceGroups.filter { ownerID($0) == provider.id }
+            if sources.isEmpty, legacyOwnedProviderIDs.contains(provider.id) {
+                // v7 专属区块的归属证明仍有效；只有名称与完整密钥集合唯一吻合才迁移，不接管手工同名组。
+                let wanted = Set(provider.apiKeys.map(\.apiKey))
+                sources = sourceGroups.filter { group in
+                    ownerID(group) == nil && group["name"] as? String == provider.name
+                        && Set((group["keys"] as? [[String: Any]] ?? []).compactMap { $0["api-key"] as? String }) == wanted
+                        && !wanted.isEmpty
+                }
+                if sources.count == 1 { departingLegacyKeys[source, default: []].formUnion(wanted) }
+            }
+            guard !sources.isEmpty else { continue }
+            let targets = (families[target] as? [[String: Any]] ?? []).filter { ownerID($0) == provider.id }
+            guard sources.count == 1, targets.isEmpty,
+                  let sourceGroup = sources.first, let keys = sourceGroup["keys"] as? [[String: Any]] else {
+                throw CustomProviderError.invalidProvider("服务商协议迁移存在重复标记或无效密钥结构，已保留原配置")
+            }
+            let owned = Set(provider.apiKeys.map { keyDigest($0.apiKey) })
+                .union(previouslySynced[provider.id]?.keyDigests ?? [])
+            var seed = sourceGroup
+            seed["keys"] = keys.filter { entry in
+                (entry["api-key"] as? String).map { owned.contains(keyDigest($0)) } ?? false
+            }
+            protocolSeeds[provider.id] = seed
+            if provider.isEnabled {
+                let perKeyModels = (seed["keys"] as? [[String: Any]] ?? []).flatMap { $0["models"] as? [[String: Any]] ?? [] }
+                let aliases = ((seed["models"] as? [[String: Any]] ?? []) + perKeyModels).reduce(into: [String: Set<String>]()) { result, model in
+                    if let name = model["name"] as? String {
+                        result[(model["alias"] as? String) ?? name, default: []].insert(name)
+                    }
+                }
+                protocolMigrations.append(.init(groupName: managedName(for: provider), aliases: aliases,
+                    source: source == "codex" ? "codex" : "openai", target: target == "codex" ? "codex" : "openai"))
+            }
+        }
         var changedFamilies: [String: Any] = [:]
         for family in ["openai-compatibility", "claude", "gemini", "codex"] {
             if let existing = families[family], !(existing is [[String: Any]]) {
@@ -305,21 +356,24 @@ final class CustomProviderService {
             for var group in originalGroups {
                 let name = group["name"] as? String ?? ""
                 guard let markerRange = name.range(of: marker, options: .regularExpression),
-                      let former = previouslySynced.first(where: {
-                          name.hasSuffix("(Quotio \($0.key.uuidString))")
-                      }),
+                      let id = ownerID(group),
+                      previouslySynced[id] != nil || managedProviders.contains(where: { $0.id == id }),
                       !managedProviders.contains(where: {
-                          v8Family(for: $0.type) == family && $0.id == former.key
+                          v8Family(for: $0) == family && $0.id == id
                       }) else {
                     groups.append(group)
                     continue
                 }
                 // 用户删除了本地服务商时，只能撤销上次成功同步的密钥。旧快照没有摘要，
                 // 或该分组后来被用户手工加过密钥时，都不能把整组凭据直接删除。
-                guard let digests = former.value.keyDigests else {
+                let current = managedProviders.first { $0.id == id }
+                let digests = current.map { provider in
+                    provider.apiKeys.map { keyDigest($0.apiKey) } + (previouslySynced[id]?.keyDigests ?? [])
+                } ?? previouslySynced[id]?.keyDigests
+                guard let digests else {
                     // 升级前的同步快照没有密钥摘要；保留整组并继续启动，不让一个无法
                     // 判定归属的旧组阻断其他服务商与代理。用户可在 CPA 管理页手工处理。
-                    NSLog("[CustomProviderService] 保留旧快照无法确认归属的服务商组：%@", former.key.uuidString)
+                    NSLog("[CustomProviderService] 保留旧快照无法确认归属的服务商组：%@", id.uuidString)
                     groups.append(group)
                     continue
                 }
@@ -343,9 +397,9 @@ final class CustomProviderService {
             // 本地对象在服务停止期间被删除或移走了单条密钥，旧 Quotio 区块仍可能
             // 在官方迁移后生成有效分组。只从唯一匹配的未标记组撤销这些旧密钥；
             // 若同一密钥出现于多个组，归属有歧义，宁可中止迁移也不能误删手工凭据。
-            let configuredKeys = Set(managedProviders.filter { v8Family(for: $0.type) == family }
+            let configuredKeys = Set(managedProviders.filter { v8Family(for: $0) == family }
                 .flatMap { $0.apiKeys.map(\.apiKey) })
-            let orphanedKeys = (legacyOwnedKeys[family] ?? []).subtracting(configuredKeys)
+            let orphanedKeys = (legacyOwnedKeys[family] ?? []).union(departingLegacyKeys[family] ?? []).subtracting(configuredKeys)
             var emptiedOrphanIndices = Set<Int>()
             for key in orphanedKeys {
                 let matches = groups.indices.filter { index in
@@ -368,7 +422,7 @@ final class CustomProviderService {
             var claimedLegacyIndices = Set<Int>()
             var mergedLegacyIndices = Set<Int>()
 
-            for provider in managedProviders where v8Family(for: provider.type) == family {
+            for provider in managedProviders where v8Family(for: provider) == family {
                 let markedName = managedName(for: provider)
                 let markedMatch = groups.firstIndex {
                     ($0["name"] as? String ?? "").hasSuffix("(Quotio \(provider.id.uuidString))")
@@ -377,7 +431,7 @@ final class CustomProviderService {
                 // v7 的 Claude/Gemini/Codex 生成器按密钥拆成多个条目，上游迁移器也会
                 // 保留为多个组。只有旧文件的专属区块证明归属、且这些组恰好覆盖全部密钥，
                 // 才能合并；相交但不完整或包含重复密钥时拒绝同步，避免复制凭据。
-                let legacyMatches: [Int] = markedMatch == nil && legacyOwnedProviderIDs.contains(provider.id)
+                let legacyMatches: [Int] = markedMatch == nil && protocolSeeds[provider.id] == nil && legacyOwnedProviderIDs.contains(provider.id)
                     ? (0..<preexistingGroupCount).filter { index in
                         guard !claimedLegacyIndices.contains(index), !mergedLegacyIndices.contains(index),
                               (groups[index]["name"] as? String ?? "").range(of: marker, options: .regularExpression) == nil else {
@@ -409,7 +463,7 @@ final class CustomProviderService {
                     mergedLegacyIndices.formUnion(legacyMatches.dropFirst())
                 }
                 let match = markedMatch ?? legacyMatches.first
-                var group = match.map { groups[$0] } ?? [:]
+                var group = match.map { groups[$0] } ?? protocolSeeds[provider.id] ?? [:]
                 let previous = previouslySynced[provider.id]
                 if match != nil && !(group["keys"] is [[String: Any]]) {
                     throw CustomProviderError.invalidProvider("CPA 8 的 \(family) 密钥结构无效，已拒绝覆盖服务商分组")
@@ -477,7 +531,7 @@ final class CustomProviderService {
                 group["keys"] = nextKeys
                 if !provider.baseURL.isEmpty,
                    (family == "openai-compatibility" || family == "codex" || provider.baseURL != provider.type.defaultBaseURL) {
-                    group["base-url"] = provider.baseURL
+                    group["base-url"] = provider.cpaBaseURL
                 } else {
                     group.removeValue(forKey: "base-url")
                 }
@@ -534,11 +588,19 @@ final class CustomProviderService {
             if before != after { changedFamilies[family] = groups }
         }
         guard !changedFamilies.isEmpty else { return nil }
+        // 别名与凭据族必须在原来的同一 PATCH 中提交；否则切换后的首个请求会丢失推理等级。
+        // 纯规则投影复用别名服务，不调用其网络入口，也不改变当前同步锁与成功快照顺序。
+        var nextFamilies = families
+        nextFamilies.merge(changedFamilies) { _, next in next }
+        var patch: [String: Any] = ["api-keys": changedFamilies]
+        if let overrides = try CPAModelAliasService.migratedEffortOverrides(in: root, families: nextFamilies, migrations: protocolMigrations) {
+            patch["requests"] = ["payload": ["override": overrides]]
+        }
         // CPA 8 的 /config 虽然先检查 JSON 有效性，实际却用 YAML 解析器读取正文。
         // Foundation 默认把 base-url 中的斜杠编码为 \/；这是合法 JSON，但上游
         // YAML 解析器会返回 invalid_body。保留普通斜杠，确保 URL 仍能被 CPA 接受。
         return try JSONSerialization.data(
-            withJSONObject: ["api-keys": changedFamilies],
+            withJSONObject: patch,
             options: [.sortedKeys, .withoutEscapingSlashes]
         )
     }
@@ -553,8 +615,11 @@ final class CustomProviderService {
     func routingWeights(for provider: CustomProvider, configPath: String) -> [UUID: Int] {
         guard let yaml = try? String(contentsOfFile: configPath, encoding: .utf8),
               let root = try? Yams.load(yaml: yaml) as? [String: Any],
-              let families = root["api-keys"] as? [String: Any],
-              let groups = families[v8Family(for: provider.type)] as? [[String: Any]] else { return [:] }
+              let families = root["api-keys"] as? [String: Any] else { return [:] }
+        // 首次升级尚未迁移时仍读取旧通道的权重；只读候选同时有两个归属组时继续拒绝歧义。
+        let candidateFamilies = provider.type == .openaiCompatibility || provider.type == .codexCompatibility
+            ? Set(["openai-compatibility", "codex"]) : Set([v8Family(for: provider.type)])
+        let groups = candidateFamilies.flatMap { families[$0] as? [[String: Any]] ?? [] }
         let marked = groups.filter { $0["name"] as? String == managedName(for: provider) }
         let candidates = marked.isEmpty ? groups.filter { group in
             guard group["name"] as? String == provider.name, let keys = group["keys"] as? [[String: Any]] else { return false }
@@ -586,6 +651,12 @@ final class CustomProviderService {
              .deepseekCompatibility, .moonshotCompatibility, .minimaxCompatibility:
             return "openai-compatibility"
         }
+    }
+
+    /// 官方 OpenAI Key 使用 CPA 现有 Responses 执行器，避免 Anthropic max_tokens 被原样送入 Chat API。
+    /// 界面类型和持久账号 ID 不变，通用第三方默认仍走旧执行器；用户可明确覆盖以兼容旧型号。
+    private func v8Family(for provider: CustomProvider) -> String {
+        provider.type == .openaiCompatibility && provider.usesResponsesAPI ? "codex" : v8Family(for: provider.type)
     }
 
     // MARK: - Validation

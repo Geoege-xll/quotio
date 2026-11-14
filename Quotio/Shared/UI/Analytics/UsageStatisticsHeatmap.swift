@@ -9,6 +9,7 @@ struct UsageHeatmapHover {
     let title: String
     let accent: Color
     let anchor: CGRect
+    var metric: CPAUsageChartMetric = .tokens
 }
 
 struct UsageStatisticsHeatmap: View {
@@ -29,7 +30,8 @@ struct UsageStatisticsHeatmap: View {
                     Image(systemName: "square.grid.3x3.fill")
                     Text(title).font(.subheadline.weight(.semibold))
                     Spacer()
-                    Text("usage.replica.lastYear".localized()).font(.caption2).foregroundStyle(.secondary)
+                    Text(presentation.metric.titleKey.localized() + " · " + "usage.replica.lastYear".localized())
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 .foregroundStyle(accent)
                 // 根据真实周数计算方格，不把全年硬编码成 52 列；给末月标签预留右侧空间。
@@ -48,7 +50,7 @@ struct UsageStatisticsHeatmap: View {
                 .allowsHitTesting(false)
         }
         .popover(item: $selectedDay) { day in
-            UsageHeatmapDetail(day: day, title: title, accent: accent)
+            UsageHeatmapDetail(day: day, title: title, accent: accent, metric: presentation.metric)
                 .padding(16).frame(width: 360)
         }
         .onDisappear { onHover(nil) }
@@ -95,7 +97,8 @@ struct UsageStatisticsHeatmap: View {
     }
 
     private func cell(_ day: UsageHeatmapPresentation.Day, side: CGFloat) -> some View {
-        let intensity = presentation.intensity(day.totals.totalTokens)
+        let cellValue = presentation.value(for: day.totals)
+        let intensity = presentation.intensity(cellValue)
         let hovered = hoveredDate == day.date
         let radius = max(2, min(4, side * 0.24))
         return GeometryReader { geometry in
@@ -116,12 +119,13 @@ struct UsageStatisticsHeatmap: View {
             .buttonStyle(.plain)
             .disabled(day.isFuture)
             .accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
-            .accessibilityValue(day.isBeforeCollection ? "usage.replica.beforeCollection".localized() : day.totals.totalTokens.formatted() + " Tokens")
+            .accessibilityValue(day.isBeforeCollection ? "usage.replica.beforeCollection".localized() : UsageHeatmapDetail.formattedValue(cellValue, metric: presentation.metric))
             .onHover { inside in
                 guard !day.isFuture else { return }
                 hoveredDate = inside ? day.date : nil
                 onHover(inside ? UsageHeatmapHover(day: day, title: title, accent: accent,
-                                                  anchor: geometry.frame(in: .named("usageHeatmapPage"))) : nil)
+                                                  anchor: geometry.frame(in: .named("usageHeatmapPage")),
+                                                  metric: presentation.metric) : nil)
             }
         }
         .frame(width: side, height: side)
@@ -135,11 +139,12 @@ struct UsageStatisticsHeatmap: View {
         .monospacedDigit()
     }
     @ViewBuilder private var footerValues: some View {
-        Text(presentation.totals.totalTokens.formatted() + " Tokens").font(.caption.weight(.semibold))
+        Text(UsageHeatmapDetail.formattedValue(presentation.value(for: presentation.totals), metric: presentation.metric))
+            .font(.caption.weight(.semibold))
         Text(String(format: "usage.replica.activeDays".localized(), presentation.activeDays))
             .font(.caption2).foregroundStyle(.secondary)
         if let peak = presentation.peak {
-            Text("usage.replica.peak".localized() + " " + peak.totals.totalTokens.formatted() + " · " + peak.date.formatted(.dateTime.month().day()))
+            Text("usage.replica.peak".localized() + " " + presentation.value(for: peak.totals).formatted() + " · " + peak.date.formatted(.dateTime.month().day()))
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -168,22 +173,33 @@ struct UsageStatisticsHeatmap: View {
     }
 }
 
-/// 点击弹层展示全部模型，悬浮层复用同一内容；仅 Token 细项，不引入费用估算。
+/// 点击弹层展示全部模型，悬浮层复用同一内容；支持 Tokens 与请求数双口径展示，不引入费用估算。
 struct UsageHeatmapDetail: View {
     @Environment(\.colorScheme) private var colorScheme
     let day: UsageHeatmapPresentation.Day
     let title: String
     let accent: Color
+    var metric: CPAUsageChartMetric = .tokens
+
+    static func formattedValue(_ value: Int, metric: CPAUsageChartMetric) -> String {
+        switch metric {
+        case .tokens: return value.formatted() + " Tokens"
+        case .requests: return value.formatted() + " " + "usage.cpa.requests.unit".localized()
+        }
+    }
+
     var body: some View {
+        let dayValue = metric == .tokens ? day.totals.totalTokens : day.totals.requests
         VStack(alignment: .leading, spacing: 10) {
             HStack { Text(title).foregroundStyle(accent); Spacer(); Text(day.date, format: .dateTime.month().day().weekday()) }
                 .font(.caption.weight(.semibold))
-            Text(day.isBeforeCollection ? "—" : day.totals.totalTokens.formatted() + " Tokens")
+            Text(day.isBeforeCollection ? "—" : Self.formattedValue(dayValue, metric: metric))
                 .font(.title3.weight(.bold)).monospacedDigit()
             if day.isBeforeCollection {
                 Text("usage.replica.beforeCollection".localized()).font(.caption).foregroundStyle(.secondary)
-            } else if day.models.isEmpty {
-                Text("usage.replica.noCollectedTokens".localized()).font(.caption).foregroundStyle(.secondary)
+            } else if day.models.isEmpty || (metric == .requests && day.totals.requests == 0) {
+                Text((metric == .tokens ? "usage.replica.noCollectedTokens" : "usage.replica.noCollectedRequests").localized())
+                    .font(.caption).foregroundStyle(.secondary)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -191,12 +207,19 @@ struct UsageHeatmapDetail: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(alignment: .top) {
                                     Text(model.model).font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-                                    Spacer(); Text(model.totals.totalTokens.formatted()).font(.caption).monospacedDigit()
+                                    Spacer()
+                                    Text(metric == .tokens ? model.totals.totalTokens.formatted() : Self.formattedValue(model.totals.requests, metric: .requests))
+                                        .font(.caption).monospacedDigit()
                                 }
-                                Text(detailLine("usage.inputTokens", model.totals.inputTokens, "usage.outputTokens", model.totals.outputTokens))
-                                    .font(.caption2).foregroundStyle(.secondary)
-                                Text(detailLine("usage.cachedTokens", model.totals.cachedTokens, "usage.reasoningTokens", model.totals.reasoningTokens))
-                                    .font(.caption2).foregroundStyle(.secondary)
+                                if metric == .tokens {
+                                    Text(detailLine("usage.inputTokens", model.totals.inputTokens, "usage.outputTokens", model.totals.outputTokens))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                    Text(detailLine("usage.cachedTokens", model.totals.cachedTokens, "usage.reasoningTokens", model.totals.reasoningTokens))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                } else {
+                                    Text(requestDetailLine(model))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -209,6 +232,21 @@ struct UsageHeatmapDetail: View {
         .monospacedDigit()
         .textSelection(.enabled)
     }
+
+    private func requestDetailLine(_ model: UsageStatisticsModel) -> String {
+        let share = day.totals.requests > 0
+            ? (Double(model.totals.requests) / Double(day.totals.requests)).formatted(.percent.precision(.fractionLength(1)))
+            : "0%"
+        var parts = [
+            "usage.replica.share".localized(), share,
+            "·", "usage.tokens".localized(), model.totals.totalTokens.formattedCompact
+        ]
+        if model.totals.failures > 0 {
+            parts += ["·", "usage.records.outcome.failed".localized(), model.totals.failures.formatted()]
+        }
+        return parts.joined(separator: " ")
+    }
+
     /// 先构造普通字符串，避免多次 Text/String 加法让 SwiftUI 泛型表达式类型检查膨胀。
     private func detailLine(_ leftKey: String, _ left: Int, _ rightKey: String, _ right: Int) -> String {
         [leftKey.localized(), left.formatted(), "·", rightKey.localized(), right.formatted()].joined(separator: " ")
@@ -227,7 +265,7 @@ struct UsageHeatmapOverlay: View {
     let viewportSize: CGSize
     var body: some View {
         if let hover = state.selection {
-            UsageHeatmapDetail(day: hover.day, title: hover.title, accent: hover.accent)
+            UsageHeatmapDetail(day: hover.day, title: hover.title, accent: hover.accent, metric: hover.metric)
                 .padding(14).frame(width: min(360, max(240, viewportSize.width - 24)))
                 .background(AnalyticsSurface.floatingPanel(colorScheme), in: RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous))
                 .shadow(color: AnalyticsShadow.floatingPanel(colorScheme), radius: 12, y: 5)

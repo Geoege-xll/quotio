@@ -384,7 +384,13 @@ nonisolated struct ProviderQuotaData: Codable, Sendable {
         case "k12": return "K-12"
         case "enterprise": return "Enterprise"
         case "edu": return "Edu"
-        default: return planType?.capitalized
+        default:
+            if let original = planType, original.lowercased().hasPrefix("max ") {
+                // 保留 multiplier 中的小写 x（例如 "Max 5x" 而不是被 .capitalized 转为 "Max 5X"）
+                let suffix = original.dropFirst(4)
+                return "Max " + suffix
+            }
+            return planType?.capitalized
         }
     }
 

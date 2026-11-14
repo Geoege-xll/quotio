@@ -30,9 +30,10 @@ struct MenuAccountDetailView: View {
     }
 
     /// 没有可信周期／历史时保持首轮的紧凑行高，不能为尚不存在的消耗提示预留一整行空白。
+    /// 包含有效周期节奏、已过重置时间（提示已重置）或本地历史消耗趋势时展示提示行。
     private func showsHistoryHint(_ model: ModelQuota, now: Date) -> Bool {
         guard let data, let point = QuotaHistoryPoint.make(model: model, quota: data) else { return false }
-        return QuotaPace(point: point, now: now) != nil || trends[model.id] != nil
+        return QuotaPace(point: point, now: now) != nil || (point.resetAt.map { $0 <= now } ?? false) || trends[model.id] != nil
     }
 
     private func modelListHeight(now: Date) -> CGFloat {

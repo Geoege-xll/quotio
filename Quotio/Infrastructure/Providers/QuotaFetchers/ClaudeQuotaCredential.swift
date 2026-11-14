@@ -60,6 +60,10 @@ nonisolated struct ClaudeQuotaCredential: Sendable, Equatable {
     let expiresAt: Date?
     var allowsRefresh: Bool
     var source: Source = .external
+    /// 本地存储的套餐类型（如 "max", "pro"），用于画像接口未返回或降级时的回退
+    var subscriptionType: String? = nil
+    /// 本地存储的速率限制等级（如 "default_claude_max_5x"），用于解析套餐倍率
+    var rateLimitTier: String? = nil
 
     static func load(data: Data, allowsRefresh: Bool, source: Source = .external) -> Self? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -67,6 +71,8 @@ nonisolated struct ClaudeQuotaCredential: Sendable, Equatable {
         guard let access = nonEmpty((json["access_token"] as? String) ?? (oauth?["accessToken"] as? String)) else { return nil }
         let account = nonEmpty((json["email"] as? String) ?? (oauth?["email"] as? String)) ?? "Claude Code"
         let refresh = nonEmpty((json["refresh_token"] as? String) ?? (oauth?["refreshToken"] as? String))
+        let subType = nonEmpty(oauth?["subscriptionType"] as? String)
+        let tier = nonEmpty(oauth?["rateLimitTier"] as? String)
         let expiry: Date?
         if let milliseconds = (oauth?["expiresAt"] as? NSNumber)?.doubleValue {
             expiry = milliseconds.isFinite ? Date(timeIntervalSince1970: milliseconds / 1000) : nil
@@ -78,7 +84,8 @@ nonisolated struct ClaudeQuotaCredential: Sendable, Equatable {
             expiry = nil
         }
         return Self(accountKey: account, accessToken: access, refreshToken: refresh,
-                    expiresAt: expiry, allowsRefresh: allowsRefresh, source: source)
+                    expiresAt: expiry, allowsRefresh: allowsRefresh, source: source,
+                    subscriptionType: subType, rateLimitTier: tier)
     }
 
     static func load(path: String, environment: [String: String]) -> Self? {

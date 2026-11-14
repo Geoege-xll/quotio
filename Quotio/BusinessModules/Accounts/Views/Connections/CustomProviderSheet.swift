@@ -28,6 +28,8 @@ struct CustomProviderSheet: View {
     @State private var name: String = ""
     @State private var providerType: CustomProviderType = .openaiCompatibility
     @State private var baseURL: String = ""
+    /// 协议选择属于原表单草稿，保存仍走原服务和 CPA 同步事务；不另建连接状态或请求任务。
+    @State private var apiProtocol: CustomProviderAPIProtocol = .automatic
     @State private var prefix: String = ""
     @State private var apiKeys: [CustomAPIKeyEntry] = [CustomAPIKeyEntry(apiKey: "")]
     @State private var weightDrafts: [UUID: String] = [:]
@@ -83,6 +85,21 @@ struct CustomProviderSheet: View {
                     // Step 1: Provider name and type
                     if providerType != .clinePass {
                         basicInfoSection
+                    }
+
+                    if providerType == .openaiCompatibility {
+                        // 默认收起，普通用户无需理解通道；保留显式 Chat 选择以兼容尚不支持 Responses 的旧型号。
+                        DisclosureGroup("customProviders.protocol.advanced".localized()) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                QuotioCapsuleSegmentedControl(options: CustomProviderAPIProtocol.allCases,
+                                    selection: $apiProtocol, size: .small) { item, _ in
+                                    Text(item.title)
+                                }
+                                Text("customProviders.protocol.info".localized())
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 8)
+                        }
                     }
 
                     // Step 2: API Keys (needed before fetching models)
@@ -717,6 +734,7 @@ struct CustomProviderSheet: View {
             ? nextAvailableClinePassName()
             : provider.name
         providerType = provider.type
+        apiProtocol = provider.apiProtocol
         baseURL = provider.type == .clinePass
             ? (provider.type.defaultBaseURL ?? provider.baseURL)
             : normalizedBaseURL(provider.baseURL, for: provider.type)
@@ -925,7 +943,8 @@ struct CustomProviderSheet: View {
             limitToSelectedModels: limitToSelectedModels,
             isEnabled: isEnabled,
             createdAt: provider?.createdAt ?? Date(),
-            updatedAt: Date()
+            updatedAt: Date(),
+            apiProtocol: apiProtocol
         )
         
         // Validate basic fields

@@ -23,10 +23,11 @@ nonisolated enum QuotaPercentagePresentation {
         }
     }
 
+    /// 统一按向零取整截断（.towardZero）计算展示百分比，确保 showUsed 切换时已用与剩余严格互补。
     /// nil 要一直保留到文字和进度条分支，防止未知额度被转换为已用 100%。
     static func displayValue(_ remaining: Double, showUsed: Bool) -> Double? {
         guard isKnown(remaining) else { return nil }
-        let clamped = min(100, remaining)
+        let clamped = min(100, remaining).rounded(.towardZero)
         return showUsed ? 100 - clamped : clamped
     }
 

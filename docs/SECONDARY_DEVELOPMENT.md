@@ -8,6 +8,8 @@
 
 ## 1. 上游与参考项目分别是谁
 
+2026-10-30 的 [OpenAI 官方 Key 协议修复](features/openai-official-responses-routing-2026-10-30.md)使用 CPA 现有 Responses 执行器，严格识别官方端点，第三方仍保持 Chat Completions，并允许显式覆盖。合并上游时保留 `api-protocol` 的旧字段默认值、UUID 归属、同一 v8 PATCH 的跨族基线和手工密钥保护；源族旧归属不得接管目标族手工组。假网关验证以 CPA 8.0.47 为基准，不把输出 Token 预算透传宣称为已支持。
+
 2026-10-19 的[交叉修复](features/cross-agent-compatibility-fixes-2026-10-19.md)明确：目录 ID 不代表 1M 启用授权；OpenAI 兼容提供商需显式注册模型；Claude 角色链由统一计划展开为最终请求目标。账号变更的世代必须同时保护网络返回和已排队的文件提交，不能只在 MainActor 调用 actor 前后检查。冷却倒计时仅驱动可见展示，后续合并不可借此增加额度轮询。
 
 2026-10-15 的[专项复审](features/appkit-layout-reentry-and-followup-audit-2026-10-15.md)补齐原生 Sheet 的显式 fitted 尺寸策略；同步时保留严格 Copilot 主机元数据、gh users 多账号、同主机占位收尾及历史发布的别名比较基线。CLI 渠道不能仅凭 Homebrew 前缀或 npm 发行名猜测；卸载不提前删配置，终端不能混合解释不同 Shell 的配置或覆盖用户 PATH。当时非 Pi 静态候选按用户明确要求恢复；随后用户于 2026-10-16 明确改为[动态目录方案](features/dynamic-model-defaults-2026-10-16.md)，当前所有配置候选均不再注入静态型号。实时目录、候选 Copilot 筛选和宽松连接探测继续保留不同语义。

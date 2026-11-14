@@ -10,6 +10,135 @@ actor CPAModelAliasService {
 
     init(client: ManagementAPIClient) { self.client = client }
 
+    /// 协议迁移只携带已有分组的身份与别名，不持有客户端、凭据或异步任务。
+    /// 与别名的参数生成规则放在同一业务入口，避免提供商服务另造一套 effort 字段映射。
+    struct ProtocolMigration {
+        let groupName: String
+        /// 一个别名可以对应模型池；候选身份须包含所有原上游名称。
+        let aliases: [String: Set<String>]
+        let source: String
+        let target: String
+    }
+
+    /// 返回需要追加后的 override 数组；nil 表示原策略无需修改。
+    /// 历史规则没有归属标记，因此不能删除或改写源规则。只投影当前已知的纯 effort 契约，
+    /// 同一源规则中的其它模型、条件和未知字段都留在原处；有歧义时拒绝整轮 PATCH。
+    nonisolated static func migratedEffortOverrides(
+        in root: [String: Any], families: [String: Any], migrations: [ProtocolMigration]
+    ) throws -> [[String: Any]]? {
+        guard !migrations.isEmpty,
+              let requests = root["requests"] as? [String: Any],
+              let payload = requests["payload"] as? [String: Any] else { return nil }
+        let original = payload["override"] as? [[String: Any]] ?? []
+        var result = original
+        func failure(_ alias: String) -> NSError {
+            NSError(domain: "CPAModelAliases", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                "别名 \(alias) 的协议策略存在共享来源或复杂规则，已保留配置；请先在模型别名设置中确认目标协议策略"])
+        }
+        func matches(_ selector: [String: Any], alias: String, protocolName: String) -> Bool {
+            let selectedProtocol = (selector["protocol"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            // CPA 的空协议表示不限定协议，不能漏掉这类全局规则后再追加覆盖它。
+            guard let rawName = selector["name"] as? String,
+                  selectedProtocol.isEmpty || selectedProtocol == protocolName else { return false }
+            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pattern = NSRegularExpression.escapedPattern(for: name.lowercased())
+                .replacingOccurrences(of: "\\*", with: ".*").replacingOccurrences(of: "\\?", with: ".")
+            return alias.lowercased().range(of: "^" + pattern + "$", options: .regularExpression) != nil
+        }
+        func effort(_ rule: [String: Any], alias: String, protocolName: String) -> String? {
+            let path = protocolName == "openai" ? "reasoning_effort" : "reasoning.effort"
+            guard Set(rule.keys) == ["models", "params"], let selectors = rule["models"] as? [[String: Any]],
+                  selectors.contains(where: {
+                      Set($0.keys) == ["name", "protocol"] && ($0["name"] as? String)?.lowercased() == alias.lowercased()
+                          && ($0["protocol"] as? String)?.lowercased() == protocolName
+                  }), let params = rule["params"] as? [String: Any], params.count == 1,
+                  let value = params[path] as? String, !value.isEmpty else { return nil }
+            return value
+        }
+        func isEffortPath(_ path: String) -> Bool {
+            path == "reasoning_effort" || path == "reasoning" || path.hasPrefix("reasoning.")
+        }
+        func rejectComplexRules(alias: String, candidates: Set<String>, protocolName: String) throws {
+            // raw 覆盖和 filter 会在普通 override 之后改变最终值，源端与目标端均须核对。
+            // 即使已有等价目标规则，也不能先返回而跳过过滤／父对象覆盖的检查。
+            for kind in ["filter", "override-raw"] {
+                for rule in payload[kind] as? [[String: Any]] ?? [] where
+                    (rule["models"] as? [[String: Any]] ?? []).contains(where: { selector in
+                        candidates.contains { candidate in matches(selector, alias: candidate, protocolName: protocolName) }
+                    }) {
+                    let paths = (rule["params"] as? [String]) ?? Array((rule["params"] as? [String: Any] ?? [:]).keys)
+                    if paths.contains(where: isEffortPath) { throw failure(alias) }
+                }
+            }
+        }
+        for migration in migrations {
+            let family = migration.target == "openai" ? "openai-compatibility" : "codex"
+            let targetGroup = (families[family] as? [[String: Any]] ?? []).first { $0["name"] as? String == migration.groupName }
+            let perKeyModels = (targetGroup?["keys"] as? [[String: Any]] ?? []).flatMap { $0["models"] as? [[String: Any]] ?? [] }
+            let finalAliases = ((targetGroup?["models"] as? [[String: Any]] ?? []) + perKeyModels).reduce(into: [String: Set<String>]()) { result, model in
+                if let name = model["name"] as? String {
+                    result[(model["alias"] as? String) ?? name, default: []].insert(name)
+                }
+            }
+            // 模型删除／改名可与协议切换同次保存；旧 seed 不代表模型最终仍会注册。
+            for alias in migration.aliases.keys.sorted() where finalAliases[alias] != nil {
+                let candidates = (migration.aliases[alias] ?? []).union(finalAliases[alias] ?? []).union([alias])
+                try rejectComplexRules(alias: alias, candidates: candidates, protocolName: migration.source)
+                let sourceRules = original.filter { rule in
+                    (rule["models"] as? [[String: Any]] ?? []).contains {
+                        let selector = $0
+                        return candidates.contains { matches(selector, alias: $0, protocolName: migration.source) }
+                    } && (rule["params"] as? [String: Any] ?? [:]).keys.contains(where: isEffortPath)
+                }
+                guard !sourceRules.isEmpty else { continue }
+                // override 按先后执行，以最后一项为准；不能把前面的旧 effort 误当作生效值。
+                guard sourceRules.allSatisfy({ effort($0, alias: alias, protocolName: migration.source) != nil }),
+                      let value = effort(sourceRules.last!, alias: alias, protocolName: migration.source) else { throw failure(alias) }
+                try rejectComplexRules(alias: alias, candidates: candidates, protocolName: migration.target)
+                let targets = result.filter { rule in
+                    (rule["models"] as? [[String: Any]] ?? []).contains {
+                        let selector = $0
+                        return candidates.contains { matches(selector, alias: $0, protocolName: migration.target) }
+                    }
+                }
+                if !targets.isEmpty {
+                    // 已有等价规则无需追加；条件规则或不同的目标意图不能被新规则覆盖。
+                    guard targets.allSatisfy({ effort($0, alias: alias, protocolName: migration.target) != nil }),
+                          effort(targets.last!, alias: alias, protocolName: migration.target) == value else { throw failure(alias) }
+                    continue
+                }
+                // payload 的协议规则是全局的。目标组若与未迁移组共享别名，补规则会误改其它账号。
+                let movingGroups = Set(migrations.filter { $0.target == migration.target }.map(\.groupName))
+                // CPA 同时按上游 name 和客户端 alias 匹配；同协议的其他族、密钥级模型覆盖也要保护。
+                let protocolFamilies = migration.target == "codex" ? ["codex", "xai"] : ["openai-compatibility", "kimi"]
+                let shared = protocolFamilies.contains { key in
+                    (families[key] as? [[String: Any]] ?? []).contains { group in
+                        guard !movingGroups.contains(group["name"] as? String ?? "") else { return false }
+                        let perKey = (group["keys"] as? [[String: Any]] ?? []).flatMap { $0["models"] as? [[String: Any]] ?? [] }
+                        return ((group["models"] as? [[String: Any]] ?? []) + perKey).contains {
+                            ($0["alias"] as? String)?.lowercased() == alias.lowercased()
+                                || ($0["name"] as? String)?.lowercased() == alias.lowercased()
+                        }
+                    }
+                }
+                let oauth = root["oauth"] as? [String: Any] ?? [:]
+                let oauthAliases = oauth["model-alias"] as? [String: Any] ?? [:]
+                let channels = migration.target == "codex" ? ["codex", "xai"] : ["kimi"]
+                let sharedOAuth = channels.contains { channel in
+                    (oauthAliases[channel] as? [[String: Any]] ?? []).contains {
+                        ($0["alias"] as? String)?.lowercased() == alias.lowercased()
+                            || ($0["name"] as? String)?.lowercased() == alias.lowercased()
+                    }
+                }
+                guard !shared, !sharedOAuth else { throw failure(alias) }
+                result.append(["models": [["name": alias, "protocol": migration.target]],
+                               "params": [migration.target == "openai" ? "reasoning_effort" : "reasoning.effort": value]])
+            }
+        }
+        return result.count == original.count ? nil : result
+    }
+
     private struct Channel {
         let key: String
         let protocolName: String

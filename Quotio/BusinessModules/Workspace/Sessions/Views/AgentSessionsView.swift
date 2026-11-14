@@ -100,7 +100,8 @@ struct AgentSessionsView: View {
     }
 
     private func agentSessionCount(for agent: WorkspaceAgent) -> String {
-        let count = viewModel.sessions.filter { $0.agent == agent }.count
+        // 客户端分段徽标与左侧主会话列表口径保持一致，仅统计有效可浏览的主会话。
+        let count = viewModel.sessions.filter { $0.agent == agent && $0.isMainListVisible }.count
         return count > 0 ? "\(count)" : ""
     }
 

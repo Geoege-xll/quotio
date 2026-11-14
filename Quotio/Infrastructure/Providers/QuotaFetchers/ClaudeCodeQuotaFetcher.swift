@@ -66,6 +66,9 @@ actor ClaudeCodeQuotaFetcher {
     /// Anthropic OAuth usage API endpoint
     private let usageURL = "https://api.anthropic.com/api/oauth/usage"
 
+    /// Anthropic OAuth profile API endpoint
+    private let profileURL = "https://api.anthropic.com/api/oauth/profile"
+
     /// Anthropic OAuth token refresh endpoint
     private let tokenURL = "https://platform.claude.com/v1/oauth/token"
     private let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -298,6 +301,110 @@ actor ClaudeCodeQuotaFetcher {
         }
     }
 
+    /// Claude OAuth 画像解析结果
+    private struct ClaudeProfileResult: Sendable {
+        let email: String?
+        let plan: String?
+        let accountUuid: String?
+        let organizationUuid: String?
+    }
+
+    /// 请求 Anthropic OAuth 画像接口获取套餐信息与账号身份，支持 rate_limit_tier 倍率提取
+    private func fetchProfileFromAPI(
+        accessToken: String,
+        storedPlan: String? = nil,
+        storedTier: String? = nil
+    ) async -> ClaudeProfileResult? {
+        guard let url = URL(string: profileURL) else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.addValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.addValue("claude-code/2.1.69", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 5
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  200...299 ~= httpResponse.statusCode else {
+                return nil
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            let account = json["account"] as? [String: Any]
+            let organization = json["organization"] as? [String: Any]
+            let accountUuid = account?["uuid"] as? String
+            let orgUuid = organization?["uuid"] as? String
+
+            var email = (account?["email"] as? String) ?? (account?["email_address"] as? String)
+            email = email?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if email?.isEmpty == true { email = nil }
+
+            // 如果 profile 响应中未包含 email，尝试从 ~/.claude.json 读取并按 accountUuid / organizationUuid 校验
+            if email == nil, let accountUuid {
+                email = resolveEmailFromClaudeConfig(accountUuid: accountUuid, organizationUuid: orgUuid)
+            }
+
+            // 计算 plan：结合 live profile 与 stored credential，避免将存量 tier 错误附加上 live 不同的 plan
+            let livePlan = CPAQuotaProfileMapper.claudePlan(data: data)
+            let resolvedPlan: String?
+            if let livePlan {
+                resolvedPlan = livePlan
+            } else if let storedPlan {
+                let liveTier = organization?["rate_limit_tier"] as? String
+                let tier = liveTier ?? storedTier
+                resolvedPlan = CPAQuotaProfileMapper.formatClaudePlan(plan: storedPlan, tier: tier)
+            } else {
+                resolvedPlan = nil
+            }
+
+            return ClaudeProfileResult(
+                email: email,
+                plan: resolvedPlan,
+                accountUuid: accountUuid,
+                organizationUuid: orgUuid
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    /// 从 ~/.claude.json 中匹配 accountUuid 和 organizationUuid 读取补充 email，避免在失败时覆盖已有账号名称
+    private func resolveEmailFromClaudeConfig(accountUuid: String, organizationUuid: String?) -> String? {
+        let base = ClaudeCredentialOwnership.configDirectory(environment: environment)
+        let candidates = [
+            NSString(string: "~/.claude.json").expandingTildeInPath,
+            (base as NSString).appendingPathComponent(".claude.json")
+        ]
+        for path in candidates {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let oauthAccount = json["oauthAccount"] as? [String: Any],
+                  let localAccountUuid = oauthAccount["accountUuid"] as? String,
+                  localAccountUuid.caseInsensitiveCompare(accountUuid) == .orderedSame else {
+                continue
+            }
+            let localOrgUuid = oauthAccount["organizationUuid"] as? String
+            let orgMatches: Bool
+            switch (localOrgUuid, organizationUuid) {
+            case (.some(let local), .some(let live)):
+                orgMatches = local.caseInsensitiveCompare(live) == .orderedSame
+            case (.none, .none):
+                orgMatches = true
+            default:
+                orgMatches = false
+            }
+            guard orgMatches else { continue }
+            if let email = oauthAccount["emailAddress"] as? String {
+                let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
+    }
+
     /// 聚合全部来源后再统一判定归属与去重；定向刷新也必须先看到外部令牌，才能识别复制品。
     private func credentials(includeMonitorCredentials: Bool) async -> [ClaudeQuotaCredential] {
         var values: [ClaudeQuotaCredential] = []
@@ -373,10 +480,31 @@ actor ClaudeCodeQuotaFetcher {
         var response = await fetchUsageFromAPI(accessToken: accessToken, email: key)
         if credential.allowsRefresh, case .authenticationError = response,
            let refreshed = await refreshCredential(credential, includeMonitorCredentials: includeMonitorCredentials) {
+            accessToken = refreshed.accessToken
             response = await fetchUsageFromAPI(accessToken: refreshed.accessToken, email: key)
         }
         guard !Task.isCancelled else { return nil }
-        if case .success(let info) = response, let quota = quotaData(from: info) {
+        if case .success(let info) = response, var quota = quotaData(from: info) {
+            // Profile 画像增强：仅在 usage API 成功后发起，维护 401 认证时序并提取套餐与倍率
+            let token = accessToken
+            if let profile = await fetchProfileFromAPI(
+                accessToken: token,
+                storedPlan: credential.subscriptionType,
+                storedTier: credential.rateLimitTier
+            ) {
+                if let plan = profile.plan {
+                    quota.planType = plan
+                }
+                if let email = profile.email, !email.isEmpty {
+                    quota.accountDisplayName = email
+                }
+            }
+            if quota.planType == nil, let storedPlan = credential.subscriptionType {
+                quota.planType = CPAQuotaProfileMapper.formatClaudePlan(plan: storedPlan, tier: credential.rateLimitTier)
+            }
+            if quota.accountDisplayName == nil && credential.accountKey != "Claude Code" {
+                quota.accountDisplayName = credential.accountKey
+            }
             quotaCache[key] = CachedQuota(data: quota, timestamp: Date())
             return quota
         }

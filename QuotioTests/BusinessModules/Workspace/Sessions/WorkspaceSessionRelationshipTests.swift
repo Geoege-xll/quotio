@@ -205,4 +205,151 @@ final class WorkspaceSessionRelationshipTests: XCTestCase {
         let after = await provider.scanSessions()
         XCTAssertTrue(after.isEmpty)
     }
+
+    func testCodexFiltersImportedExternalSessionsHeadlessProbesArchivedAndEmptyShellsFromMainList() async throws {
+        let userRollout = try write(".codex/sessions/user-main.jsonl", """
+        {"type":"session_meta","payload":{"id":"user-main","source":"vscode","originator":"Codex Desktop","cwd":"/projects/quotio"}}
+        """)
+        let archivedRollout = try write(".codex/archived_sessions/archived-file.jsonl", """
+        {"type":"session_meta","payload":{"id":"archived-file","source":"cli","originator":"codex-tui","cwd":"/projects/quotio"}}
+        """)
+        try write(".codex/session_index.jsonl", """
+        {"id":"indexed-main","thread_name":"索引优先标题"}
+        """)
+        try write(".codex/external_agent_session_imports.json", """
+        {"version":1,"records":[{"source_agent":"claude","imported_thread_id":"imported-from-json"}]}
+        """)
+        try database(".codex/state_5.sqlite", """
+        CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            rollout_path TEXT,
+            title TEXT,
+            first_user_message TEXT,
+            cwd TEXT,
+            created_at INTEGER,
+            updated_at INTEGER,
+            source TEXT,
+            agent_nickname TEXT,
+            agent_role TEXT,
+            name TEXT,
+            preview TEXT,
+            thread_source TEXT,
+            originator TEXT,
+            archived INTEGER
+        );
+        CREATE TABLE external_agent_config_imports (
+            agent_name TEXT,
+            successes TEXT
+        );
+        INSERT INTO external_agent_config_imports VALUES (
+            'Claude Code',
+            '[{"item_type":"SESSIONS","target":"imported-from-db"}]'
+        );
+        INSERT INTO threads VALUES (
+            'user-main', '\(userRollout)',
+            '# Files mentioned by the user:\n\n## File: A.swift\n\n## My request for Codex:\n修复会话列表过滤',
+            '# Files mentioned by the user:\n\n## File: A.swift\n\n## My request for Codex:\n修复会话列表过滤',
+            '/projects/quotio', 100, 200, 'vscode', NULL, NULL, NULL, '修复会话列表过滤', 'user', 'Codex Desktop', 0
+        );
+        INSERT INTO threads VALUES (
+            'indexed-main', '', '原始标题', '原始提问',
+            '/projects/quotio', 100, 190, 'cli', NULL, NULL, NULL, '原始提问', 'user', 'codex-tui', 0
+        );
+        INSERT INTO threads VALUES (
+            'named-main', '', '原始标题', '原始提问',
+            '/projects/quotio', 100, 180, 'cli', NULL, NULL, '数据库自定义名称', '原始提问', 'user', 'codex-tui', 0
+        );
+        INSERT INTO threads VALUES (
+            'imported-from-db', '', 'Claude 导入会话 1', '导入内容',
+            '/private/tmp/awf-native-acceptance/claude/project', 100, 170, 'vscode', NULL, NULL, NULL, '导入内容', NULL, 'Codex Desktop', 0
+        );
+        INSERT INTO threads VALUES (
+            'imported-from-json', '', 'Claude 导入会话 2', '导入内容',
+            '/Users/test/O2O-iOS', 100, 160, 'vscode', NULL, NULL, NULL, '导入内容', NULL, NULL, 0
+        );
+        INSERT INTO threads VALUES (
+            'headless-probe', '', '仅回复一句中文：原生模型连接成功', '仅回复一句中文：原生模型连接成功',
+            '/private/tmp/awf-native-acceptance/codex/project', 100, 150, 'vscode', NULL, NULL, NULL, '仅回复一句中文', NULL, 'agent_workflow_acceptance', 0
+        );
+        INSERT INTO threads VALUES (
+            'voice-helper', '', '语音会话', '语音会话',
+            '/projects/quotio', 100, 140, 'vscode', NULL, NULL, NULL, '语音会话', 'voice_chat', 'Codex Desktop', 0
+        );
+        INSERT INTO threads VALUES (
+            'archived-db', '', '归档会话', '归档会话',
+            '/projects/quotio', 100, 130, 'cli', NULL, NULL, NULL, '归档会话', 'user', 'codex-tui', 1
+        );
+        INSERT INTO threads VALUES (
+            'empty-tui-shell', '', '', '',
+            '/Users/test/server-frp-gost', 100, 120, 'cli', NULL, NULL, NULL, '', 'user', 'codex-tui', 0
+        );
+        INSERT INTO threads VALUES (
+            'guardian-sub', '', '守护审查', '守护审查',
+            '/projects/quotio', 100, 110, 'cli', NULL, NULL, NULL, '守护审查', 'guardian_review', 'codex-tui', 0
+        );
+        """)
+
+        let provider = CodexSessionProvider(homeDir: home.path)
+        let records = await provider.scanSessions()
+        XCTAssertEqual(records.count, 11, "所有底层记录仍需保留在扫描集合中供存储与删除管理")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: archivedRollout) == false)
+        XCTAssertEqual(records.first { $0.id == "user-main" }?.title, "修复会话列表过滤")
+        XCTAssertEqual(records.first { $0.id == "indexed-main" }?.title, "索引优先标题")
+        XCTAssertEqual(records.first { $0.id == "named-main" }?.title, "数据库自定义名称")
+        XCTAssertEqual(records.first { $0.id == "guardian-sub" }?.relationship.kind, .subagent)
+        await assertMainList(records, agent: .codex, expected: ["user-main", "indexed-main", "named-main"])
+    }
+
+    func testClaudeFiltersSDKCLIProbesCommandOnlyShellsAndCleansSystemRemindersAndTitles() async throws {
+        let project = ".claude/projects/project-main"
+        try write("\(project)/interactive-main.jsonl", """
+        {"type":"permission-mode","permissionMode":"default","sessionId":"interactive-main"}
+        {"type":"api-request-blob","sessionId":"interactive-main","cwd":"/projects/quotio","entrypoint":"cli","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>不应作为标题或正文的内部提醒</system-reminder>"}]}}
+        {"type":"user","isMeta":true,"sessionId":"interactive-main","cwd":"/projects/quotio","entrypoint":"cli","message":{"role":"user","content":"<local-command-caveat>Caveat: local commands</local-command-caveat>"}}
+        {"type":"user","sessionId":"interactive-main","cwd":"/projects/quotio","entrypoint":"cli","timestamp":"2026-11-12T10:00:00Z","message":{"role":"user","content":"<command-name>/model</command-name>\\n<command-message>model</command-message>"}}
+        {"type":"user","sessionId":"interactive-main","cwd":"/projects/quotio","entrypoint":"cli","timestamp":"2026-11-12T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>系统提示</system-reminder>\\n审计并修复智能体会话列表"}]}}
+        {"type":"assistant","sessionId":"interactive-main","cwd":"/projects/quotio","entrypoint":"cli","timestamp":"2026-11-12T10:02:00Z","message":{"role":"assistant","content":[{"type":"text","text":"已完成审计与修复。"}]}}
+        {"type":"ai-title","sessionId":"interactive-main","aiTitle":"会话列表审计与修复"}
+        {"type":"file-history-snapshot","timestamp":"2026-11-12T10:03:00Z"}
+        """)
+
+        try write("\(project)/sdk-probe.jsonl", """
+        {"type":"user","sessionId":"sdk-probe","cwd":"/private/tmp/awf-native-acceptance/claude/project","entrypoint":"sdk-cli","timestamp":"2026-11-12T10:00:00Z","message":{"role":"user","content":"这是当前临时项目的单次模型路由连通测试"}}
+        {"type":"assistant","sessionId":"sdk-probe","cwd":"/private/tmp/awf-native-acceptance/claude/project","entrypoint":"sdk-cli","timestamp":"2026-11-12T10:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"ROUTE_OK"}]}}
+        """)
+
+        try write("\(project)/command-only.jsonl", """
+        {"type":"user","isMeta":true,"sessionId":"command-only","cwd":"/projects/quotio","entrypoint":"cli","message":{"role":"user","content":"<local-command-caveat>Caveat</local-command-caveat>"}}
+        {"type":"user","sessionId":"command-only","cwd":"/projects/quotio","entrypoint":"cli","timestamp":"2026-11-12T09:00:00Z","message":{"role":"user","content":"<command-name>/clear</command-name>\\n<command-message>clear</command-message>"}}
+        """)
+
+        try write("\(project)/empty-lifecycle.jsonl", """
+        {"type":"last-prompt","sessionId":"empty-lifecycle"}
+        {"type":"permission-mode","permissionMode":"default","sessionId":"empty-lifecycle","cwd":"/projects/quotio","entrypoint":"cli"}
+        {"type":"cost-state","sessionId":"empty-lifecycle"}
+        """)
+
+        try write("\(project)/slash-skill.jsonl", """
+        {"type":"permission-mode","permissionMode":"default","sessionId":"slash-skill"}
+        {"type":"user","sessionId":"slash-skill","cwd":"/projects/quotio","entrypoint":"cli","timestamp":"2026-11-12T11:00:00Z","message":{"role":"user","content":"<command-message>rex</command-message>\\n<command-name>/rex</command-name>"}}
+        {"type":"user","isMeta":true,"sessionId":"slash-skill","cwd":"/projects/quotio","entrypoint":"cli","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /Users/test/.claude/skills/rex"}]}}
+        {"type":"assistant","sessionId":"slash-skill","cwd":"/projects/quotio","entrypoint":"cli","timestamp":"2026-11-12T11:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"Rex skill 已加载。"}]}}
+        """)
+
+        let provider = ClaudeSessionProvider(homeDir: home.path)
+        let records = await provider.scanSessions()
+        XCTAssertEqual(records.count, 5)
+
+        let main = try XCTUnwrap(records.first { $0.id == "interactive-main" })
+        XCTAssertEqual(main.title, "会话列表审计与修复", "尾部带 timestamp 的快照行不能截断前方的 ai-title / custom-title")
+        XCTAssertEqual(main.summary, "审计并修复智能体会话列表")
+
+        let slashSkill = try XCTUnwrap(records.first { $0.id == "slash-skill" })
+        XCTAssertEqual(slashSkill.title, "/rex")
+
+        let messages = try await provider.loadMessages(for: main)
+        XCTAssertEqual(messages.map(\.content), ["审计并修复智能体会话列表", "已完成审计与修复。"])
+
+        await assertMainList(records, agent: .claude, expected: ["interactive-main", "slash-skill"])
+    }
 }

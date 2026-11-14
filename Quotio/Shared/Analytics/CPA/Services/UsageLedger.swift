@@ -78,14 +78,21 @@ actor UsageLedger {
     }
 
     /// SQL 负责明细聚合，旧日汇总保留既有覆盖范围语义；无法恢复的字段继续显示未知。
+    /// 热力图额外合并 52 周窗口内的非时间筛选历史日桶，保证短时间窗下仍保留完整周年热力图。
     func queryDashboard(_ query: CPAUsageQuery, dimension: CPAUsageDimension,
                         metric: CPAUsageChartMetric, limit: Int) throws -> CPAUsageDashboardReport {
         _ = try load()
         let history = CPAUsageHistoricalReport(history: historicalBuckets, collectedAt: historicalCollectedAt,
                                                query: query, calendar: calendar)
+        var heatmapQuery = query
+        heatmapQuery.start = UsageHeatmapPresentation.windowStart(now: Date(), anchorEnd: query.end, calendar: calendar)
+        heatmapQuery.end = nil
+        let heatmapHistory = CPAUsageHistoricalReport(history: historicalBuckets, collectedAt: historicalCollectedAt,
+                                                      query: heatmapQuery, calendar: calendar)
         let report = try eventStore.dashboard(query, dimension: dimension, metric: metric, limit: limit,
-                                             includesHistory: !history.buckets.isEmpty)
-        return history.merging(into: report, query: query, dimension: dimension, metric: metric, limit: limit)
+                                             includesHistory: !history.buckets.isEmpty, calendar: calendar)
+        return history.merging(into: report, query: query, dimension: dimension, metric: metric, limit: limit,
+                               heatmapHistoryBuckets: heatmapHistory.buckets)
     }
 
     func queryRuntimeMetrics(windowSeconds: Double = 3600, now: Date = Date()) throws -> CPAUsageEventMetrics {

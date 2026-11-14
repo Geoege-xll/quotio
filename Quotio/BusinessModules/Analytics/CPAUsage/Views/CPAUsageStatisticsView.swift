@@ -12,6 +12,8 @@ struct CPAUsageStatisticsView: View {
     var isCompact = false
     /// 保留隐藏 Tab 的视图身份时，必须显式停止 SQL 轮询，不能仅依赖 onDisappear。
     var isActive = true
+    var availableWidth: CGFloat = 720
+    var onHeatmapHover: (UsageHeatmapHover?) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -21,7 +23,8 @@ struct CPAUsageStatisticsView: View {
             } else {
                 CPAUsageDashboardContent(store: store, selection: $selection,
                                          totalAccounts: totalAccounts, readyAccounts: readyAccounts,
-                                         model: dashboardModel, isCompact: isCompact, isActive: isActive)
+                                         model: dashboardModel, isCompact: isCompact, isActive: isActive,
+                                         availableWidth: availableWidth, onHeatmapHover: onHeatmapHover)
             }
             CPAUsageCollectionStatus(store: store)
         }
@@ -76,6 +79,8 @@ private struct CPAUsageDashboardContent: View {
     let model: CPAUsageDashboardViewModel
     let isCompact: Bool
     let isActive: Bool
+    let availableWidth: CGFloat
+    let onHeatmapHover: (UsageHeatmapHover?) -> Void
     @State private var limit = 8
 
     private var query: CPAUsageDashboardViewModel.Query {
@@ -93,11 +98,20 @@ private struct CPAUsageDashboardContent: View {
                                         isIncomplete: result.omittedHistoricalRequests > 0,
                                         historicalRequests: result.historicalRequests, showsDetails: !isCompact)
                 if !isCompact {
-                    // 趋势与排行消费同一个报表，时间／模型／来源筛选始终保持一致。
+                    // 用量趋势采用 CPA 账本自身的 52 周热力图，随顶部 Tokens / 请求数口径及非时间筛选联动；
                     // 仪表盘不再构造完整图表，也不查询无须展示的大量排行项目。
-                    // 图表自身已提供标题、图例、说明和 quotioCard；父层只排列组件。
-                    // 移除重复外壳，避免两层背景、阴影和 16pt 内边距挤压实际绘图区。
-                    CPAUsageTrendChart(points: result.trend, hourly: result.hourly, metric: model.metric)
+                    UsageStatisticsHeatmap(
+                        title: "usage.dashboard.trend".localized(),
+                        presentation: UsageHeatmapPresentation(
+                            buckets: result.heatmapBuckets,
+                            now: Date(),
+                            firstCollectedAt: result.summary.collectionStartedAt,
+                            metric: model.metric
+                        ),
+                        accent: QuotioTheme.Colors.info,
+                        availableWidth: availableWidth,
+                        onHover: onHeatmapHover
+                    )
                     CPAUsageDistributionChart(report: result, selection: selection, dimension: model.dimension,
                                               metric: model.metric, limit: $limit)
                 }

@@ -361,6 +361,10 @@ xcodebuild test -project Quotio.xcodeproj -scheme QuotioPlus \
 
 ## 后续放置规则
 
+2026-10-30 的 [OpenAI 官方 Key 协议修复](features/openai-official-responses-routing-2026-10-30.md)将协议意图保留在 `Shared/Accounts/CustomProviders/Models/CustomProviderModels.swift`，CPA 凭据族选择及原子迁移仍归同业务的 `CustomProviderService`，原账号表单持有协议草稿。定向测试位于 `QuotioTests/Shared/Accounts/CustomProviders/OpenAIProtocolRoutingTests.swift`，真实 CPA 的离线假网关位于 `QuotioTests/Support/CPA/openai_protocol_gateway.py`；不新增状态、Task 或协议转换服务。
+
+同日复审将别名 effort 的双向纯规则投影成组放在既有 `Infrastructure/CPA/Configuration/CPAModelAliasService.swift`。`CustomProviderService` 只提交同一局部 PATCH，不跨调用别名服务的网络保存流程；保留原同步锁、成功快照和任务归属。独立 CPA 内核的输出预算限制按用户选择等待官方修复。
+
 新增功能先确认业务归属，再根据真实复用关系选择 `Shared`。业务内部的专用服务与模型跟随业务；外部系统接入跟随 `Infrastructure`。不要恢复顶层集中式 `Views / ViewModels / Models / Services`，也不要新增一个无职责边界的 `Common` 或 `Utils` 目录。
 
 新增、移动文件后同步更新本页、[项目索引](PROJECT.md)、[二次开发维护入口](SECONDARY_DEVELOPMENT.md)及受影响的本地文档链接。历史审计的日期、上游提交、原始 GitHub URL 和原始验证事实保留；已经移除的历史文件名称不伪装为当前入口。

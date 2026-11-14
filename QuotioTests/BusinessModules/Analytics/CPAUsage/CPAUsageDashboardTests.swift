@@ -207,4 +207,45 @@ final class CPAUsageDashboardTests: XCTestCase {
         XCTAssertEqual(records[2].context?.cacheWrite, 0)
         XCTAssertEqual(try JSONDecoder().decode([UsageRecord].self, from: JSONEncoder().encode(records)), records)
     }
+
+    func testHeatmapBucketsIgnoreShortTimeWindowButRespectNonTimeFiltersAndHistory() async throws {
+        let url = try directory().appendingPathComponent("ledger.json")
+        let today = calendar.startOfDay(for: Date())
+        let pastDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -14, to: today))
+        try saveHistory([
+            record("old-p-m", provider: "p", model: "m", timestamp: pastDay.addingTimeInterval(3600)),
+            record("old-other", provider: "other", model: "m2", timestamp: pastDay.addingTimeInterval(7200))
+        ], url: url)
+
+        let ledger = UsageLedger(url: url, calendar: calendar)
+        var context = CPAUsageContext()
+        context.sourceID = "cli-a"
+        context.apiKeyID = "key-1"
+        _ = try await ledger.ingest([
+            record("today-p-m", provider: "p", model: "m", timestamp: today.addingTimeInterval(3600), context: context),
+            record("today-failed", provider: "p", model: "m", timestamp: today.addingTimeInterval(4200), failed: true, context: context),
+            record("today-other", provider: "other", model: "m2", timestamp: today.addingTimeInterval(5000))
+        ], collectedAt: today.addingTimeInterval(5100))
+
+        // 仅筛选今日且按 provider="p" 过滤：摘要只统计今日；热力图仍覆盖 52 周内的历史 + 今日且只保留 provider="p"。
+        let todayProviderQuery = CPAUsageQuery(start: today, end: today.addingTimeInterval(86400), provider: "p")
+        let providerReport = try await ledger.queryDashboard(todayProviderQuery, dimension: .model, metric: .requests, limit: 8)
+        XCTAssertEqual(providerReport.summary.metrics.requests, 2)
+        XCTAssertEqual(providerReport.heatmapBuckets.reduce(0) { $0 + $1.requests }, 3,
+                       "热力图应保留 52 周内的历史与今日请求，并按 provider 过滤")
+        XCTAssertTrue(providerReport.heatmapBuckets.allSatisfy { $0.provider == "p" })
+
+        // 当筛选 source / apiKey / outcome 时，历史日桶不包含对应维度应被排除，仅保留符合筛选的明细事件。
+        let sourceReport = try await ledger.queryDashboard(
+            CPAUsageQuery(start: today, end: today.addingTimeInterval(86400), source: "cli-a"),
+            dimension: .model, metric: .requests, limit: 8
+        )
+        XCTAssertEqual(sourceReport.heatmapBuckets.reduce(0) { $0 + $1.requests }, 2)
+
+        let failedReport = try await ledger.queryDashboard(
+            CPAUsageQuery(start: today, end: today.addingTimeInterval(86400), outcome: .failed),
+            dimension: .model, metric: .requests, limit: 8
+        )
+        XCTAssertEqual(failedReport.heatmapBuckets.reduce(0) { $0 + $1.requests }, 1)
+    }
 }

@@ -72,6 +72,11 @@ struct QuotaPaceSummaryView: View {
                         empty.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(locale))))
                         .foregroundStyle(.orange)
                 } else { Text("quota.history.onPace".localized()).foregroundStyle(.secondary) }
+            } else if let resetAt = point.resetAt, resetAt <= now {
+                // 重置时间窗口已过，周期节奏评估已失效，明确提示已重置，避免降级为陈旧的历史日消耗率误导用户
+                Text("quota.reset.passed".localized())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             } else if let ratePerDay {
                 let value = point.kind == .percentage ? String(format: "%.1f%%", ratePerDay)
                     : point.unit?.format(ratePerDay) ?? String(format: "%.1f", ratePerDay)

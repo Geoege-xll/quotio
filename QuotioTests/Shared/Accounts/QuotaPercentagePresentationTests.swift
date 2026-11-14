@@ -43,4 +43,13 @@ final class QuotaPercentagePresentationTests: XCTestCase {
         XCTAssertEqual(QuotaPercentagePresentation.lowestRemaining(in: models), 10)
         XCTAssertEqual(QuotaPercentagePresentation.text(65, showUsed: true), "35%")
     }
+
+    /// 向零取整截断（.towardZero）保证带小数的剩余百分比显示时与已用百分比完全互补
+    func testTowardZeroTruncationInPresentation() {
+        let remaining = 65.8
+        XCTAssertEqual(QuotaPercentagePresentation.displayValue(remaining, showUsed: false), 65.0)
+        XCTAssertEqual(QuotaPercentagePresentation.displayValue(remaining, showUsed: true), 35.0)
+        XCTAssertEqual(QuotaPercentagePresentation.text(remaining), "65%")
+        XCTAssertEqual(QuotaPercentagePresentation.text(remaining, showUsed: true), "35%")
+    }
 }

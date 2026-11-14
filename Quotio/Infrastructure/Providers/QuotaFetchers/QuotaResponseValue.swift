@@ -137,14 +137,47 @@ nonisolated enum CPAQuotaProfileMapper {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         let account = QuotaResponseValue.object(root["account"]) ?? [:]
         let organization = QuotaResponseValue.object(root["organization"]) ?? [:]
+        let orgType = QuotaResponseValue.string(organization["organization_type"])?.lowercased()
         let hasMax = QuotaResponseValue.boolean(account["has_claude_max"])
+            ?? (orgType == "claude_max" ? true : nil)
         let hasPro = QuotaResponseValue.boolean(account["has_claude_pro"])
-        if hasMax == true { return "Max" }
+            ?? (orgType == "claude_pro" ? true : nil)
+        if hasMax == true {
+            // 解析 rate_limit_tier 倍率，如 default_claude_max_5x -> "Max 5x", default_claude_max_20x -> "Max 20x"
+            if let tier = QuotaResponseValue.string(organization["rate_limit_tier"]) ?? QuotaResponseValue.string(account["rate_limit_tier"]) {
+                let parts = tier.split(separator: "_")
+                if let multiplier = parts.first(where: { $0.hasSuffix("x") && $0.dropLast().allSatisfy(\.isNumber) && $0.count > 1 }) {
+                    return "Max \(multiplier)"
+                }
+            }
+            return "Max"
+        }
         if hasPro == true { return "Pro" }
-        if QuotaResponseValue.string(organization["organization_type"])?.lowercased() == "claude_team",
+        if orgType == "claude_team",
            QuotaResponseValue.string(organization["subscription_status"])?.lowercased() == "active" { return "Team" }
         // 只有两个标志都明确为 false 才能判为 Free，缺少画像信息不等于免费套餐。
         return hasMax == false && hasPro == false ? "Free" : nil
+    }
+
+    /// 从存储的套餐标识和速率等级格式化 Claude 套餐展示名（如 "max" + "default_claude_max_5x" -> "Max 5x"）
+    static func formatClaudePlan(plan: String?, tier: String?) -> String? {
+        guard let plan = plan?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty else { return nil }
+        let raw = plan.hasPrefix("claude_") ? String(plan.dropFirst(7)) : plan
+        let base: String
+        switch raw.lowercased() {
+        case "max": base = "Max"
+        case "pro": base = "Pro"
+        case "team": base = "Team"
+        case "free": base = "Free"
+        default: base = raw.capitalized
+        }
+        if base.lowercased() == "max", let tier {
+            let parts = tier.split(separator: "_")
+            if let multiplier = parts.first(where: { $0.hasSuffix("x") && $0.dropLast().allSatisfy(\.isNumber) && $0.count > 1 }) {
+                return "Max \(multiplier)"
+            }
+        }
+        return base
     }
 
     static func antigravityPlan(_ subscription: SubscriptionInfo) -> String? {

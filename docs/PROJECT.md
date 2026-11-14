@@ -29,6 +29,8 @@ Quotio 是原生 macOS 菜单栏与窗口应用，用于管理本机 CLIProxyAPI
 | cross-agent-compatibility-fixes | 1M 语义、角色链、账号目录提交隔离、提供商模型注册、连接测试、币种与冷却到期 | [八项交叉修复](features/cross-agent-compatibility-fixes-2026-10-19.md) |
 | claude-subagent-settings | 子代理默认规则与强制覆盖回显、JSON/Shell 冲突屏障及真实子请求验证 | [子代理配置修复](features/claude-subagent-settings-2026-10-19.md) |
 | client-card-layout | 客户端卡片两行信息、下排平铺操作与安装详情、窄窗口自适应及兼容提示本地化 | [布局与交互记录](features/client-card-layout-2026-10-19.md) |
+| openai-official-responses-routing | 官方 Key 默认 Responses、跨族别名策略与权重保护、三协议参数及第三方兼容回归；输出预算等待 CPA 内核修复 | [协议与定向验证记录](features/openai-official-responses-routing-2026-10-30.md) |
+| analytics-calls-and-cpa-heatmap | 客户端调用概览精简与去 Token 化、四项核心工具指标自适应网格、CPA 用量热力图展示边界校准与模型聚合 | [用量热力与调用分析](features/analytics-calls-and-cpa-heatmap-2026-11-13.md) |
 
 ## Controlled documents
 

@@ -32,8 +32,9 @@ nonisolated struct WorkspaceSessionListSnapshot {
             filteredSessions = source.filter { visibleIDs.contains($0.id) }
             tree = WorkspaceSessionTree(sessions: filteredSessions)
         }
-        // 通用树 roots 会为孤立节点和损坏环补遍历入口，不能用于产品主会话分类。
-        roots = filteredSessions.filter(\.isMainSession).sorted { $0.lastActiveAt > $1.lastActiveAt }
+        // 通用树 roots 会为孤立节点和损坏环补遍历入口，不能用于产品主会话分类；
+        // 同时过滤已归档、跨客户端导入、非交互子探针与空壳记录，仅展示有效可浏览主会话。
+        roots = filteredSessions.filter(\.isMainListVisible).sorted { $0.lastActiveAt > $1.lastActiveAt }
         let groups = Dictionary(grouping: roots) { $0.projectDirectory ?? "unknown:\($0.projectName)" }
         projectGroups = groups.map { identity, items in
             (id: identity, projectName: items.first?.projectName ?? "Unknown",

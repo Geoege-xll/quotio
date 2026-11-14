@@ -34,16 +34,22 @@ public nonisolated struct WorkspaceSessionRelationship: Sendable, Equatable {
 /// 三个客户端的原生字段在此集中适配；数据库与文件入口调用相同函数，
 /// 不使用项目名、标题、提示词、普通消息 parentUuid 或 AGY 消息 source 推断会话关系。
 nonisolated enum WorkspaceSessionRelationshipAdapter {
-    static func codex(source: Any?, parentID: String? = nil) -> WorkspaceSessionRelationship {
+    static func codex(source: Any?, parentID: String? = nil, threadSource: String? = nil) -> WorkspaceSessionRelationship {
         let object = sourceObject(source)
         let sourceParent = codexParent(in: object)
         // 官方 app-server schema 使用 subAgent，SQLite/rollout 使用 subagent；昵称不属于来源类型。
+        // 同时支持 state_5.sqlite 的 thread_source 字段（subagent / guardian_review）。
         let subagent = object?["subagent"] ?? object?["subAgent"]
         let sourceName = WorkspaceSessionRelationship.identifier(source as? String)
-        let subagentNames: Set<String> = ["subagent", "subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther"]
+        let normalizedThreadSource = WorkspaceSessionRelationship.identifier(threadSource)
+        let subagentNames: Set<String> = ["subagent", "subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "guardian_review"]
         let mainNames: Set<String> = ["cli", "vscode", "exec", "appServer", "app_server"]
-        let marked = subagent != nil && !(subagent is NSNull) || sourceName.map(subagentNames.contains) == true
-        let main = sourceName.map(mainNames.contains) == true || object?["custom"] is String
+        let marked = (subagent != nil && !(subagent is NSNull))
+            || sourceName.map(subagentNames.contains) == true
+            || normalizedThreadSource.map(subagentNames.contains) == true
+        let main = sourceName.map(mainNames.contains) == true
+            || object?["custom"] is String
+            || normalizedThreadSource == "user"
         return .init(kind: marked ? .subagent : (main ? .main : .unknown),
                      parentSessionID: WorkspaceSessionRelationship.identifier(parentID) ?? sourceParent)
     }

@@ -99,6 +99,8 @@ nonisolated struct CPAUsageDashboardReport: Sendable, Equatable {
     let hourly: Bool
     var categories: [CPAUsageCategory]
     var hasMoreCategories: Bool
+    /// 最近 52 周的日级按提供商/模型聚合桶（应用非时间筛选，独立于今日/近24小时等短时间窗）。
+    var heatmapBuckets: [UsageBucket] = []
     /// 旧日归档只贡献真实保存的汇总；不生成虚构事件或小时级请求。
     var historicalRequests = 0
     var omittedHistoricalRequests = 0

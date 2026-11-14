@@ -78,16 +78,21 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
+            if json["type"] as? String == "api-request-blob" { continue }
             if cwd == nil { cwd = json["cwd"] as? String }
             if createdAt == nil, let ts = json["timestamp"] as? String {
                 createdAt = SessionIOUtils.parseDate(ts)
             }
             if firstPrompt == nil {
+                if json["isMeta"] as? Bool == true || json["toolUseResult"] != nil || json["sourceToolAssistantUUID"] != nil {
+                    continue
+                }
+                var ignoredCommand = false
                 if let msg = json["message"] as? [String: Any],
                    let role = msg["role"] as? String, role == "user" {
-                    firstPrompt = extractUserPrompt(from: msg["content"])
+                    firstPrompt = extractUserPrompt(from: msg["content"], sawCommandWrapper: &ignoredCommand)
                 } else if let prompt = json["prompt"] as? String, !prompt.isEmpty {
-                    firstPrompt = prompt
+                    firstPrompt = Self.cleanUserPromptText(prompt, sawCommandWrapper: &ignoredCommand)
                 }
             }
         }
@@ -108,7 +113,8 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         let projectName = cwd.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? URL(fileURLWithPath: parentDir).deletingLastPathComponent().lastPathComponent
 
         let typePrefix = (agentType != nil && !agentType!.isEmpty && agentType != "claude") ? "[\(agentType!)] " : ""
-        let displayTitle = description.map { "\(typePrefix)\($0)" } ?? firstPrompt ?? "子任务 (\(subagentID.prefix(8)))"
+        let rawDisplayTitle = description.map { "\(typePrefix)\($0)" } ?? firstPrompt ?? "子任务 (\(subagentID.prefix(8)))"
+        let displayTitle = Self.singleLineTitle(rawDisplayTitle)
 
         return WorkspaceSession(
             id: subagentID,
@@ -128,7 +134,7 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
     }
 
     private func parseClaudeSessionMeta(filePath: String) -> WorkspaceSession? {
-        guard let (head, tail) = SessionIOUtils.readHeadAndTailLines(path: filePath, headCount: 15, tailCount: 20) else {
+        guard let (head, tail) = SessionIOUtils.readHeadAndTailLines(path: filePath, headCount: 80, tailCount: 60) else {
             return nil
         }
 
@@ -136,31 +142,102 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         var cwd: String?
         var createdAt: Date?
         var firstUserPrompt: String?
+        var firstSlashCommand: String?
         var agentID: String?
+        var entrypoint: String?
+        var customTitle: String?
+        var aiTitle: String?
+        var hasAssistantTurn = false
+        var sawCommandWrapper = false
+        var sawLocalCommandCaveat = false
+        var sawLifecycleEnvelope = false
         var relationshipMetadata: [[String: Any]] = []
+
+        // 优先尝试读取同目录关联的 <sessionDir>/custom-title.json（若存在）
+        let companionDir = (filePath as NSString).deletingPathExtension
+        let customTitlePath = (companionDir as NSString).appendingPathComponent("custom-title.json")
+        if fileManager.fileExists(atPath: customTitlePath),
+           let data = try? Data(contentsOf: URL(fileURLWithPath: customTitlePath)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            customTitle = Self.nonEmpty(json["customTitle"] as? String ?? json["title"] as? String)
+        }
 
         for line in head {
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
+            let recordType = json["type"] as? String
+            if recordType == "last-prompt" || recordType == "cost-state" || recordType == "permission-mode" {
+                sawLifecycleEnvelope = true
+            }
             if sessionID == nil, let sid = json["sessionId"] as? String {
                 sessionID = sid
             }
+            if entrypoint == nil, let ep = Self.nonEmpty(json["entrypoint"] as? String) {
+                entrypoint = ep
+            }
             relationshipMetadata.append(json)
             if agentID == nil { agentID = WorkspaceSessionRelationship.identifier(json["agentId"] as? String) }
-            if cwd == nil, let dir = json["cwd"] as? String {
-                cwd = dir
+            if cwd == nil {
+                if let dir = Self.nonEmpty(json["cwd"] as? String) {
+                    cwd = dir
+                } else if let attachment = json["attachment"] as? [String: Any],
+                          let snapshot = attachment["snapshot"] as? [String: Any],
+                          let dir = Self.nonEmpty(snapshot["workingDirectory"] as? String) {
+                    cwd = dir
+                }
             }
             if createdAt == nil, let ts = json["timestamp"] as? String {
                 createdAt = SessionIOUtils.parseDate(ts)
             }
 
+            if recordType == "custom-title", let t = Self.nonEmpty(json["customTitle"] as? String) {
+                customTitle = t
+            } else if recordType == "ai-title", let t = Self.nonEmpty(json["aiTitle"] as? String) {
+                aiTitle = t
+            } else if customTitle == nil, let t = Self.nonEmpty(json["title"] as? String) {
+                customTitle = t
+            }
+
+            // api-request-blob 是请求快照载荷，内部包含完整的 <system-reminder>，不能当作用户提问或正文消息。
+            if recordType == "api-request-blob" {
+                continue
+            }
+
+            if recordType == "assistant" || ((json["message"] as? [String: Any])?["role"] as? String == "assistant") {
+                hasAssistantTurn = true
+            }
+
             if firstUserPrompt == nil {
+                if json["isMeta"] as? Bool == true || recordType == "system" {
+                    if let content = (json["message"] as? [String: Any])?["content"] as? String {
+                        if content.contains("<local-command-caveat>") {
+                            sawLocalCommandCaveat = true
+                            sawCommandWrapper = true
+                        } else if content.contains("<local-command-") || content.contains("<command-name>") {
+                            sawCommandWrapper = true
+                        }
+                    } else if recordType == "system", json["subtype"] as? String == "local_command" {
+                        sawCommandWrapper = true
+                    }
+                    continue
+                }
+                if json["toolUseResult"] != nil || json["sourceToolAssistantUUID"] != nil {
+                    continue
+                }
                 if let msg = json["message"] as? [String: Any],
                    let role = msg["role"] as? String, role == "user" {
-                    firstUserPrompt = extractUserPrompt(from: msg["content"])
+                    if !sawLocalCommandCaveat, firstSlashCommand == nil {
+                        firstSlashCommand = Self.extractSlashCommand(from: msg["content"])
+                    }
+                    sawLocalCommandCaveat = false
+                    firstUserPrompt = extractUserPrompt(from: msg["content"], sawCommandWrapper: &sawCommandWrapper)
                 } else if let prompt = json["prompt"] as? String, !prompt.isEmpty {
-                    firstUserPrompt = prompt
+                    if !sawLocalCommandCaveat, firstSlashCommand == nil {
+                        firstSlashCommand = Self.extractSlashCommand(from: prompt)
+                    }
+                    sawLocalCommandCaveat = false
+                    firstUserPrompt = Self.cleanUserPromptText(prompt, sawCommandWrapper: &sawCommandWrapper)
                 }
             }
 
@@ -168,18 +245,35 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         }
 
         var lastActiveAt = createdAt ?? Date()
-        var customTitle: String?
+        var foundLastActiveTimestamp = false
 
         for line in tail.reversed() {
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
-            if let ts = json["timestamp"] as? String, let date = SessionIOUtils.parseDate(ts) {
+            if !foundLastActiveTimestamp,
+               let ts = json["timestamp"] as? String,
+               let date = SessionIOUtils.parseDate(ts) {
                 lastActiveAt = date
-                break
+                foundLastActiveTimestamp = true
             }
-            if customTitle == nil, let title = json["title"] as? String, !title.isEmpty {
-                customTitle = title
+
+            let recordType = json["type"] as? String
+            if recordType == "last-prompt" || recordType == "cost-state" || recordType == "permission-mode" {
+                sawLifecycleEnvelope = true
+            }
+            if recordType != "api-request-blob",
+               (recordType == "assistant" || ((json["message"] as? [String: Any])?["role"] as? String == "assistant")) {
+                hasAssistantTurn = true
+            }
+            if customTitle == nil, recordType == "custom-title", let t = Self.nonEmpty(json["customTitle"] as? String) {
+                customTitle = t
+            }
+            if customTitle == nil, let t = Self.nonEmpty(json["title"] as? String) {
+                customTitle = t
+            }
+            if aiTitle == nil, recordType == "ai-title", let t = Self.nonEmpty(json["aiTitle"] as? String) {
+                aiTitle = t
             }
         }
 
@@ -194,13 +288,29 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
         let fileSize = (attributes[.size] as? Int64) ?? 0
         let modDate = (attributes[.modificationDate] as? Date) ?? lastActiveAt
         let projectName = cwd.flatMap { URL(fileURLWithPath: $0).lastPathComponent } ?? "Unknown"
-        let displayTitle = customTitle ?? firstUserPrompt ?? "Claude Session (\(sid.prefix(8)))"
+
+        // 判断该会话是否应在左侧主列表中可见：
+        // 1. entrypoint == "sdk-cli" 代表通过 `claude -p` / SDK 非交互式启动的后台调用（如子代理或自动化脚本探针），不应混入交互式主会话列表；
+        // 2. 仅执行过本地斜杠命令（如 /model、/clear）或刚打开即退出、无任何有效用户提问与助手回复的空命令壳不展示在主列表中。
+        let isHeadlessSDK = entrypoint?.lowercased() == "sdk-cli"
+        let isEmptyOrCommandOnlyShell = (sawCommandWrapper || sawLifecycleEnvelope)
+            && firstUserPrompt == nil
+            && !hasAssistantTurn
+            && customTitle == nil
+            && aiTitle == nil
+        let isBrowseVisible = !isHeadlessSDK && !isEmptyOrCommandOnlyShell
+
+        // 若会话由 Skill 斜杠命令发起且已有真实助手回复，允许使用斜杠命令本身作为回退提问标题
+        let effectivePrompt = firstUserPrompt ?? (hasAssistantTurn ? firstSlashCommand : nil)
+        let fallbackTitle = relationship.isSubagent ? "子任务 (\(sid.prefix(8)))" : "Claude Session (\(sid.prefix(8)))"
+        let rawDisplayTitle = customTitle ?? aiTitle ?? effectivePrompt ?? fallbackTitle
+        let displayTitle = Self.singleLineTitle(rawDisplayTitle)
 
         return WorkspaceSession(
             id: sid,
             agent: .claude,
             title: displayTitle,
-            summary: firstUserPrompt,
+            summary: effectivePrompt ?? aiTitle,
             projectDirectory: cwd,
             projectName: projectName,
             createdAt: createdAt,
@@ -209,16 +319,117 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
             fileSizeBytes: fileSize,
             messageCount: 0,
             resumeCommand: WorkspaceSessionCommandBuilder.resumeCommand(agent: .claude, id: sid, parentID: relationship.parentSessionID),
-            relationship: relationship
+            relationship: relationship,
+            isBrowseVisible: isBrowseVisible
         )
     }
 
-    private func extractUserPrompt(from content: Any?) -> String? {
-        if let str = content as? String { return str }
+    private func extractUserPrompt(from content: Any?, sawCommandWrapper: inout Bool) -> String? {
+        if let str = content as? String {
+            return Self.cleanUserPromptText(str, sawCommandWrapper: &sawCommandWrapper)
+        }
         if let array = content as? [[String: Any]] {
-            return array.compactMap { $0["text"] as? String }.first
+            for item in array {
+                guard let text = item["text"] as? String else { continue }
+                if let cleaned = Self.cleanUserPromptText(text, sawCommandWrapper: &sawCommandWrapper) {
+                    return cleaned
+                }
+            }
         }
         return nil
+    }
+
+    private static func nonEmpty(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func singleLineTitle(_ raw: String) -> String {
+        raw.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? raw
+    }
+
+    /// 从用户消息中提取非本地命令的斜杠命令名与参数（如 `/rex`、`/agent-workflow:agent-config status`），
+    /// 供已产生真实助手回复的斜杠命令会话回退作为标题或消息内容。
+    private static func extractSlashCommand(from content: Any?) -> String? {
+        let raw: String
+        if let str = content as? String {
+            raw = str
+        } else if let array = content as? [[String: Any]] {
+            raw = array.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        } else {
+            return nil
+        }
+        guard !raw.contains("<local-command-stdout>"),
+              !raw.contains("<local-command-stderr>"),
+              !raw.contains("<local-command-caveat>") else {
+            return nil
+        }
+        guard let nameRegex = try? NSRegularExpression(pattern: #"<command-name>([\s\S]*?)</command-name>"#, options: [.caseInsensitive]),
+              let nameMatch = nameRegex.firstMatch(in: raw, options: [], range: NSRange(raw.startIndex..., in: raw)),
+              let nameRange = Range(nameMatch.range(at: 1), in: raw) else {
+            return nil
+        }
+        let cmdName = String(raw[nameRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cmdName.isEmpty else { return nil }
+
+        var cmdArgs = ""
+        if let argsRegex = try? NSRegularExpression(pattern: #"<command-args>([\s\S]*?)</command-args>"#, options: [.caseInsensitive]),
+           let argsMatch = argsRegex.firstMatch(in: raw, options: [], range: NSRange(raw.startIndex..., in: raw)),
+           let argsRange = Range(argsMatch.range(at: 1), in: raw) {
+            cmdArgs = String(raw[argsRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return cmdArgs.isEmpty ? cmdName : "\(cmdName) \(cmdArgs)"
+    }
+
+    /// 剥离 Claude Code 注入的系统提示块（`<system-reminder>` 等）与本地命令包装标签（`<command-name>` 等），
+    /// 提取真实用户提问文本，避免 `<system-reminder>` 或 `/model`、`/clear` 污染会话标题与摘要。
+    private static func cleanUserPromptText(_ raw: String, sawCommandWrapper: inout Bool) -> String? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+
+        if text.contains("<local-command-") || text.contains("<command-name>") || text.contains("<command-message>") {
+            sawCommandWrapper = true
+        }
+
+        let strippedBlocks = [
+            #"<system-reminder>[\s\S]*?</system-reminder>"#,
+            #"<local-command-caveat>[\s\S]*?</local-command-caveat>"#,
+            #"<local-command-stdout>[\s\S]*?</local-command-stdout>"#,
+            #"<local-command-stderr>[\s\S]*?</local-command-stderr>"#,
+            #"<command-message>[\s\S]*?</command-message>"#,
+            #"<command-name>[\s\S]*?</command-name>"#,
+            #"<command-args>[\s\S]*?</command-args>"#
+        ]
+        for pattern in strippedBlocks {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                text = regex.stringByReplacingMatches(
+                    in: text,
+                    options: [],
+                    range: NSRange(text.startIndex..., in: text),
+                    withTemplate: ""
+                )
+            }
+        }
+
+        // 剥离截图附件路径前缀（如 `[Image: source: /var/folders/...]`），保留后续真实提问
+        if let imageRegex = try? NSRegularExpression(pattern: #"^\[Image:\s*source:[^\]]+\]\s*"#, options: []) {
+            text = imageRegex.stringByReplacingMatches(
+                in: text,
+                options: [],
+                range: NSRange(text.startIndex..., in: text),
+                withTemplate: ""
+            )
+        }
+
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.hasPrefix("<system-reminder>") else {
+            return nil
+        }
+        return text
     }
 
     @concurrent
@@ -238,6 +449,11 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
 
             // 过滤子链/sidechain记录（除非当前会话本身为子任务会话）
             if !session.isSubagent, json["isSidechain"] as? Bool == true {
+                continue
+            }
+
+            // 忽略 api-request-blob 快照载荷与系统注入的 meta 行，避免 <system-reminder> 混入会话详情
+            if json["type"] as? String == "api-request-blob" || json["isMeta"] as? Bool == true {
                 continue
             }
 
@@ -297,9 +513,11 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
     }
 
     private func extractUserText(from content: Any?) -> String {
-        if let str = content as? String { return str.trimmingCharacters(in: .whitespacesAndNewlines) }
-        if let array = content as? [[String: Any]] {
-            return array.compactMap { item -> String? in
+        let raw: String
+        if let str = content as? String {
+            raw = str
+        } else if let array = content as? [[String: Any]] {
+            raw = array.compactMap { item -> String? in
                 if item["type"] as? String == "text", let text = item["text"] as? String {
                     return text
                 }
@@ -307,9 +525,12 @@ public nonisolated struct ClaudeSessionProvider: AgentSessionProviderProtocol {
                     return text
                 }
                 return nil
-            }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            }.joined(separator: "\n")
+        } else {
+            return ""
         }
-        return ""
+        var ignoredCommand = false
+        return Self.cleanUserPromptText(raw, sawCommandWrapper: &ignoredCommand) ?? ""
     }
 
     private struct ParsedAssistantContent {

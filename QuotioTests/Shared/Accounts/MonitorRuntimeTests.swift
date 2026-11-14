@@ -2145,4 +2145,115 @@ final class MonitorRuntimeTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - 上游优先修复定向回归测试
+
+    /// 验证 CLI 外部钥匙串服务识别与 /usr/bin/security -w 输出解码逻辑
+    func testCLIKeychainServiceDetectionAndOutputDecoding() throws {
+        XCTAssertTrue(KeychainHelper.isCLIExternalService(service: "Claude Code-credentials"))
+        XCTAssertTrue(KeychainHelper.isCLIExternalService(service: "Claude Code-credentials-work"))
+        XCTAssertTrue(KeychainHelper.isCLIExternalService(service: "gh:github.com"))
+        XCTAssertTrue(KeychainHelper.isCLIExternalService(service: "gh:ghe.example.com"))
+        XCTAssertTrue(KeychainHelper.isCLIExternalService(service: "cursor-access-token"))
+        XCTAssertTrue(KeychainHelper.isCLIExternalService(service: "Factory CLI", account: "auth-encryption-key-security-cli"))
+        XCTAssertFalse(KeychainHelper.isCLIExternalService(service: "Factory CLI", account: "other-account"))
+        XCTAssertFalse(KeychainHelper.isCLIExternalService(service: "com.quotio.custom"))
+
+        // Factory CLI 64 位十六进制密钥应被还原为 32 字节二进制 Data
+        let factoryKey = Data((0..<32).map { UInt8($0) })
+        let factoryHex = factoryKey.map { String(format: "%02x", $0) }.joined()
+        let decodedFactory = KeychainHelper.decodeCLIPasswordOutput(
+            Data((factoryHex + "\n").utf8),
+            service: "Factory CLI",
+            account: "auth-encryption-key-security-cli"
+        )
+        XCTAssertEqual(decodedFactory, factoryKey)
+
+        // Claude Code 十六进制编码的 JSON 应被还原，纯文本 JSON 保持原样
+        let claudeJSON = #"{"claudeAiOauth":{"accessToken":"sk-ant-test"}}"#
+        let claudeHex = Data(claudeJSON.utf8).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(
+            KeychainHelper.decodeCLIPasswordOutput(Data(claudeHex.utf8), service: "Claude Code-credentials", account: nil),
+            Data(claudeJSON.utf8)
+        )
+        XCTAssertEqual(
+            KeychainHelper.decodeCLIPasswordOutput(Data((claudeJSON + "\n").utf8), service: "Claude Code-credentials", account: nil),
+            Data(claudeJSON.utf8)
+        )
+
+        // gh:* 等纯文本 Token 即使全由十六进制字符组成，也不得误解码
+        let ghHexToken = "deadbeef0123456789abcdef"
+        XCTAssertEqual(
+            KeychainHelper.decodeCLIPasswordOutput(Data((ghHexToken + "\n").utf8), service: "gh:github.com", account: "octocat"),
+            Data(ghHexToken.utf8)
+        )
+    }
+
+    /// 验证 Claude Code 套餐倍率解析与 planDisplayName 对小写 x 的保留
+    func testClaudePlanMultiplierParsingAndDisplayNamePreservesLowercaseX() throws {
+        let max5xPayload = try JSONSerialization.data(withJSONObject: [
+            "account": ["has_claude_max": true],
+            "organization": ["organization_type": "claude_max", "rate_limit_tier": "default_claude_max_5x"],
+        ])
+        let max20xPayload = try JSONSerialization.data(withJSONObject: [
+            "account": ["has_claude_max": true],
+            "organization": ["organization_type": "claude_max", "rate_limit_tier": "default_claude_max_20x"],
+        ])
+
+        XCTAssertEqual(CPAQuotaProfileMapper.claudePlan(data: max5xPayload), "Max 5x")
+        XCTAssertEqual(CPAQuotaProfileMapper.claudePlan(data: max20xPayload), "Max 20x")
+        XCTAssertEqual(CPAQuotaProfileMapper.formatClaudePlan(plan: "max", tier: "default_claude_max_5x"), "Max 5x")
+        XCTAssertEqual(CPAQuotaProfileMapper.formatClaudePlan(plan: "claude_pro", tier: nil), "Pro")
+
+        // 展示名不可把 5x 变成 5X
+        XCTAssertEqual(ProviderQuotaData(planType: "Max 5x").planDisplayName, "Max 5x")
+        XCTAssertEqual(ProviderQuotaData(planType: "Max 20x").planDisplayName, "Max 20x")
+    }
+
+    /// 验证 Factory Droid JWT 声明提取、复合账号标识构造以及组织绑定校验
+    func testFactoryDroidJWTClaimAndOrganizationBinding() throws {
+        let header = Data(#"{"alg":"RS256"}"#.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let claims: [String: Any] = [
+            "sub": "user_123",
+            "org_id": "org_internal_abc",
+            "external_org_id": "ext_org_xyz",
+        ]
+        let payload = try JSONSerialization.data(withJSONObject: claims).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let jwt = "\(header).\(payload).sig"
+
+        XCTAssertEqual(FactoryDroidCredentialReader.jwtClaim(from: jwt, claim: "sub"), "user_123")
+        XCTAssertEqual(FactoryDroidCredentialReader.jwtClaim(from: jwt, claim: "org_id"), "org_internal_abc")
+        XCTAssertEqual(FactoryDroidCredentialReader.jwtClaim(from: jwt, claim: "external_org_id"), "ext_org_xyz")
+
+        // 复合 accountKey: sub:external_org_id
+        let compound = FactoryDroidCredential(
+            accessToken: jwt,
+            refreshToken: nil,
+            activeOrganizationID: "org_internal_abc",
+            sourcePath: "/tmp/auth.json",
+            subject: "user_123",
+            externalOrganizationID: "ext_org_xyz"
+        )
+        XCTAssertEqual(compound.accountKey, "user_123:ext_org_xyz")
+
+        let fallback = FactoryDroidCredential(
+            accessToken: jwt,
+            refreshToken: nil,
+            activeOrganizationID: "org_internal_abc",
+            sourcePath: "/tmp/auth.json"
+        )
+        XCTAssertEqual(fallback.accountKey, "org_internal_abc")
+
+        // 组织绑定校验：匹配 org_id 或 external_org_id 通过，不匹配拒绝
+        XCTAssertTrue(FactoryDroidQuotaFetcher.isOrganizationBound(accessToken: jwt, activeOrganizationID: "org_internal_abc"))
+        XCTAssertTrue(FactoryDroidQuotaFetcher.isOrganizationBound(accessToken: jwt, activeOrganizationID: "ext_org_xyz"))
+        XCTAssertTrue(FactoryDroidQuotaFetcher.isOrganizationBound(accessToken: jwt, activeOrganizationID: nil))
+        XCTAssertFalse(FactoryDroidQuotaFetcher.isOrganizationBound(accessToken: jwt, activeOrganizationID: "org_other_999"))
+    }
 }

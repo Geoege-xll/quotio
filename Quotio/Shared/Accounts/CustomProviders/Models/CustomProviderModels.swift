@@ -398,6 +398,20 @@ extension URLRequest {
 
 // MARK: - Custom Provider
 
+/// 上游协议与界面提供商类型分开保存，避免修复官方 OpenAI 时重建账号或改写模型身份。
+/// 老配置缺省自动：仅明确的官方 HTTPS 端点默认 Responses，第三方仍沿用 Chat Completions。
+enum CustomProviderAPIProtocol: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic, chatCompletions, responses
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .automatic: return "customProviders.protocol.auto".localizedStatic()
+        case .chatCompletions: return "Chat Completions"
+        case .responses: return "Responses"
+        }
+    }
+}
+
 /// A user-defined custom provider configuration
 struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
     let id: UUID
@@ -412,6 +426,28 @@ struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
     var isEnabled: Bool
     var createdAt: Date
     var updatedAt: Date
+    var apiProtocol: CustomProviderAPIProtocol
+
+    /// 严格比较端点，不凭模型名、账号名称或相似域名判断官方服务，也不接受 URL 中的认证或查询覆盖。
+    var isOfficialOpenAIEndpoint: Bool {
+        guard let url = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme?.lowercased() == "https", url.host?.lowercased() == "api.openai.com",
+              url.port == nil || url.port == 443, url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil else { return false }
+        return ["", "/", "/v1", "/v1/"].contains(url.path)
+    }
+
+    var usesResponsesAPI: Bool {
+        guard type == .openaiCompatibility else { return type == .codexCompatibility }
+        switch apiProtocol {
+        case .automatic: return isOfficialOpenAIEndpoint
+        case .responses: return true
+        case .chatCompletions: return false
+        }
+    }
+
+    /// 官方 Messages／Responses 基址统一为 /v1；第三方部署前缀与自定义 URL 保持原值。
+    var cpaBaseURL: String { isOfficialOpenAIEndpoint ? "https://api.openai.com/v1" : baseURL }
 
     init(
         id: UUID = UUID(),
@@ -425,7 +461,8 @@ struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
         limitToSelectedModels: Bool = true,
         isEnabled: Bool = true,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        apiProtocol: CustomProviderAPIProtocol = .automatic
     ) {
         self.id = id
         self.name = name
@@ -439,6 +476,7 @@ struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
         self.isEnabled = isEnabled
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.apiProtocol = apiProtocol
     }
 
     enum CodingKeys: String, CodingKey {
@@ -450,6 +488,7 @@ struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
         case isEnabled = "is-enabled"
         case createdAt = "created-at"
         case updatedAt = "updated-at"
+        case apiProtocol = "api-protocol"
     }
     
     init(from decoder: Decoder) throws {
@@ -466,6 +505,7 @@ struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        apiProtocol = try container.decodeIfPresent(CustomProviderAPIProtocol.self, forKey: .apiProtocol) ?? .automatic
     }
     
     func encode(to encoder: Encoder) throws {
@@ -482,6 +522,7 @@ struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
         try container.encode(isEnabled, forKey: .isEnabled)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encode(apiProtocol, forKey: .apiProtocol)
     }
     
     /// Validate the provider configuration

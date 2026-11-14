@@ -12,7 +12,7 @@ nonisolated enum SessionIOUtils {
     /// 按列探测旧版数据库能力，避免一个可选列缺失导致所有关系字段一起降级。
     /// 表名只接受代码内的固定标识符，不能将会话元数据拼接成 SQL。
     static func columns(in table: String, database: OpaquePointer?) -> Set<String> {
-        guard ["threads", "thread_spawn_edges", "conversation_summaries"].contains(table) else { return [] }
+        guard ["threads", "thread_spawn_edges", "external_agent_config_imports", "conversation_summaries"].contains(table) else { return [] }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }

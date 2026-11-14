@@ -7,9 +7,33 @@ nonisolated struct FactoryDroidCredential: Sendable, Equatable {
     let refreshToken: String?
     let activeOrganizationID: String?
     let sourcePath: String
+    /// 从 JWT access_token 解码的主体身份 (sub)
+    let subject: String?
+    /// 从 JWT access_token 解码的外部组织身份 (external_org_id)
+    let externalOrganizationID: String?
+
+    init(
+        accessToken: String,
+        refreshToken: String?,
+        activeOrganizationID: String?,
+        sourcePath: String,
+        subject: String? = nil,
+        externalOrganizationID: String? = nil
+    ) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.activeOrganizationID = activeOrganizationID
+        self.sourcePath = sourcePath
+        self.subject = subject
+        self.externalOrganizationID = externalOrganizationID
+    }
 
     var accountKey: String {
-        activeOrganizationID ?? "Factory Droid"
+        // 若同时具有 sub 与 external_org_id，派生复合账号标识（如 "sub:external_org_id"）
+        if let subject, let externalOrganizationID {
+            return "\(subject):\(externalOrganizationID)"
+        }
+        return activeOrganizationID ?? "Factory Droid"
     }
 }
 
@@ -302,14 +326,33 @@ nonisolated enum FactoryDroidCredentialReader {
         ].joined(separator: ":").utf8)
     }
 
+    /// 从 JWT 访问令牌中提取 payload claim 声明（如 "sub", "org_id", "external_org_id"）
+    static func jwtClaim(from token: String, claim: String) -> String? {
+        let pieces = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard pieces.count == 3 else { return nil }
+        var payload = String(pieces[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+        guard let data = Data(base64Encoded: payload),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = json[claim] as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private static func parseCredential(_ data: Data, sourcePath: String) -> FactoryDroidCredential? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let accessToken = trimmed(json["access_token"] as? String) else { return nil }
+        let subject = jwtClaim(from: accessToken, claim: "sub")
+        let externalOrgID = jwtClaim(from: accessToken, claim: "external_org_id")
         return FactoryDroidCredential(
             accessToken: accessToken,
             refreshToken: trimmed(json["refresh_token"] as? String),
             activeOrganizationID: trimmed(json["active_organization_id"] as? String),
-            sourcePath: sourcePath
+            sourcePath: sourcePath,
+            subject: subject,
+            externalOrganizationID: externalOrgID
         )
     }
 
@@ -569,7 +612,19 @@ actor FactoryDroidQuotaFetcher {
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
     }
 
+    /// 校验 JWT 内部组织绑定声明（org_id 或 external_org_id），若不匹配则拒绝访问，防止凭据与组织脱节
+    nonisolated static func isOrganizationBound(accessToken: String, activeOrganizationID: String?) -> Bool {
+        guard let requested = activeOrganizationID else { return true }
+        let orgID = FactoryDroidCredentialReader.jwtClaim(from: accessToken, claim: "org_id")
+        let externalOrgID = FactoryDroidCredentialReader.jwtClaim(from: accessToken, claim: "external_org_id")
+        guard orgID != nil || externalOrgID != nil else { return true }
+        return orgID == requested || externalOrgID == requested
+    }
+
     private func fetch(localCredential: FactoryDroidCredential) async -> ProviderQuotaData? {
+        guard Self.isOrganizationBound(accessToken: localCredential.accessToken, activeOrganizationID: localCredential.activeOrganizationID) else {
+            return ProviderQuotaData(isForbidden: true)
+        }
         var credential = localCredential
         if let pending = pendingLocalCredentials[credential.sourcePath] {
             if credential.refreshToken == pending.replacedRefreshToken {
@@ -627,7 +682,9 @@ actor FactoryDroidQuotaFetcher {
             accessToken: refreshed.accessToken,
             refreshToken: refreshed.refreshToken ?? refreshToken,
             activeOrganizationID: credential.activeOrganizationID,
-            sourcePath: credential.sourcePath
+            sourcePath: credential.sourcePath,
+            subject: FactoryDroidCredentialReader.jwtClaim(from: refreshed.accessToken, claim: "sub") ?? credential.subject,
+            externalOrganizationID: FactoryDroidCredentialReader.jwtClaim(from: refreshed.accessToken, claim: "external_org_id") ?? credential.externalOrganizationID
         )
         do {
             let persisted = try FactoryDroidCredentialReader.persistRefresh(
