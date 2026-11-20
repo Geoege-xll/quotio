@@ -117,7 +117,9 @@ final class QuotaHistoryTests: XCTestCase {
 
     func testOnlyExplicitProviderWindowsEnablePace() throws {
         let claude = try ClaudeQuotaMapper.map(data: Data(#"{"five_hour":{"utilization":20},"seven_day":{"utilization":30}}"#.utf8))
-        XCTAssertEqual(claude.models.map(\.windowSeconds), [5 * 3600, 7 * 86_400])
+        // 显式保留可选时长类型，避免整数表达式让 XCTest 将数组推断为 [Int]。
+        let expectedWindows: [TimeInterval?] = [5 * 3600, 7 * 86_400]
+        XCTAssertEqual(claude.models.map(\.windowSeconds), expectedWindows)
         let codex = try CodexUsageMapper.map(data: Data(#"{"rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":18000},"secondary_window":{"used_percent":30}}}"#.utf8))
         XCTAssertEqual(codex.models.first?.windowSeconds, 18_000)
         XCTAssertNil(codex.models.last?.windowSeconds)
