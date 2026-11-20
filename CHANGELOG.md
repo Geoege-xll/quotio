@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-11-20
+
+### build 113
+
+- 以尚未公开发布的 1.1.2 源码为基线，包含调用统计概览、后台钥匙串读取、Responses 路由和热力图改进。
+- 发行构建号改为纯数字，兼容现有打包校验。详见 [1.1.3 发行说明](docs/releases/1.1.3.md)。
+
 ## [1.1.2] - 2026-11-14
 
 ### build 1.1.2.1 - 2026-11-14
