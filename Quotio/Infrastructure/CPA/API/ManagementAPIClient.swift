@@ -245,6 +245,11 @@ actor ManagementAPIClient {
                 try await Task.sleep(nanoseconds: UInt64(backoffSeconds * 1_000_000_000))
                 return try await makeRequest(endpoint, method: method, body: body, retryCount: retryCount + 1, contentType: contentType)
             }
+            // 额度和目录的完成层需要区分超时与正常取消。仅在相关请求完成原重试后保留
+            // URL 错误码；已有 OAuth、配置、用量请求仍使用原来的错误契约。
+            if endpoint == "/requests/api-call" || endpoint == "/credentials" || endpoint.hasPrefix("/credentials/download?") {
+                if error.code == .timedOut || error.code == .cancelled { throw error }
+            }
             throw APIError.connectionError(error.localizedDescription)
         } catch {
             Self.log("[\(clientId)][\(requestId)] UNEXPECTED ERROR: \(error.localizedDescription)")

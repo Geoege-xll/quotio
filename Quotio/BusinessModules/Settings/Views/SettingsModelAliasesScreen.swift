@@ -9,8 +9,7 @@ struct SettingsModelAliasesScreen: View {
     @State private var pendingDelete: CPAModelAlias?
 
     private var available: Bool {
-        OperatingModeManager.shared.isLocalProxyMode
-            && viewModel.proxyManager.proxyStatus.running && viewModel.apiClient != nil
+        viewModel.proxyManager.proxyStatus.running && viewModel.apiClient != nil
     }
     private var busy: Bool { store.isLoading || store.isSaving }
     private var entries: [CPAModelAlias] {

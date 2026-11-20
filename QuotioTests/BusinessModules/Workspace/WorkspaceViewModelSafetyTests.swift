@@ -344,6 +344,63 @@ final class WorkspaceViewModelSafetyTests: XCTestCase {
     }
 
     @MainActor
+    func testLateSkillScanCannotRestoreIgnoredSourceOrIncludeItInBatch() async {
+        let skills = WorkspaceSkillStub()
+        let ignored = UnmanagedSkill(name: "review", agent: .codex, directoryPath: "/fixture/.agents/skills/review")
+        let other = UnmanagedSkill(name: "review", agent: .codex, directoryPath: "/fixture/.codex/skills/review")
+        await skills.setLocalUnmanagedSkills([ignored, other])
+        let vm = makeViewModel(skills: skills)
+        await vm.refreshSkills()
+
+        // 刷新先截取旧数据再挂起；忽略完成后的重载正常返回，最后才放行旧刷新。
+        await skills.deferNextUnmanagedSnapshot()
+        let refreshing = Task { await vm.refreshSkills() }
+        await skills.waitForDeferredUnmanagedSnapshot()
+        await vm.ignoreUnmanagedSkill(ignored)
+        await skills.finishDeferredUnmanagedSnapshot()
+        await refreshing.value
+        XCTAssertEqual(vm.unmanagedSkills.map(\.id), [other.id])
+        XCTAssertEqual(vm.ignoredUnmanagedSkills.map(\.id), [ignored.id])
+        XCTAssertFalse(vm.isLoadingSkills)
+
+        await vm.importAllUnmanagedSkills()
+        let imports = await skills.unmanagedImports
+        XCTAssertEqual(imports, [other.id], "批量入口只提交当前待纳管来源")
+        XCTAssertTrue(vm.unmanagedSkills.isEmpty)
+        XCTAssertEqual(vm.ignoredUnmanagedSkills.map(\.id), [ignored.id])
+        await vm.unignoreUnmanagedSkill(ignored)
+        XCTAssertEqual(vm.unmanagedSkills.map(\.id), [ignored.id])
+        XCTAssertTrue(vm.ignoredUnmanagedSkills.isEmpty)
+    }
+
+    @MainActor
+    func testIgnoreKeepsPriorListOnWriteFailureAndCommittedListOnScanFailure() async {
+        let skills = WorkspaceSkillStub()
+        let candidate = UnmanagedSkill(name: "review", agent: .claude, directoryPath: "/fixture/.claude/skills/review")
+        await skills.setLocalUnmanagedSkills([candidate])
+        let vm = makeViewModel(skills: skills)
+        await vm.refreshSkills()
+
+        await skills.setUnmanagedFailures(write: true, read: false)
+        await vm.ignoreUnmanagedSkill(candidate)
+        XCTAssertTrue(vm.errorMessage?.contains("fixture ignore write failed") == true)
+        XCTAssertEqual(vm.unmanagedSkills.map(\.id), [candidate.id])
+        XCTAssertTrue(vm.ignoredUnmanagedSkills.isEmpty)
+        XCTAssertNil(vm.toastMessage)
+
+        // 重载不可用时也需即时采用已提交的决定，以免下一次批量纳管重新提交该来源。
+        await skills.setUnmanagedFailures(write: false, read: true)
+        await vm.ignoreUnmanagedSkill(candidate)
+        XCTAssertTrue(vm.errorMessage?.contains("fixture skill scan failed") == true)
+        XCTAssertTrue(vm.unmanagedSkills.isEmpty)
+        XCTAssertEqual(vm.ignoredUnmanagedSkills.map(\.id), [candidate.id])
+        XCTAssertFalse(vm.isMutatingSkills)
+        await vm.importAllUnmanagedSkills()
+        let imports = await skills.unmanagedImports
+        XCTAssertTrue(imports.isEmpty)
+    }
+
+    @MainActor
     func testStorageFailureDoesNotShowSuccessfulRelease() async {
         let storage = WorkspaceStorageStub(cacheResult: .init(failures: ["缓存目录不可写"]))
         let vm = makeViewModel(storage: storage)
@@ -366,14 +423,34 @@ final class WorkspaceViewModelSafetyTests: XCTestCase {
     @MainActor
     func testSearchRetainsAncestorsWithoutPromotingOrphanSubagents() {
         let vm = makeViewModel()
-        vm.sessions = [session("root"), session("child", parent: "root"), session("needle", parent: "child"), session("orphan", parent: "missing")]
-        XCTAssertEqual(vm.rootFilteredSessions.map(\.id), ["root"])
+        let root = session("root")
+        let otherRoot = session("other")
+        vm.sessions = [root, session("child", parent: root.id), session("needle", parent: "child"),
+            session("unrelated", parent: root.id), session("orphan", parent: "missing"),
+            otherRoot, session("other-child", parent: otherRoot.id)]
+        XCTAssertEqual(Set(vm.rootFilteredSessions.map(\.id)), [root.id, otherRoot.id])
+        XCTAssertFalse(vm.isSessionBranchExpanded(root))
+        vm.toggleSubagentExpansion(otherRoot.id)
+
         vm.sessionSearchText = "needle"
-        XCTAssertEqual(vm.rootFilteredSessions.map(\.id), ["root"])
-        XCTAssertEqual(vm.descendantRows(for: session("root")).map { $0.session.id }, ["child", "needle"])
+        XCTAssertEqual(vm.rootFilteredSessions.map(\.id), [root.id])
+        XCTAssertEqual(vm.projectGroups.flatMap(\.sessions).map(\.id), [root.id])
+        XCTAssertEqual(vm.descendantRows(for: root).map { $0.session.id }, ["child", "needle"])
+        XCTAssertTrue(vm.isSessionExpandedBySearch(root))
+        XCTAssertTrue(vm.isSessionBranchExpanded(root))
+        XCTAssertFalse(vm.isSubagentExpanded(root.id), "搜索展开不能写入手动折叠状态")
+
+        vm.sessionSearchText = "root"
+        XCTAssertEqual(vm.rootFilteredSessions.map(\.id), [root.id])
+        XCTAssertTrue(vm.descendantRows(for: root).isEmpty, "只匹配主会话不会带出无关后代")
+        XCTAssertFalse(vm.isSessionBranchExpanded(root))
         vm.sessionSearchText = "orphan"
         XCTAssertTrue(vm.rootFilteredSessions.isEmpty, "搜索不能把缺失父会话的子任务提升为主会话")
-        XCTAssertEqual(vm.sessions.count, 4, "浏览筛选不能删除原始会话记录")
+        vm.sessionSearchText = "  "
+        XCTAssertFalse(vm.isSessionBranchExpanded(root))
+        XCTAssertTrue(vm.isSessionBranchExpanded(otherRoot), "清空搜索须保留其他主会话的手动展开")
+        XCTAssertEqual(Set(vm.descendantRows(for: root).map { $0.session.id }), ["child", "needle", "unrelated"])
+        XCTAssertEqual(vm.sessions.count, 7, "浏览筛选不能删除原始会话记录")
     }
 
     @MainActor
@@ -394,18 +471,31 @@ final class WorkspaceViewModelSafetyTests: XCTestCase {
             let conflicting = WorkspaceSession(id: "conflicting", agent: agent, title: "关系不一致",
                 projectName: "test", lastActiveAt: Date(), filePath: "/fixture/conflicting.jsonl",
                 fileSizeBytes: 1, messageCount: 1, resumeCommand: "", parentSessionID: "missing", isSubagent: false)
-            vm.sessions = [main, guardian, session("child", parent: "main", agent: agent),
+            let sideBranch = WorkspaceSession(id: "side", agent: agent, title: "内部旁支",
+                projectName: "test", lastActiveAt: Date(), filePath: "/fixture/side.jsonl",
+                fileSizeBytes: 1, messageCount: 1, resumeCommand: "",
+                relationship: .init(kind: .internalSession, parentSessionID: main.id))
+            vm.sessions = [main, guardian, session("child", parent: "main", agent: agent), sideBranch,
                 session("orphan", parent: "missing", agent: agent), session("self", parent: "self", agent: agent),
                 session("a", parent: "b", agent: agent), session("b", parent: "a", agent: agent), conflicting]
 
             XCTAssertEqual(vm.rootFilteredSessions.map(\.id), ["main"])
             XCTAssertEqual(vm.projectGroups.map(\.projectName), ["agent_workflow"])
             XCTAssertEqual(vm.projectGroups.flatMap(\.sessions).map(\.id), ["main"])
-            XCTAssertEqual(vm.descendantRows(for: main).map { $0.session.id }, ["child"])
+            let related = vm.descendantRows(for: main).map(\.session)
+            XCTAssertEqual(Set(related.map(\.id)), ["child", "side"])
+            XCTAssertEqual(main.relationship.kind.presentationTitleKey, "workspace.sessions.kind.main")
+            XCTAssertEqual(related.first { $0.id == "child" }?.relationship.kind.presentationTitleKey,
+                           "workspace.sessions.kind.subagent")
+            XCTAssertEqual(related.first { $0.id == "side" }?.relationship.kind.presentationTitleKey,
+                           "workspace.sessions.kind.internal")
+            vm.sessionSearchText = "内部旁支"
+            XCTAssertTrue(vm.isSessionBranchExpanded(main))
+            XCTAssertEqual(vm.descendantRows(for: main).map { $0.session.id }, ["side"])
             vm.sessionSearchText = "辅助审查"
             XCTAssertTrue(vm.rootFilteredSessions.isEmpty)
             XCTAssertTrue(vm.projectGroups.isEmpty)
-            XCTAssertEqual(vm.sessions.count, 8)
+            XCTAssertEqual(vm.sessions.count, 9)
         }
     }
 
@@ -509,6 +599,14 @@ private actor WorkspaceSkillStub: WorkspaceSkillServicing {
     private var installed: [WorkspaceSkill] = []
     private var updates: Set<String> = []
     private(set) var installCalls: [String] = []
+    private var localUnmanaged: [UnmanagedSkill] = []
+    private var ignoredUnmanaged: [UnmanagedSkill] = []
+    private var shouldDeferUnmanagedSnapshot = false
+    private var pendingUnmanagedSnapshot: CheckedContinuation<Void, Never>?
+    private var unmanagedSnapshotObserver: CheckedContinuation<Void, Never>?
+    private var failsUnmanagedWrite = false
+    private var failsUnmanagedRead = false
+    private(set) var unmanagedImports: [String] = []
     private var localLoad: CheckedContinuation<[WorkspaceSkill], Never>?
     private var localObserver: CheckedContinuation<Void, Never>?
     func loadRepos() async throws -> [SkillRepo] { repos }
@@ -528,7 +626,51 @@ private actor WorkspaceSkillStub: WorkspaceSkillServicing {
     func finishLocalLoad() { localLoad?.resume(returning: []); localLoad = nil; deferredLocalLoad = false }
     func setInstalledSkills(_ value: [WorkspaceSkill]) { installed = value }
     func setAvailableUpdates(_ value: Set<String>) { updates = value }
-    func scanUnmanagedSkills() async throws -> [UnmanagedSkill] { [] }
+    func scanUnmanagedSkills() async throws -> [UnmanagedSkill] { localUnmanaged }
+    func setLocalUnmanagedSkills(_ value: [UnmanagedSkill]) { localUnmanaged = value }
+    func setUnmanagedFailures(write: Bool, read: Bool) {
+        failsUnmanagedWrite = write
+        failsUnmanagedRead = read
+    }
+    func deferNextUnmanagedSnapshot() { shouldDeferUnmanagedSnapshot = true }
+    func waitForDeferredUnmanagedSnapshot() async {
+        guard pendingUnmanagedSnapshot == nil else { return }
+        await withCheckedContinuation { unmanagedSnapshotObserver = $0 }
+    }
+    func finishDeferredUnmanagedSnapshot() {
+        pendingUnmanagedSnapshot?.resume()
+        pendingUnmanagedSnapshot = nil
+    }
+    func loadUnmanagedSkillSnapshot() async throws -> UnmanagedSkillSnapshot {
+        if failsUnmanagedRead {
+            throw NSError(domain: "WorkspaceSkillStub", code: 1, userInfo: [NSLocalizedDescriptionKey: "fixture skill scan failed"])
+        }
+        let ignoredSources = Set(ignoredUnmanaged.map(\.sourceKey))
+        let snapshot = UnmanagedSkillSnapshot(
+            candidates: localUnmanaged.filter { !ignoredSources.contains($0.sourceKey) },
+            ignored: ignoredUnmanaged
+        )
+        // 挂起一次且在挂起前截取数据，以便后续写入之后的重载可独立完成。
+        if shouldDeferUnmanagedSnapshot {
+            shouldDeferUnmanagedSnapshot = false
+            await withCheckedContinuation {
+                pendingUnmanagedSnapshot = $0
+                unmanagedSnapshotObserver?.resume()
+                unmanagedSnapshotObserver = nil
+            }
+        }
+        return snapshot
+    }
+    func ignoreUnmanagedSkill(_ unmanaged: UnmanagedSkill) async throws {
+        if failsUnmanagedWrite {
+            throw NSError(domain: "WorkspaceSkillStub", code: 2, userInfo: [NSLocalizedDescriptionKey: "fixture ignore write failed"])
+        }
+        ignoredUnmanaged.append(unmanaged)
+    }
+    func unignoreUnmanagedSkill(_ ignored: UnmanagedSkill) async throws -> Bool {
+        ignoredUnmanaged.removeAll { $0.sourceKey == ignored.sourceKey }
+        return localUnmanaged.contains { $0.sourceKey == ignored.sourceKey }
+    }
     func toggleAgent(skillDirectory: String, agent: WorkspaceAgent, enable: Bool) async throws {}
     func bulkToggleAllAgents(skillDirectory: String, enable: Bool) async throws {}
     func uninstallSkill(skillDirectory: String) async throws {}
@@ -536,7 +678,10 @@ private actor WorkspaceSkillStub: WorkspaceSkillServicing {
     func checkForSkillUpdates(_ skills: [WorkspaceSkill]) async throws -> Set<String> { updates }
     func backfillSourceUpdateDates(for skills: [WorkspaceSkill]) async -> Int { 0 }
     func installSkill(skill: DiscoverableSkill, targetAgents: Set<WorkspaceAgent>) async throws { installCalls.append(skill.directory) }
-    func importUnmanagedSkill(_ unmanaged: UnmanagedSkill) async throws {}
+    func importUnmanagedSkill(_ unmanaged: UnmanagedSkill) async throws {
+        unmanagedImports.append(unmanaged.id)
+        localUnmanaged.removeAll { $0.sourceKey == unmanaged.sourceKey }
+    }
     func exportSkillsArchive(to destinationURL: URL) async throws {}
     func setDeferredDiscovery(_ value: Bool) { deferredDiscovery = value }
     func discoverSkills(repo: SkillRepo) async throws -> [DiscoverableSkill] {

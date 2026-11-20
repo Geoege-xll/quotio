@@ -248,4 +248,55 @@ final class CPAUsageDashboardTests: XCTestCase {
         )
         XCTAssertEqual(failedReport.heatmapBuckets.reduce(0) { $0 + $1.requests }, 1)
     }
+
+    func testCostRanksBeforeLimitAndAnnualBucketsKeepFullLocalDays() throws {
+        let store = CPAUsageEventStore(url: try directory().appendingPathComponent("events.sqlite"))
+        let early = day.addingTimeInterval(3600)
+        let late = day.addingTimeInterval(7200)
+        let cheap = (0..<9).map { record("cheap-\($0)", model: "cheap-\($0)", timestamp: early) }
+        let input = cheap + [record("costly", model: "z-costly", timestamp: early),
+                             record("later", model: "z-costly", timestamp: late),
+                             record("other", provider: "other", model: "z-costly", timestamp: early)]
+        try store.ingest(input.map { CPAUsageEvent(record: $0) }, collectedAt: late)
+        for n in 0..<9 { try store.savePrice(CPAModelPrice(model: "cheap-\(n)", input: 1, output: 1)) }
+        try store.savePrice(CPAModelPrice(model: "z-costly", input: 10, output: 10))
+        let exact = CPAUsageQuery(start: day, end: early, provider: "p")
+        let report = try store.dashboard(exact, dimension: .model, metric: .cost, limit: 8, calendar: calendar, now: late)
+        let pricing = try store.pricing(exact)
+        XCTAssertEqual(report.summary.metrics.requests, 10)
+        XCTAssertEqual(report.categories.count, 8)
+        XCTAssertTrue(report.hasMoreCategories)
+        XCTAssertEqual(report.categories.first?.key, "z-costly")
+        XCTAssertEqual(try XCTUnwrap(report.estimatedCost.amount), try XCTUnwrap(pricing.estimatedCost), accuracy: 1e-12)
+        XCTAssertFalse(report.estimatedCost.isPartial)
+        let costlyDay = try XCTUnwrap(report.heatmapBuckets.first { $0.model == "z-costly" })
+        XCTAssertEqual(costlyDay.requests, 2, "非时间条件仍生效，晚间同日明细不受精确窗裁剪")
+        XCTAssertEqual(try XCTUnwrap(report.heatmapCosts[costlyDay.id]?.amount), 0.0024, accuracy: 1e-12)
+        XCTAssertEqual(report.selectedEnd, early)
+        XCTAssertEqual(report.heatmapToday, day)
+    }
+
+    func testIndexedCostDistinguishesExplicitZeroUnknownAndMissingCacheSplit() throws {
+        let store = CPAUsageEventStore(url: try directory().appendingPathComponent("events.sqlite"))
+        var cache = CPAUsageContext()
+        cache.cacheRead = 40; cache.cacheWrite = 0
+        let records = [record("free", model: "free"), record("unpriced", model: "unknown"),
+                       record("known-zero", model: "partial"),
+                       UsageRecord(timestamp: day.addingTimeInterval(3600), provider: "p", model: "partial",
+                                   requestID: "missing-split", tokens: .init(input: 100, output: 20, cached: 40)),
+                       record("missing-cache-rate", model: "rate", context: cache)]
+        try store.ingest(records.map { CPAUsageEvent(record: $0) }, collectedAt: day)
+        for model in ["free", "partial", "rate"] {
+            try store.savePrice(CPAModelPrice(model: model, input: 0, output: 0))
+        }
+        let report = try store.dashboard(CPAUsageQuery(), dimension: .model, metric: .cost, limit: 8, now: day)
+        let cost = Dictionary(uniqueKeysWithValues: report.categories.map { ($0.key, $0.cost) })
+        XCTAssertEqual(cost["free"], .init(amount: 0))
+        XCTAssertEqual(cost["partial"], .init(amount: 0, isPartial: true))
+        XCTAssertEqual(cost["rate"], .init(isPartial: true))
+        XCTAssertEqual(cost["unknown"], .init(isPartial: true))
+        XCTAssertEqual(report.estimatedCost, .init(amount: 0, isPartial: true))
+        XCTAssertEqual(Set(report.categories.prefix(2).map(\.key)), ["free", "partial"])
+    }
+
 }

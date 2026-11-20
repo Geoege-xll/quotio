@@ -35,14 +35,6 @@ final class RefreshInteractionTests: XCTestCase {
         XCTAssertFalse(state.isRefreshing)
     }
 
-    func testPageRefreshOwnershipIncludesBothLegacyAccountRoutes() {
-        for page in [NavigationPage.providers, .quota, .analytics, .dashboard] {
-            XCTAssertTrue(page.providesDataRefreshAction)
-        }
-        XCTAssertFalse(NavigationPage.settings.providesDataRefreshAction)
-        XCTAssertFalse(NavigationPage.agents.providesDataRefreshAction)
-    }
-
     func testManualBatchWaitsForConflictStartedDuringDirectoryRead() async {
         var resumeDirectory: CheckedContinuation<Void, Never>?
         var occupied = false
@@ -98,12 +90,14 @@ final class RefreshInteractionTests: XCTestCase {
         let model = CPAUsageDashboardViewModel(), store = try store()
         let query = CPAUsageDashboardViewModel.Query(selection: .init(range: .hours24), dimension: .model,
                                                      metric: .tokens, limit: 8, active: true)
-        let loaded = await model.load(query, store: store)
+        // 从自然日中段开始，让第二次加载只推进滚动时间窗，不跨热力图的日格边界。
+        let now = Calendar.current.startOfDay(for: .now).addingTimeInterval(12 * 3600)
+        let loaded = await model.load(query, store: store, now: now)
         XCTAssertTrue(loaded)
         let unchanged = expectation(description: "相同后台报表不重绘图表")
         unchanged.isInverted = true
         withObservationTracking { _ = model.result } onChange: { unchanged.fulfill() }
-        let reloaded = await model.load(query, store: store)
+        let reloaded = await model.load(query, store: store, now: now.addingTimeInterval(60))
         XCTAssertTrue(reloaded)
         await fulfillment(of: [unchanged], timeout: 0.05)
         XCTAssertNotNil(model.result)

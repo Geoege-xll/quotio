@@ -93,4 +93,26 @@ final class UsageHeatmapPresentationTests: XCTestCase {
         let tokenDay8 = tokensView.weeks.flatMap(\.days).first { $0.date == date(8) }!
         XCTAssertEqual(tokenDay8.models.map(\.model), ["low-req-high-tok", "high-req-low-tok"])
     }
+
+    func testReversedPartialWindowMarksBothMidnightDaysWithoutClippingBuckets() {
+        let selection = CPAUsageSelection(range: .custom, start: date(9), end: date(8).addingTimeInterval(3600))
+        let query = selection.query(now: date(10), page: 1, pageSize: 1)
+        let wholeDay = bucket(8, tokens: 200)
+        let previous = bucket(7, tokens: 100)
+        let presentation = UsageHeatmapPresentation(buckets: [wholeDay, previous], now: date(10), firstCollectedAt: date(7),
+            metric: .cost, calendar: calendar, costs: [wholeDay.id: .init(amount: 0.25, isPartial: true), previous.id: .init(amount: 0)],
+            selectedStart: query.start, selectedEnd: query.end)
+        let days = presentation.weeks.flatMap(\.days)
+        XCTAssertEqual(days.count, 364)
+        XCTAssertEqual(days.filter(\.isInSelection).map(\.date), [date(8), date(9)], "精确端点包含次日午夜")
+        XCTAssertEqual(days.first { $0.date == date(8) }?.totals.totalTokens, 200)
+        XCTAssertEqual(presentation.peak?.cost, .init(amount: 0.25, isPartial: true))
+        XCTAssertEqual(presentation.cost, .init(amount: 0.25, isPartial: true))
+        XCTAssertEqual(presentation.activeDays, 1, "显式零不是未知，也不制造活跃天")
+
+        let all = UsageHeatmapPresentation(buckets: [wholeDay], now: date(10), firstCollectedAt: date(7), calendar: calendar)
+        XCTAssertFalse(all.hasSelection)
+        XCTAssertTrue(all.weeks.flatMap(\.days).allSatisfy(\.isInSelection))
+    }
+
 }

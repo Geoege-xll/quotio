@@ -29,9 +29,11 @@ nonisolated struct AnalyticsStorageClearResult: Equatable, Sendable {
 /// 不删除数据库文件及其 WAL/SHM，也不通过重新建库破坏其他模块或遗失迁移标记。
 actor StorageMaintenanceStore {
     private let database: AnalyticsDatabase
+    private let callResetClock: @Sendable () -> Date
 
-    init(databaseURL: URL = AnalyticsDatabase.defaultURL()) {
+    init(databaseURL: URL = AnalyticsDatabase.defaultURL(), callResetClock: @escaping @Sendable () -> Date = { Date() }) {
         database = AnalyticsDatabase(url: databaseURL)
+        self.callResetClock = callResetClock
     }
 
     /// 概况只执行标量查询；未建立数据库时返回空概况，不为了显示页面创建空库。
@@ -62,7 +64,7 @@ actor StorageMaintenanceStore {
     }
 
     /// 所选模块在同一个事务中删除，任一 SQL 失败或任务取消均整体回滚。
-    /// 保留并补齐旧版本迁移标记，防止清除后又从旧备份恢复；仍存在的源日志可在后续采集重新导入。
+    /// 保留并补齐旧版本迁移标记。客户端用量仍可重扫源日志；工具调用按本事务记录的重置时间过滤。
     func clearStatistics(_ modules: Set<AnalyticsStorageModule>) throws -> AnalyticsStorageClearResult {
         guard !modules.isEmpty else { return AnalyticsStorageClearResult(deletedCounts: [:]) }
         return try database.transaction {
@@ -90,9 +92,13 @@ actor StorageMaintenanceStore {
                     try database.execute("INSERT INTO quota_history_meta(key,value) VALUES('cleared.all',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)",
                                          [.real(historyWatermark)])
                 }
-                if module == .callAnalytics, tables.contains("call_meta") {
-                    // 调用归档只有日摘要，统计时区属于解释历史的配置；保留时区与 schema，只重置采集时间。
-                    try database.execute("UPDATE call_meta SET generated_at=?", [.real(Date.distantPast.timeIntervalSince1970)])
+                if module == .callAnalytics {
+                    if tables.contains("call_meta") {
+                        // 快照时间只描述采集的新鲜度；保留时区和 schema，不把它当作重置水位。
+                        try database.execute("UPDATE call_meta SET generated_at=?", [.real(Date.distantPast.timeIntervalSince1970)])
+                    }
+                    // 冷库也必须发布代次：边界、汇总、指纹和旧导入墓碑随同一个事务提交或回滚。
+                    try advanceCallReset(tableExists: tables.contains("call_analytics_reset"))
                 }
                 for migration in Self.legacyMigrations(for: module) {
                     try database.markMigration(migration)
@@ -101,6 +107,25 @@ actor StorageMaintenanceStore {
             }
             return AnalyticsStorageClearResult(deletedCounts: deletedCounts)
         }
+    }
+
+    /// 只在清理事务持有写锁时调用。旧表临时以 0 补列，再递增到 1；迁移失败不会留下半升级的表。
+    private func advanceCallReset(tableExists: Bool) throws {
+        // SQLite 整数加法溢出会转为 REAL；约束迫使事务失败，而不是提交重复代次。
+        let generationColumn = "generation INTEGER NOT NULL DEFAULT 0 CHECK(typeof(generation)='integer' AND generation>=0)"
+        if !tableExists {
+            try database.execute("""
+                CREATE TABLE call_analytics_reset (
+                    id INTEGER PRIMARY KEY CHECK(id=1), cleared_at REAL NOT NULL, \(generationColumn))
+                """)
+        } else if try database.scalarInt("SELECT 1 FROM pragma_table_info('call_analytics_reset') WHERE name='generation'") == nil {
+            try database.execute("ALTER TABLE call_analytics_reset ADD COLUMN \(generationColumn)")
+        }
+        // 代次从已提交的单行递增，而非取墙钟或进程内计数，独立连接和重启也不会重用代次。
+        try database.execute("""
+            INSERT INTO call_analytics_reset(id,cleared_at,generation) VALUES(1,?,1)
+            ON CONFLICT(id) DO UPDATE SET cleared_at=excluded.cleared_at, generation=call_analytics_reset.generation+1
+            """, [.real(callResetClock().timeIntervalSince1970)])
     }
 
     /// DELETE 后的空闲页可供后续写入复用；用户显式执行此动作才重排数据库并尝试归还磁盘空间。

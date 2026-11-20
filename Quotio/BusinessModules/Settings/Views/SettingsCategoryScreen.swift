@@ -3,19 +3,13 @@ import SwiftUI
 /// 分类页只组合原有业务组件，系统 Form 负责表单的层次、间距与分隔。
 /// 页面标题和返回按钮由外层 NavigationStack 提供，不再手工绘制第二套导航栏。
 struct SettingsCategoryScreen: View {
-    @State private var modeManager = OperatingModeManager.shared
     let destination: SettingsDestination
-    let onShowMode: () -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
             Form {
-                if destination.category.isCPAOnly && !modeManager.isLocalProxyMode {
-                    localModeNotice
-                } else {
-                    ForEach(destination.category.topics) { topic in
-                        topicContent(topic).id(topic)
-                    }
+                ForEach(destination.category.topics) { topic in
+                    topicContent(topic).id(topic)
                 }
             }
             .formStyle(.grouped)
@@ -31,19 +25,11 @@ struct SettingsCategoryScreen: View {
         .monospacedDigit()
     }
 
-    private var localModeNotice: some View {
-        Section {
-            Label("settings.navigation.localModeHelp".localized(), systemImage: "network.slash")
-                .foregroundStyle(.secondary)
-            Button("settings.navigation.openMode".localized(), action: onShowMode)
-        } header: { Text("settings.navigation.requiresLocal".localized()) }
-    }
-
     @ViewBuilder private func topicContent(_ topic: SettingsTopic) -> some View {
         switch topic {
         case .mode:
-            // 模式只在首页编辑；兼容旧搜索目标时也引导回同一个控件。
-            Section { Button("settings.navigation.openMode".localized(), action: onShowMode) }
+            // 旧定位由 SettingsDestination 转到服务设置，分类列表不再生成此节。
+            EmptyView()
         case .startup:
             Section { LaunchAtLoginToggle() } header: {
                 Text("settings.startup".localized())
@@ -65,32 +51,29 @@ struct SettingsCategoryScreen: View {
         case .notifications:
             NotificationSettingsSection()
         case .server:
-            if modeManager.isLocalProxyMode { LocalProxyServerSection(showsManagementKey: false) }
+            LocalProxyServerSection(showsManagementKey: false)
         case .upstream:
-            if modeManager.isLocalProxyMode { ProxySettingsSection(scope: .network) }
+            ProxySettingsSection(scope: .network)
         case .aliases:
-            if modeManager.isLocalProxyMode { SettingsModelAliasesSection() }
+            SettingsModelAliasesSection()
         case .requestPolicy:
-            if modeManager.isLocalProxyMode { ProxySettingsSection(scope: .requests) }
+            ProxySettingsSection(scope: .requests)
         case .privacy:
             PrivacySettingsSection()
         case .yubiKey:
             YubiKeySettingsSection()
         case .managementKey:
-            if modeManager.isLocalProxyMode {
-                Section { ManagementKeyRow() } header: {
-                    Text("settings.managementKey".localized())
-                } footer: {
-                    Text("settings.navigation.managementKeyHelp".localized())
-                }
-            } else { localModeNotice }
+            Section { ManagementKeyRow() } header: {
+                Text("settings.managementKey".localized())
+            } footer: {
+                Text("settings.navigation.managementKeyHelp".localized())
+            }
         case .logging:
-            if modeManager.isLocalProxyMode { ProxySettingsSection(scope: .logging) }
-            else { localModeNotice }
+            ProxySettingsSection(scope: .logging)
         case .workaround:
             workaroundSection
         case .paths:
-            if modeManager.isLocalProxyMode { LocalPathsSection() }
+            LocalPathsSection()
         case .maintenanceLinks:
             Section {
                 NavigationLink(value: SettingsAuxiliaryPage.storageData) {
@@ -100,10 +83,8 @@ struct SettingsCategoryScreen: View {
                 NavigationLink(value: SettingsAuxiliaryPage.upstreamUpdates) {
                     Label("updates.upstream.title".localized(), systemImage: "arrow.triangle.branch")
                 }
-                if modeManager.isLocalProxyMode {
-                    NavigationLink(value: SettingsAuxiliaryPage.logs) {
-                        Label("settings.navigation.openLogs".localized(), systemImage: "doc.text.magnifyingglass")
-                    }
+                NavigationLink(value: SettingsAuxiliaryPage.logs) {
+                    Label("settings.navigation.openLogs".localized(), systemImage: "doc.text.magnifyingglass")
                 }
             } header: { Text(topic.title) }
         }

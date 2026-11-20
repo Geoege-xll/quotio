@@ -60,11 +60,11 @@ struct MenuActionsView: View {
                 title: "action.refresh".localized(),
                 // 只显示这一轮用户操作；后台额度刷新仍可提交手动等待请求。
                 // 状态由 ViewModel 持有，菜单重建也不会允许第二份并发用户刷新。
-                isLoading: viewModel.manualAccountRefreshState.isRefreshing
+                isLoading: viewModel.canRefreshAccountQuotas && viewModel.manualAccountRefreshState.isRefreshing
             ) {
                 Task { await viewModel.manualRefresh() }
             }
-            .disabled(viewModel.manualAccountRefreshState.isRefreshing)
+            .disabled(!viewModel.canRefreshAccountQuotas || viewModel.manualAccountRefreshState.isRefreshing)
             
             MenuBarActionButton(
                 icon: "macwindow",

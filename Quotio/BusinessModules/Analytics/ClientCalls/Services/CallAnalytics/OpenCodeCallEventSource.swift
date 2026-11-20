@@ -49,10 +49,12 @@ nonisolated struct OpenCodeCallEventSource {
         let snapshotPath = URL(fileURLWithPath: canonicalDirectory).appendingPathComponent(Self.databaseFilename).path
         try Task.checkCancellation()
 
-        let sinceMillis: Int64? = cutoff.map { Int64($0.timeIntervalSince1970 * 1000) }
+        // SQL 只缩小查询范围；在聚合前用完整水位比较 part 创建时间，不用 state 的完成时间。
+        let sinceMillis = cutoff.flatMap { Int64(exactly: ($0.timeIntervalSince1970 * 1000).rounded(.down)) }
         var accumulator = CallEventAccumulator()
         do {
-            try forEachToolPart(databasePath: snapshotPath, sinceMillis: sinceMillis) { millis, data in
+            try forEachToolPart(databasePath: snapshotPath, sinceMillis: sinceMillis, requiresCreationTime: cutoff != nil) { millis, data in
+                guard CallAnalyticsClock.includesInvocation(at: Date(timeIntervalSince1970: Double(millis) / 1000), after: cutoff) else { return }
                 parsePart(data, millis: millis, clock: clock, into: &accumulator)
             }
         } catch {
@@ -208,6 +210,7 @@ nonisolated struct OpenCodeCallEventSource {
     private func forEachToolPart(
         databasePath: String,
         sinceMillis: Int64?,
+        requiresCreationTime: Bool,
         onRow: (Int64, Data) -> Void
     ) throws {
         var db: OpaquePointer?
@@ -220,6 +223,7 @@ nonisolated struct OpenCodeCallEventSource {
         sqlite3_busy_timeout(db, 1000)
 
         var sql = "SELECT time_created, data FROM part WHERE 1 = 1"
+        if requiresCreationTime { sql += " AND typeof(time_created) = 'integer'" }
         if sinceMillis != nil {
             sql += " AND time_created >= ?"
         }

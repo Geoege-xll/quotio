@@ -64,6 +64,28 @@ actor QuotaHistoryStore {
         }
     }
 
+    /// 从历史事实枚举仍在保留期内的原始账号身份；查询不创建历史表，也不读取凭据。
+    func accounts(mode: String, now: Date = Date()) throws -> [QuotaHistoryAccount] {
+        guard FileManager.default.fileExists(atPath: database.url.path),
+              try database.scalarInt("SELECT 1 FROM sqlite_master WHERE type='table' AND name='quota_history_samples'") == 1 else {
+            return []
+        }
+
+        // 查询边界与原指标目录一致。以持久化主键去重，只返回已知提供商的精确账号键。
+        let rows: [QuotaHistoryAccount?] = try database.query("""
+            SELECT DISTINCT provider, account_key FROM quota_history_samples
+            WHERE mode=? AND observed_at>=? AND observed_at<=?
+            ORDER BY provider, account_key
+            """, [.text(mode), .real(now.addingTimeInterval(-Self.retention).timeIntervalSince1970),
+                  .real(now.timeIntervalSince1970)]) { statement in
+            guard let rawProvider = sqlite3_column_text(statement, 0),
+                  let rawAccountKey = sqlite3_column_text(statement, 1),
+                  let provider = AIProvider(rawValue: String(cString: rawProvider)) else { return nil }
+            return QuotaHistoryAccount(mode: mode, provider: provider, accountKey: String(cString: rawAccountKey))
+        }
+        return rows.compactMap { $0 }
+    }
+
     /// 指标目录有界读取每项最新元数据；只用于同一精确账号的下拉选择。
     func metrics(account: QuotaHistoryAccount, now: Date = Date()) throws -> [QuotaHistoryPoint] {
         guard FileManager.default.fileExists(atPath: database.url.path) else { return [] }

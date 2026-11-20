@@ -10,27 +10,15 @@ import SwiftUI
 
 /// Represents the source/type of an account for display purposes
 enum AccountSource: Equatable {
-    case proxy           // From proxy API (AuthFile)
-    case direct          // From disk auth files (DirectAuthFile)
-    case autoDetected    // Auto-detected from IDE (Cursor, Trae)
-    case monitor(MonitorAccountSource)
-    // 只有额度快照、尚未匹配到连接的条目。不能伪装成有效认证或赋予删除凭据权限。
-    case quotaCache
+    case proxy           // CPA 确认的认证目录
+    case direct          // 用户手动配置的密钥或连接
+    case autoDetected    // 用户主动扫描并导入的 Cursor 或 Trae 账号
     
     var displayName: String {
         switch self {
         case .proxy: return "providers.source.proxy".localizedStatic()
         case .direct: return "providers.source.disk".localizedStatic()
-        case .autoDetected: return "providers.autoDetected".localizedStatic()
-        case .monitor(let source): return source.displayName
-        case .quotaCache: return "accounts.source.quotaCache".localizedStatic()
-        }
-    }
-
-    var supportsDisable: Bool {
-        switch self {
-        case .proxy, .monitor: true
-        case .direct, .autoDetected, .quotaCache: false
+        case .autoDetected: return "accounts.source.importedIDE".localizedStatic()
         }
     }
 }
@@ -51,7 +39,9 @@ struct AccountRowData: Identifiable, Hashable {
     let canDelete: Bool           // Only proxy accounts can be deleted
     let canEdit: Bool             // Whether this account can be edited (GLM only)
     let canSwitch: Bool           // Whether this account can be switched (Antigravity only)
-    /// 只允许真实 CPA 文件账号编辑权重；监控账号、运行时 API Key 和插件虚拟账号不走文件字段接口。
+    /// 离线快照仍保留真实身份、状态和规范键，只有当前 CPA 会话已确认目录后才开放操作。
+    let canManageCPA: Bool
+    /// 只允许真实 CPA 文件账号编辑权重；运行时 API Key 和插件虚拟账号不走文件字段接口。
     let canEditRoutingWeight: Bool
     let authIndex: String?
     let weight: Int?
@@ -73,6 +63,7 @@ struct AccountRowData: Identifiable, Hashable {
         canDelete: Bool,
         canEdit: Bool = false,
         canSwitch: Bool = false,
+        canManageCPA: Bool = true,
         canEditRoutingWeight: Bool = false,
         authIndex: String? = nil,
         weight: Int? = nil,
@@ -92,6 +83,7 @@ struct AccountRowData: Identifiable, Hashable {
         self.canDelete = canDelete
         self.canEdit = canEdit
         self.canSwitch = canSwitch
+        self.canManageCPA = source == .proxy && canManageCPA
         self.canEditRoutingWeight = canEditRoutingWeight
         self.authIndex = authIndex
         self.weight = weight
@@ -108,11 +100,11 @@ struct AccountRowData: Identifiable, Hashable {
 
     func activeCooldowns(at date: Date) -> [AuthFileCooldown] { AuthFileCooldown.active(cooldowns, at: date) }
     func canResetCooldown(at date: Date) -> Bool {
-        !activeCooldowns(at: date).isEmpty && authIndex?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        canManageCPA && !activeCooldowns(at: date).isEmpty
+            && authIndex?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
-    /// 固定入口遵循已确认的额度归属。歧义管理行没有可固定凭据；缓存行
-    /// 仍有自己的键，多 Key 连接则分别提供所有 Key，不把首 Key 代表整条连接。
+    /// 固定入口遵循已确认的额度归属。歧义管理行没有可固定凭据，多 Key 连接逐 Key 固定。
     var menuBarItems: [MenuBarQuotaItem] {
         quotaAccountKeys.map { MenuBarQuotaItem(provider: provider.rawValue, accountKey: $0) }
     }
@@ -123,13 +115,13 @@ struct AccountRowData: Identifiable, Hashable {
     }
 
     var canDownloadAuthFile: Bool {
-        authFileName != nil
+        canManageCPA && authFileName != nil
     }
 
     // MARK: - Factory Methods
     
-    /// Create from AuthFile (proxy mode)
-    static func from(authFile: AuthFile, provider: AIProvider) -> AccountRowData {
+    /// 当前目录和离线目录采用同一规范键；快照权限与原身份字段独立。
+    static func from(authFile: AuthFile, provider: AIProvider, canManage: Bool = true) -> AccountRowData {
         let name = authFile.email ?? authFile.name
         return AccountRowData(
             id: authFile.id,
@@ -141,8 +133,9 @@ struct AccountRowData: Identifiable, Hashable {
             status: authFile.status,
             statusMessage: authFile.statusMessage,
             isDisabled: authFile.disabled,
-            canDelete: true,
-            canEditRoutingWeight: authFile.runtimeOnly != true &&
+            canDelete: canManage,
+            canManageCPA: canManage,
+            canEditRoutingWeight: canManage && authFile.runtimeOnly != true &&
                 !(["api-key", "plugin"].contains(authFile.source?.lowercased() ?? "")) &&
                 authFile.name.lowercased().hasSuffix(".json"),
             authIndex: authFile.authIndex,
@@ -152,26 +145,7 @@ struct AccountRowData: Identifiable, Hashable {
         )
     }
     
-    /// Create from DirectAuthFile (quota-only mode or proxy stopped)
-    static func from(directAuthFile: DirectAuthFile) -> AccountRowData {
-        let name = directAuthFile.email ?? directAuthFile.filename
-        return AccountRowData(
-            id: directAuthFile.id,
-            provider: directAuthFile.provider,
-            displayName: name,
-            menuBarAccountKey: directAuthFile.menuBarAccountKey,
-            authFileName: directAuthFile.filename,
-            source: .direct,
-            status: nil,
-            statusMessage: nil,
-            isDisabled: false,
-            canDelete: false
-        )
-    }
-    
-    /// Create from auto-detected account (Cursor, Trae)
-    /// Cursor/Trae accounts are imported from local IDE databases via "Scan for IDEs";
-    /// deleting them removes the imported quota data from Quotio (issue #213).
+    /// Cursor 和 Trae 账号由用户主动扫描导入。删除时只移除 Quotio 已保存的导入数据。
     static func from(provider: AIProvider, accountKey: String) -> AccountRowData {
         AccountRowData(
             id: "\(provider.rawValue)_\(accountKey)",
@@ -186,30 +160,11 @@ struct AccountRowData: Identifiable, Hashable {
         )
     }
 
-    static func from(
-        monitorAccount: MonitorAccount,
-        status: String?,
-        statusMessage: String?
-    ) -> AccountRowData {
-        AccountRowData(
-            id: monitorAccount.id,
-            provider: monitorAccount.provider,
-            displayName: monitorAccount.displayName,
-            menuBarAccountKey: monitorAccount.accountKey,
-            source: .monitor(monitorAccount.source),
-            status: status,
-            statusMessage: statusMessage,
-            isDisabled: monitorAccount.isDisabled,
-            canDelete: monitorAccount.canDelete,
-            canEdit: monitorAccount.source == .quotioKeychain
-                && [.factoryDroid, .openRouter, .amp].contains(monitorAccount.provider)
-        )
-    }
-
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
         hasher.combine(authFileName)
         hasher.combine(isDisabled)
+        hasher.combine(canManageCPA)
         hasher.combine(status)
         hasher.combine(authIndex)
         hasher.combine(weight)
@@ -221,6 +176,7 @@ struct AccountRowData: Identifiable, Hashable {
         lhs.id == rhs.id &&
         lhs.authFileName == rhs.authFileName &&
         lhs.isDisabled == rhs.isDisabled &&
+        lhs.canManageCPA == rhs.canManageCPA &&
         lhs.status == rhs.status &&
         lhs.authIndex == rhs.authIndex &&
         lhs.weight == rhs.weight &&
@@ -255,8 +211,21 @@ struct AccountRow: View {
     @State private var showWeightSheet = false
     @State private var pendingMenuBarItem: MenuBarQuotaItem?
 
+    /// 同时校验目录行及实时会话，覆盖菜单已经打开或确认弹窗尚未关闭时代理停止的情况。
+    private var canManageCPA: Bool {
+        account.canManageCPA && viewModel.hasCurrentCPAAccountDirectory
+    }
+
     private var canEditRoutingWeight: Bool {
-        account.canEditRoutingWeight && viewModel.proxyManager.proxyStatus.running && viewModel.apiClient != nil
+        account.canEditRoutingWeight && canManageCPA
+    }
+
+    private var canSwitchAntigravity: Bool {
+        account.provider == .antigravity && !isActiveInIDE && canManageCPA && onSwitch != nil
+    }
+
+    private var canDeleteAccount: Bool {
+        account.canDelete && (account.source != .proxy || canManageCPA)
     }
 
     private var isMenuBarSelected: Bool {
@@ -337,7 +306,8 @@ struct AccountRow: View {
 
                 HStack(spacing: 6) {
                     // Status indicator (only for proxy accounts)
-                    if let status = account.status {
+                    if let status = account.status,
+                       canManageCPA || !["ready", "active"].contains(status) {
                         Circle()
                             .fill(statusColor)
                             .frame(width: 5.5, height: 5.5)
@@ -386,7 +356,7 @@ struct AccountRow: View {
                 }
 
                 // Active in IDE badge (Antigravity only)
-                if account.provider == .antigravity && isActiveInIDE {
+                if account.provider == .antigravity && isActiveInIDE && canManageCPA {
                     HStack(spacing: 4) {
                         Circle()
                             .fill(Color.green)
@@ -404,7 +374,7 @@ struct AccountRow: View {
                 }
 
                 // Switch button (Antigravity only, for proxy/direct accounts that are not active)
-                if account.provider == .antigravity && !isActiveInIDE && account.source != .autoDetected {
+                if canSwitchAntigravity {
                     Button {
                         onSwitch?()
                     } label: {
@@ -424,7 +394,7 @@ struct AccountRow: View {
                 menuBarControl
 
                 // Cooldown reset button
-                if account.canResetCooldown(at: date) {
+                if canManageCPA && account.canResetCooldown(at: date) {
                     QuotioCircularIconButton(
                         systemImage: "arrow.counterclockwise",
                         tint: .orange,
@@ -441,7 +411,7 @@ struct AccountRow: View {
                 }
 
                 // Disable/Enable toggle button (only for proxy accounts)
-                if account.source.supportsDisable, let onToggleDisabled = onToggleDisabled {
+                if canManageCPA, let onToggleDisabled {
                     let title = account.isDisabled ? "providers.enable".localized() : "providers.disable".localized()
                     QuotioCircularIconButton(
                         systemImage: account.isDisabled ? "xmark.circle.fill" : "checkmark.circle",
@@ -483,7 +453,7 @@ struct AccountRow: View {
                 }
 
                 // Delete button (only for proxy accounts)
-                if account.canDelete, onDelete != nil {
+                if canDeleteAccount, onDelete != nil {
                     QuotioCircularIconButton(
                         systemImage: "trash",
                         tint: .red,
@@ -512,7 +482,7 @@ struct AccountRow: View {
         }
         .contentShape(Rectangle())
         .contextMenu {
-            if account.canResetCooldown(at: date) {
+            if canManageCPA && account.canResetCooldown(at: date) {
                 Button {
                     if let authIndex = account.authIndex {
                         Task { await viewModel.resetAuthFileCooldown(authIndex: authIndex) }
@@ -528,7 +498,7 @@ struct AccountRow: View {
                 }
             }
             // Switch account option (Antigravity only)
-            if account.provider == .antigravity && !isActiveInIDE && account.source != .autoDetected {
+            if canSwitchAntigravity {
                 Button {
                     onSwitch?()
                 } label: {
@@ -538,7 +508,7 @@ struct AccountRow: View {
                 Divider()
             }
             
-            if let onDownload {
+            if canManageCPA, let onDownload {
                 Button {
                     onDownload()
                 } label: {
@@ -550,7 +520,7 @@ struct AccountRow: View {
             menuBarButtons
 
             // Disable/Enable toggle (only for proxy accounts)
-            if account.source.supportsDisable, let onToggleDisabled = onToggleDisabled {
+            if canManageCPA, let onToggleDisabled {
                 Button {
                     onToggleDisabled()
                 } label: {
@@ -563,7 +533,7 @@ struct AccountRow: View {
             }
 
             // Delete option (only for proxy accounts)
-            if account.canDelete, onDelete != nil {
+            if canDeleteAccount, onDelete != nil {
                 Divider()
                 
                 Button(role: .destructive) {
@@ -574,16 +544,19 @@ struct AccountRow: View {
             }
         }
         .sheet(isPresented: $showWeightSheet) {
-            if let client = viewModel.apiClient, let name = account.authFileName {
+            if canEditRoutingWeight, let client = viewModel.apiClient, let name = account.authFileName {
                 CPAAccountWeightSheet(displayName: maskedDisplayName, authFileName: name, client: client) {
                     // 只刷新账号元数据，不为一次权重修改额外发起所有提供商的额度请求。
                     Task { await viewModel.refreshData(refreshQuotas: false) }
                 }
             }
         }
+        .onChange(of: canManageCPA) { _, canManage in
+            if !canManage { showWeightSheet = false }
+        }
         .confirmationDialog("providers.deleteConfirm".localized(), isPresented: $showDeleteConfirmation) {
             Button("action.delete".localized(), role: .destructive) {
-                onDelete?()
+                if canDeleteAccount { onDelete?() }
             }
             Button("action.cancel".localized(), role: .cancel) {}
         } message: {

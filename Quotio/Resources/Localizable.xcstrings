@@ -1,93 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "customProviders.protocol.info" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatic uses Responses for the official OpenAI endpoint and Chat Completions for third-party services. Select Chat Completions explicitly for legacy models when needed."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自动模式：OpenAI 官方地址使用 Responses，第三方兼容服务保持 Chat Completions。旧型号有需要时可明确选择 Chat Completions。"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le mode automatique utilise Responses pour OpenAI et Chat Completions pour les services tiers. Choisissez explicitement Chat Completions pour les anciens modèles si nécessaire."
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tự động dùng Responses cho địa chỉ OpenAI chính thức và Chat Completions cho dịch vụ bên thứ ba. Chọn Chat Completions khi dùng mẫu cũ nếu cần."
-          }
-        }
-      }
-    },
-    "customProviders.protocol.advanced" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Upstream protocol"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "高级：上游协议"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Protocole en amont"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Giao thức thượng nguồn"
-          }
-        }
-      }
-    },
-    "customProviders.protocol.auto" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatic"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自动"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatique"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tự động"
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -521,6 +434,35 @@
         }
       }
     },
+    "accounts.directory.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not verify the CPA account directory. Saved accounts are read-only."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de vérifier le répertoire des comptes CPA. Les comptes enregistrés sont en lecture seule."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Không thể xác minh danh sách tài khoản CPA. Các tài khoản đã lưu chỉ để xem."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认 CPA 账号目录，已保存的账号仅供查看。"
+          }
+        }
+      }
+    },
     "accounts.filter.all" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -578,13 +520,158 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Several credentials share this quota key. The quota is shown separately as a cache entry."
+            "value" : "Several credentials share this quota key. The account’s quota cannot be determined."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "多个凭据共享此额度键，无法确认归属。额度已作为独立缓存条目展示。"
+            "value" : "多个凭据共享此额度键，无法确认该账号的额度。"
+          }
+        }
+      }
+    },
+    "accounts.quota.offline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA is offline. Saved accounts and quotas are shown for reference."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA est hors ligne. Les comptes et quotas enregistrés sont affichés à titre indicatif."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA đang ngoại tuyến. Tài khoản và hạn mức đã lưu chỉ để tham khảo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA 离线，当前显示上次保存的账号和额度。"
+          }
+        }
+      }
+    },
+    "accounts.quota.refresh.unsupported" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This provider does not support quota queries yet."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce fournisseur ne prend pas encore en charge la consultation des quotas."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nhà cung cấp này chưa hỗ trợ truy vấn hạn mức."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此提供商暂不支持额度查询。"
+          }
+        }
+      }
+    },
+    "accounts.quota.source.cpa" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Via CPA"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Via CPA"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qua CPA"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 CPA"
+          }
+        }
+      }
+    },
+    "accounts.quota.source.explicitConnection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From configured connection"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depuis la connexion configurée"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Từ kết nối đã cấu hình"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自已配置的连接"
+          }
+        }
+      }
+    },
+    "accounts.quota.source.matchedCredential" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From the same account"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depuis le même compte"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Từ cùng tài khoản"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自同一账号的补查"
           }
         }
       }
@@ -619,6 +706,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "刷新服务商额度"
+          }
+        }
+      }
+    },
+    "accounts.source.importedIDE" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported from IDE"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importé depuis un IDE"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã nhập từ IDE"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已从 IDE 导入"
           }
         }
       }
@@ -14540,6 +14656,122 @@
         }
       }
     },
+    "customProviders.openAIOfficial" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Official OpenAI API Key"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clé API OpenAI officielle"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Khóa API OpenAI chính thức"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI 官方 API Key"
+          }
+        }
+      }
+    },
+    "customProviders.openAIOfficial.emptyModels" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The OpenAI model list is empty for this API key."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La liste des modèles OpenAI est vide pour cette clé API."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Danh sách mô hình OpenAI trống đối với khóa API này."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 API Key 的 OpenAI 模型列表为空。"
+          }
+        }
+      }
+    },
+    "customProviders.openAIOfficial.selectModel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select at least one model from the current OpenAI model list before adding the provider."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sélectionnez au moins un modèle de la liste OpenAI actuelle avant d’ajouter le fournisseur."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chọn ít nhất một mô hình từ danh sách OpenAI hiện tại trước khi thêm nhà cung cấp."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加供应商前，请从当前 OpenAI 模型列表中至少选择一个模型。"
+          }
+        }
+      }
+    },
+    "customProviders.openAIOfficial.unauthorized" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The OpenAI API key is invalid or does not have permission to list models."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clé API OpenAI n’est pas valide ou n’a pas l’autorisation de lister les modèles."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Khóa API OpenAI không hợp lệ hoặc không có quyền xem danh sách mô hình."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI API Key 无效或没有读取模型列表的权限。"
+          }
+        }
+      }
+    },
     "customProviders.optional" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -14652,6 +14884,93 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "例如 my-custom-prefix"
+          }
+        }
+      }
+    },
+    "customProviders.protocol.advanced" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upstream protocol"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocole en amont"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Giao thức thượng nguồn"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高级：上游协议"
+          }
+        }
+      }
+    },
+    "customProviders.protocol.auto" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatique"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tự động"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动"
+          }
+        }
+      }
+    },
+    "customProviders.protocol.info" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic uses Responses for the official OpenAI endpoint and Chat Completions for third-party services. Select Chat Completions explicitly for legacy models when needed."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le mode automatique utilise Responses pour OpenAI et Chat Completions pour les services tiers. Choisissez explicitement Chat Completions pour les anciens modèles si nécessaire."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tự động dùng Responses cho địa chỉ OpenAI chính thức và Chat Completions cho dịch vụ bên thứ ba. Chọn Chat Completions khi dùng mẫu cũ nếu cần."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动模式：OpenAI 官方地址使用 Responses，第三方兼容服务保持 Chat Completions。旧型号有需要时可明确选择 Chat Completions。"
           }
         }
       }
@@ -17358,7 +17677,7 @@
       }
     },
     "glm.endpoint.zaiGlobal" : {
-      "extractionState" : "stale",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -20568,25 +20887,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clients & Calls"
+            "value" : "Tool Calls"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clients et appels"
+            "value" : "Appels d’outils"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ứng dụng và lệnh gọi"
+            "value" : "Lệnh gọi công cụ"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "客户端与调用"
+            "value" : "工具调用"
           }
         }
       }
@@ -22523,557 +22842,6 @@
         }
       }
     },
-    "onboarding.mode.badge.advanced" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Advanced"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Avancé"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nâng cao"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "高级"
-          }
-        }
-      }
-    },
-    "onboarding.mode.badge.default" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Default"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Par défaut"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mặc định"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "默认"
-          }
-        }
-      }
-    },
-    "onboarding.mode.localProxy.description" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Run a local proxy server to manage AI requests"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Exécuter un serveur proxy local pour gérer les requêtes IA"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chạy máy chủ proxy cục bộ để quản lý các yêu cầu AI"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "运行本地代理服务器来管理 AI 请求"
-          }
-        }
-      }
-    },
-    "onboarding.mode.localProxy.feature1" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Full proxy server control"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Contrôle complet du serveur proxy"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Toàn quyền kiểm soát máy chủ proxy"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "完全代理服务器控制"
-          }
-        }
-      }
-    },
-    "onboarding.mode.localProxy.feature2" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Configure CLI agents automatically"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Configurer automatiquement les agents CLI"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tự động cấu hình các CLI agent"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自动配置 CLI 代理"
-          }
-        }
-      }
-    },
-    "onboarding.mode.localProxy.feature3" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Request logs and traffic monitoring"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Journaux de requêtes et surveillance du trafic"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nhật ký yêu cầu và giám sát lưu lượng"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请求日志和流量监控"
-          }
-        }
-      }
-    },
-    "onboarding.mode.localProxy.title" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Local Proxy"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Proxy local"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Proxy cục bộ"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "本地代理"
-          }
-        }
-      }
-    },
-    "onboarding.mode.monitor.description" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Track quota usage without running a proxy server"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Suivre l'utilisation des quotas sans exécuter de serveur proxy"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Theo dõi hạn mức sử dụng mà không cần chạy máy chủ proxy"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无需运行代理服务器即可跟踪配额使用情况"
-          }
-        }
-      }
-    },
-    "onboarding.mode.monitor.feature1" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "View quota across all providers"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Voir les quotas de tous les fournisseurs"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Xem hạn mức của tất cả nhà cung cấp"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "查看所有提供商的配额"
-          }
-        }
-      }
-    },
-    "onboarding.mode.monitor.feature2" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lightweight, no background processes"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Léger, pas de processus en arrière-plan"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nhẹ nhàng, không có tiến trình nền"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "轻量级，无后台进程"
-          }
-        }
-      }
-    },
-    "onboarding.mode.monitor.feature3" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Quick access from menu bar"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Accès rapide depuis la barre de menus"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Truy cập nhanh từ thanh menu"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从菜单栏快速访问"
-          }
-        }
-      }
-    },
-    "onboarding.mode.monitor.title" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Monitor Only"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Surveillance uniquement"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chỉ theo dõi"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仅监控"
-          }
-        }
-      }
-    },
-    "onboarding.mode.remoteProxy.description" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Connect to a remote CLIProxyAPI server"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se connecter à un serveur CLIProxyAPI distant"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Kết nối tới máy chủ CLIProxyAPI từ xa"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "连接到远程 CLIProxyAPI 服务器"
-          }
-        }
-      }
-    },
-    "onboarding.mode.remoteProxy.feature1" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Share accounts across machines"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Partager les comptes entre machines"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chia sẻ tài khoản giữa các máy"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "跨机器共享账户"
-          }
-        }
-      }
-    },
-    "onboarding.mode.remoteProxy.feature2" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Team collaboration support"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Support de collaboration en équipe"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hỗ trợ cộng tác nhóm"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "团队协作支持"
-          }
-        }
-      }
-    },
-    "onboarding.mode.remoteProxy.feature3" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Centralized account management"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gestion centralisée des comptes"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Quản lý tài khoản tập trung"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "集中账户管理"
-          }
-        }
-      }
-    },
-    "onboarding.mode.remoteProxy.title" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Remote Proxy"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Proxy distant"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Proxy từ xa"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "远程代理"
-          }
-        }
-      }
-    },
-    "onboarding.mode.subtitle" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose how you want to use Quotio"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choisissez comment vous souhaitez utiliser Quotio"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chọn cách bạn muốn sử dụng Quotio"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择您想要使用 Quotio 的方式"
-          }
-        }
-      }
-    },
-    "onboarding.mode.title" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Select Your Mode"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sélectionnez votre mode"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chọn chế độ của bạn"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择您的模式"
-          }
-        }
-      }
-    },
     "onboarding.providers.hint" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -24244,6 +24012,122 @@
         }
       }
     },
+    "proxy.error.applicationExiting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The app is quitting. The authorization command was not started."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’application se ferme. La commande d’autorisation n’a pas été lancée."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ứng dụng đang thoát. Lệnh xác thực chưa được khởi chạy."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用正在退出，授权命令未启动。"
+          }
+        }
+      }
+    },
+    "proxy.error.invalidPort" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA requires a valid fixed listening port."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA exige un port d’écoute fixe et valide."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA cần một cổng lắng nghe cố định hợp lệ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA 需要有效的固定监听端口。"
+          }
+        }
+      }
+    },
+    "proxy.error.portInspectionFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not check CPA port %d: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de vérifier le port %d de CPA : %@"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Không thể kiểm tra cổng CPA %d: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法检查 CPA 端口 %d：%@"
+          }
+        }
+      }
+    },
+    "proxy.error.portInUse" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA port %d is already in use. Change the port or stop the process in the app that started it, then try again."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le port %d de CPA est déjà utilisé. Changez le port ou arrêtez le processus dans l’application qui l’a lancé, puis réessayez."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cổng CPA %d đang được sử dụng. Hãy đổi cổng hoặc dừng tiến trình trong ứng dụng đã khởi chạy nó, rồi thử lại."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPA 端口 %d 已被其他进程占用。请更换端口，或在启动该进程的应用中停止它，再重试。"
+          }
+        }
+      }
+    },
     "proxy.upgrade.error.startupTimedOut" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24621,6 +24505,151 @@
         }
       }
     },
+    "quota.history.legacy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Legacy Quota History"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ancien historique des quotas"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lịch sử hạn mức cũ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "旧额度历史"
+          }
+        }
+      }
+    },
+    "quota.history.legacy.account" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compte"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tài khoản"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账号"
+          }
+        }
+      }
+    },
+    "quota.history.legacy.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Legacy Quota History"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun ancien historique des quotas"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Không có lịch sử hạn mức cũ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有旧额度历史"
+          }
+        }
+      }
+    },
+    "quota.history.legacy.emptyHelp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There are no saved observations from the previous monitoring mode within the last 30 days."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune observation de l’ancien mode de suivi n’a été enregistrée au cours des 30 derniers jours."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Không có dữ liệu từ chế độ theo dõi trước đây trong 30 ngày gần nhất."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近 30 天内没有保存旧监控模式的额度记录。"
+          }
+        }
+      }
+    },
+    "quota.history.legacy.provider" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Provider"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fournisseur"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nhà cung cấp"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务商"
+          }
+        }
+      }
+    },
     "quota.history.maintenance" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24704,35 +24733,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "按当前节奏预计可用至下次重置"
-          }
-        }
-      }
-    },
-    "quota.reset.passed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reset · refresh to update"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Réinitialisé · actualiser pour mettre à jour"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Đã đặt lại · làm mới để cập nhật"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已重置 · 刷新以更新"
           }
         }
       }
@@ -26006,6 +26006,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在认证..."
+          }
+        }
+      }
+    },
+    "quota.reset.passed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset · refresh to update"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réinitialisé · actualiser pour mettre à jour"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã đặt lại · làm mới để cập nhật"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已重置 · 刷新以更新"
           }
         }
       }
@@ -29451,6 +29480,35 @@
         }
       }
     },
+    "runtime.openRoutingCenter" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Routing Center"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrir le centre de routage"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mở trung tâm định tuyến"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开路由中心"
+          }
+        }
+      }
+    },
     "runtime.refreshed" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -29505,6 +29563,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在刷新…"
+          }
+        }
+      }
+    },
+    "runtime.restart" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restart Service"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Redémarrer le service"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Khởi động lại dịch vụ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重启服务"
+          }
+        }
+      }
+    },
+    "runtime.restarting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restarting…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Redémarrage…"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đang khởi động lại…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重启中…"
           }
         }
       }
@@ -30207,35 +30323,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "断开时自动重启隧道"
-          }
-        }
-      }
-    },
-    "settings.autoStartProxy" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Auto-start proxy on launch"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Démarrage automatique du proxy au lancement"
-          }
-        },
-        "vi" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tự khởi động proxy khi mở app"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "启动时自动启动代理"
           }
         }
       }
@@ -36971,6 +37058,7 @@
       }
     },
     "status.updatedAgo %@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -37279,13 +37367,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Selected analytics data cleared. Existing source logs can be imported again during future collection."
+            "value" : "Selected analytics data cleared. If you cleared Call Analytics, only tool calls started after the clear will count. Usage Statistics can still reimport source logs."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "所选统计数据已清除，现存源日志可在后续采集重新导入。"
+            "value" : "所选统计数据已清除。若清除了调用分析，只计入清除后发起的工具调用。用量统计仍可重新导入源日志。"
           }
         }
       }
@@ -37330,13 +37418,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This will clear: %@. This cannot be undone. Client source logs are kept, and future collection may import existing history again."
+            "value" : "This will clear: %@. This cannot be undone. Client source logs are kept. If Call Analytics is selected, only tool calls started after the clear will count. Usage Statistics may reimport existing history."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将清除：%@。此操作无法撤销。客户端源日志不会删除，后续采集可能再次导入现存历史。"
+            "value" : "将清除：%@。此操作无法撤销，客户端源日志不会删除。若选择调用分析，只计入清除后发起的工具调用。用量统计可能重新导入现存历史。"
           }
         }
       }
@@ -37381,13 +37469,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clears only the selected modules’ local analytics, indexes, and scan progress. Accounts, settings, model prices, and client source logs are kept. Existing source logs can be imported again during the next collection; history whose source logs are gone cannot be recovered."
+            "value" : "Clears only the selected modules’ local analytics, indexes, and scan progress. Accounts, settings, model prices, and client source logs are kept. If cleared, Call Analytics counts only tool calls started after the clear, even after refresh or restart. Usage Statistics can still reimport history from source logs that remain."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仅清除所选模块的本地统计、索引与扫描进度，保留账户、配置、模型价格和客户端源日志。仍存在的源日志可在下次采集重新导入；源日志已消失的历史无法恢复。"
+            "value" : "仅清除所选模块的本地统计、索引与扫描进度，保留账户、配置、模型价格和客户端源日志。清除调用分析后，即使刷新或重启，也只计入清除后发起的工具调用。用量统计仍可从保留的源日志重新导入历史。"
           }
         }
       }
@@ -39316,6 +39404,186 @@
         }
       }
     },
+    "usage.analytics.calendarDay" : {
+      "comment" : "Heatmap detail: this value covers the full local calendar day, not only the selected time interval.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full calendar day, not the selected time window."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Journée civile entière, hors fenêtre de sélection."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cả ngày theo lịch, không chỉ khoảng thời gian đã chọn."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此处为整个自然日，而非所选时间段。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此處為整個曆日，而非所選時段。"
+          }
+        }
+      }
+    },
+    "usage.analytics.costMode" : {
+      "comment" : "Statistics display mode. Uses estimated USD costs, not a bill.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cost"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coût"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chi phí"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "费用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "費用"
+          }
+        }
+      }
+    },
+    "usage.analytics.partialEstimate" : {
+      "comment" : "Heatmap legend: only part of the cost can be estimated.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Partial estimate"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estimation partielle"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ước tính một phần"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分估算"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分估算"
+          }
+        }
+      }
+    },
+    "usage.analytics.selectedDates" : {
+      "comment" : "Heatmap legend for the non-color mark on days intersecting the selected time range.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dates in the selected range"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dates dans la période sélectionnée"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ngày trong khoảng đã chọn"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选范围内的日期"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所選範圍內的日期"
+          }
+        }
+      }
+    },
+    "usage.analytics.viewDetails" : {
+      "comment" : "Native navigation link from the usage overview to requests or pricing details.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View Details"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voir les détails"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Xem chi tiết"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看明细"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看明細"
+          }
+        }
+      }
+    },
     "usage.cachedTokens" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -40802,6 +41070,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "展開篩選"
+          }
+        }
+      }
+    },
+    "usage.dashboard.filterGroup.display" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Statistics display"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计展示"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "統計顯示"
+          }
+        }
+      }
+    },
+    "usage.dashboard.filterGroup.request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Request filters"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求条件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請求條件"
+          }
+        }
+      }
+    },
+    "usage.dashboard.filterGroup.time" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Time"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "時間"
           }
         }
       }
@@ -46590,6 +46927,341 @@
         }
       }
     },
+    "workspace.sessions.branch.collapse" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapse related sessions (%lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起关联会话（%lld）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收合關聯工作階段（%lld）"
+          }
+        }
+      }
+    },
+    "workspace.sessions.branch.expand" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand related sessions (%lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开关联会话（%lld）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展開關聯工作階段（%lld）"
+          }
+        }
+      }
+    },
+    "workspace.sessions.branch.searchExpanded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search branch expanded (%lld related)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已展开搜索分支（%lld 条关联会话）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已展開搜尋分支（%lld 個關聯工作階段）"
+          }
+        }
+      }
+    },
+    "workspace.sessions.kind.internal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Internal branch"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内部旁支"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內部旁支"
+          }
+        }
+      }
+    },
+    "workspace.sessions.kind.main" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Main session"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主会话"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主工作階段"
+          }
+        }
+      }
+    },
+    "workspace.sessions.kind.subagent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagent"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子代理"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子代理"
+          }
+        }
+      }
+    },
+    "workspace.sessions.kind.unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown relationship"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关系未知"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關聯未知"
+          }
+        }
+      }
+    },
+    "workspace.skills.ignore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignore"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignorer"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bỏ qua"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "忽略"
+          }
+        }
+      }
+    },
+    "workspace.skills.ignoredCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignored (%lld)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignorées (%lld)"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã bỏ qua (%lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已忽略（%lld）"
+          }
+        }
+      }
+    },
+    "workspace.skills.ignoredImportError" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unignore this local skill before importing it."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rétablissez cette compétence locale avant de l’importer."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hãy bỏ trạng thái bỏ qua trước khi nhập kỹ năng cục bộ này."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先取消忽略，再纳管此本地技能。"
+          }
+        }
+      }
+    },
+    "workspace.skills.ignoreSuccess" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local skill ignored"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compétence locale ignorée"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã bỏ qua kỹ năng cục bộ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已忽略本地技能"
+          }
+        }
+      }
+    },
+    "workspace.skills.unignore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unignore"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ne plus ignorer"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hủy bỏ qua"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消忽略"
+          }
+        }
+      }
+    },
+    "workspace.skills.unignoreSuccess" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Local skill unignored"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compétence locale rétablie"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã hủy bỏ qua kỹ năng cục bộ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消忽略本地技能"
+          }
+        }
+      }
+    },
     "workspace.tab.sessions" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -47391,9 +48063,6 @@
     "删除会话" : {
 
     },
-    "删除子任务" : {
-
-    },
     "删除此会话" : {
 
     },
@@ -47430,9 +48099,6 @@
     "在独立终端中继续此会话" : {
 
     },
-    "在独立终端恢复此子任务" : {
-
-    },
     "在终端中继续" : {
 
     },
@@ -47457,16 +48123,10 @@
     "好" : {
 
     },
-    "子任务" : {
-
-    },
     "导出全部技能为 .zip 归档文件" : {
 
     },
     "导出备份包" : {
-
-    },
-    "展开 %lld 个子任务" : {
 
     },
     "展开技能列表" : {
@@ -47532,9 +48192,6 @@
     "技能统一保存在标准 SSOT 目录，通过系统软链接按需挂载至各智能体，操作前自动快照备份。" : {
 
     },
-    "收起 %lld 个子任务" : {
-
-    },
     "收起技能列表" : {
 
     },
@@ -47578,9 +48235,6 @@
 
     },
     "未挂载至 %@，点击建立软链接" : {
-
-    },
-    "来源: %@" : {
 
     },
     "检测到在各智能体独立目录中手动存放的技能。点击“纳管到统一库”可迁移至 ~/.quotio/skills/ 并在原路径建立受管链接；同名内容冲突会保留原文件并提示。" : {

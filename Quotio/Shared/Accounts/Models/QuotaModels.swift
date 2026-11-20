@@ -316,6 +316,15 @@ nonisolated struct ModelQuota: Codable, Identifiable, Sendable {
 }
 
 nonisolated struct ProviderQuotaData: Codable, Sendable {
+    /// 仅由真正完成的额度请求填写。旧版缓存缺少此值时不根据账号类型反推数据来源。
+    enum RefreshSource: String, Codable, Sendable {
+        case cpa, matchedCredential, explicitConnection
+
+        /// 页面与菜单共用相同本地化键；过期或停机状态独立显示。
+        var localizationKey: String { "accounts.quota.source.\(rawValue)" }
+    }
+
+    var refreshSource: RefreshSource? = nil
     var models: [ModelQuota]
     var lastUpdated: Date
     var isForbidden: Bool

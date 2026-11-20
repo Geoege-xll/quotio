@@ -26,7 +26,7 @@ struct MenuProviderSectionHeader: View {
             Button {
                 Task { await viewModel.refreshQuota(for: provider) }
             } label: {
-                if viewModel.refreshingProviders.contains(provider) {
+                if viewModel.canRefreshAccountQuotas && viewModel.refreshingProviders.contains(provider) {
                     ProgressView()
                         .controlSize(.mini)
                         .frame(width: 18, height: 18)
@@ -38,10 +38,11 @@ struct MenuProviderSectionHeader: View {
             }
             .buttonStyle(.plain)
             .disabled(
-                viewModel.isRefreshing(provider: provider)
+                !viewModel.canRefreshAccountQuotas || viewModel.isRefreshing(provider: provider)
                     || !viewModel.supportsScopedRefresh(for: provider)
             )
             .help("action.refreshQuota".localized())
+            .accessibilityLabel("action.refreshQuota".localized())
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)

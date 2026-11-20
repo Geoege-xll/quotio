@@ -109,7 +109,7 @@ struct ProviderDisclosureGroup: View {
                 HStack(spacing: 4) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 10))
-                    Text("providers.autoDetected".localized())
+                    Text("accounts.source.importedIDE".localized())
                         .font(.caption2.weight(.medium))
                 }
                 .foregroundStyle(.secondary)
@@ -204,8 +204,7 @@ struct ProviderDisclosureGroup: View {
     }
 
     private func quotaPresentation(for account: AccountRowData, key: String) -> AccountQuotaPresentation {
-        // 只有本次代理连接中的账号才读取 AuthFile 状态；监控和停服后的直读条目
-        // 不能复用旧代理的 error。按 ID 和规范键双重匹配，防止同邮箱多凭据串号。
+        // 当前 CPA 目录和离线目录都保留原状态。按 ID 和规范键双重匹配，防止同邮箱多凭据串号。
         let authFile = account.source == .proxy ? viewModel.authFiles.first {
             $0.id == account.id && $0.quotaLookupKey == key
         } : nil

@@ -41,16 +41,6 @@ struct StatisticsAnalyticsScreen: View {
                 }
                 if state.tab == .usage {
                     ToolbarItem(placement: .primaryAction) {
-                        NavigationLink(value: CPAUsageDestination.records(state.cpaSelection)) {
-                            Label("usage.dashboard.records".localized(), systemImage: "list.bullet.rectangle")
-                        }
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        NavigationLink(value: CPAUsageDestination.pricing(state.cpaSelection)) {
-                            Label("usage.pricing.title".localized(), systemImage: "dollarsign.circle")
-                        }
-                    }
-                    ToolbarItem(placement: .primaryAction) {
                         ManualRefreshButton(helpKey: "usage.refresh") {
                             await store.refreshForUser()
                             // 等当前采集批次落盘后立即重读报表；无新用量也可更新滚动时间窗。

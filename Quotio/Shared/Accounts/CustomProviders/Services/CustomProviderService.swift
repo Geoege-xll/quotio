@@ -679,16 +679,36 @@ final class CustomProviderService {
 
     // MARK: - Connection Testing
 
+    /// 官方添加表单的目录读取和保存校验共用此入口。主机、协议和认证头都不接收表单参数，
+    /// 继续使用表单原来的共享会话，避免应用代理配置或旧缓存替代本次官方认证结果。
+    static func fetchOfficialOpenAIModels(apiKey: String, session: URLSession = .shared) async throws -> [AvailableModel] {
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw CustomProviderTestError.noAPIKey }
+        guard key.utf8.allSatisfy({ (0x21...0x7E).contains($0) }) else {
+            throw CustomProviderTestError.unauthorized
+        }
+        do {
+            return try await fetchProviderModels(providerType: .openaiCompatibility,
+                baseURL: CustomProvider.officialOpenAIBaseURL, apiKey: key, session: session, verifiesCredential: true)
+        } catch let error as CustomProviderTestError {
+            throw error
+        } catch {
+            // 传输及解码错误的内部详情不进入界面，避免暴露可能含认证数据的请求或响应字段。
+            throw CustomProviderTestError.invalidResponse
+        }
+    }
+
     /// 专用账号弹窗读取上游公开目录，不使用 CPA 管理密钥，不注入固定型号。
     /// 目录解析与原连接测试分开：200 的非目录正文仍可通过连接测试，但不能当作可注册模型。
     static func fetchProviderModels(providerType: CustomProviderType, baseURL: String, apiKey: String,
-                                    session: URLSession? = nil) async throws -> [AvailableModel] {
+                                    session: URLSession? = nil, verifiesCredential: Bool = false) async throws -> [AvailableModel] {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw CustomProviderTestError.noAPIKey }
         guard let url = makeModelsURL(baseURL: baseURL, providerType: providerType) else {
             throw CustomProviderTestError.invalidURL
         }
-        let (data, response) = try await ModelCatalogClient.fetch(url: url, apiKey: key, session: session)
+        let (data, response) = try await ModelCatalogClient.fetch(url: url, apiKey: key,
+            session: session, verifiesCredential: verifiesCredential)
         guard let http = response as? HTTPURLResponse else { throw CustomProviderTestError.invalidResponse }
         guard http.statusCode == 200 else {
             if http.statusCode == 401 || http.statusCode == 403 { throw CustomProviderTestError.unauthorized }

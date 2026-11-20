@@ -50,9 +50,14 @@ nonisolated struct PiCallEventSource {
                         return
                     }
                     guard message["role"] as? String == "assistant" else { return }
+                    // 只读取 assistant 声明上的时间。保留 Pi 原有的条目优先级和消息毫秒回退，
+                    // 但重置后保留条目 ISO 的亚毫秒精度，不以 toolResult 的时间解锁旧调用。
+                    let exactDate = cutoff.flatMap { cutoff in
+                        (entry["timestamp"] as? String).flatMap { clock.invocationDate(fromISO: $0, cutoff: cutoff) }
+                    }
                     guard let parts = message["content"] as? [[String: Any]],
                           let entryID = entry["id"] as? String, !entryID.isEmpty,
-                          let date = PiSessionPaths.timestamp(entry: entry, message: message, clock: clock) else {
+                          let date = exactDate ?? PiSessionPaths.timestamp(entry: entry, message: message, clock: clock) else {
                         hadErrors = true; return
                     }
                     for part in parts where part["type"] as? String == "toolCall" {
@@ -72,7 +77,7 @@ nonisolated struct PiCallEventSource {
             catch { hadErrors = true }
         }
         var accumulator = CallEventAccumulator()
-        for call in calls.values where cutoff == nil || call.timestamp >= cutoff! {
+        for call in calls.values where CallAnalyticsClock.includesInvocation(at: call.timestamp, after: cutoff) {
             accumulator.add(source: .pi, kind: call.kind, name: call.name, server: call.server,
                             dayKey: clock.dayKey(call.timestamp), success: call.success)
         }

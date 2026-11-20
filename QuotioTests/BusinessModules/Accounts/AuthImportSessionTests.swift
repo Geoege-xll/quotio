@@ -21,7 +21,7 @@ final class AuthImportSessionTests: XCTestCase {
         let directory: URL
         let service: DirectAuthFileService
     }
-    private func fixture() throws -> Fixture {
+    private func fixture(running: Bool = true) throws -> Fixture {
         let suite = "quotio-auth-import-session-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(OperatingMode.localProxy.rawValue, forKey: "operatingMode")
@@ -32,8 +32,11 @@ final class AuthImportSessionTests: XCTestCase {
             modeManager: mode, menuBarSettings: MenuBarSettingsManager(defaults: defaults),
             refreshSettings: RefreshSettingsManager(defaults: defaults))
         vm.customProvidersForTesting = []
+        let proxy = vm.proxyManager, initialRunning = proxy.proxyStatus.running, initialSession = proxy.runtimeSessionID
+        proxy.setRuntimeStateForTesting(running: running, sessionID: UUID())
         addTeardownBlock { @MainActor in
             vm.stopQuotaAutoRefresh()
+            proxy.setRuntimeStateForTesting(running: initialRunning, sessionID: initialSession)
             defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: directory)
         }
@@ -84,24 +87,22 @@ final class AuthImportSessionTests: XCTestCase {
         }
     }
 
-    func testLocalBatchDoesNotSwitchToCPAAfterSecondRead() async throws {
-        let f = try fixture(), (fresh, state) = client()
-        let gate = Gate(expectation(description: "本地批次第二次读取"))
-        var reads = 0, refreshes = 0
-        f.vm.authImportReadHookForTesting = { _ in
-            reads += 1
-            if reads == 2 { await gate.wait() }
-            return self.content
-        }
-        f.vm.authImportRefreshHookForTesting = { _ in refreshes += 1 }
-        let running = Task { await f.vm.importAuthFiles(from: urls) }
-        await fulfillment(of: [gate.reached], timeout: 3)
-        f.vm.setAuthImportClientForTesting(fresh)
-        gate.release(); await running.value
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: f.directory.path), ["a.json"])
-        XCTAssertEqual(try Data(contentsOf: f.directory.appendingPathComponent("a.json")), content)
+    func testStoppedTransferCannotReadOrWriteLocalCredentials() async throws {
+        let f = try fixture(running: false), (old, state) = client()
+        f.vm.setAuthImportClientForTesting(old)
+        try await f.service.uploadAuthFile(name: "existing.json", content: content)
+        var reads = 0
+        f.vm.authImportReadHookForTesting = { _ in reads += 1; return self.content }
+
+        await f.vm.importAuthFiles(from: urls)
+        do {
+            _ = try await f.vm.downloadAuthFile(name: "existing.json")
+            XCTFail("代理停止时不能下载本机认证目录里的同名文件")
+        } catch is CancellationError {}
+
+        XCTAssertEqual(reads, 0)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: f.directory.path), ["existing.json"])
         XCTAssertEqual(state.requestCount, 0)
-        XCTAssertEqual(refreshes, 0)
     }
 
     func testLeavingAndReturningToSameModeStillInvalidatesBatch() async throws {
@@ -120,8 +121,9 @@ final class AuthImportSessionTests: XCTestCase {
         XCTAssertEqual(refreshes, 0)
     }
 
-    func testBatchContinuesAfterInvalidFileAndRefreshesLocalDirectoryOnce() async throws {
-        let f = try fixture()
+    func testBatchContinuesAfterInvalidFileAndRefreshesCPAOnce() async throws {
+        let f = try fixture(), (client, state) = client()
+        f.vm.setAuthImportClientForTesting(client)
         let source = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: source) }
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
@@ -132,9 +134,10 @@ final class AuthImportSessionTests: XCTestCase {
         var refreshTargets: [Bool] = []
         f.vm.authImportRefreshHookForTesting = { refreshTargets.append($0) }
         await f.vm.importAuthFiles(from: [bad, good])
-        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: f.directory.path)), ["existing.json", "valid.json"])
-        XCTAssertEqual(try Data(contentsOf: f.directory.appendingPathComponent("valid.json")), content)
-        XCTAssertEqual(refreshTargets, [false])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: f.directory.path), ["existing.json"])
+        XCTAssertEqual(state.requestCount, 1)
+        XCTAssertEqual(state.requests.first?.body, content)
+        XCTAssertEqual(refreshTargets, [true])
         XCTAssertTrue(f.vm.errorMessage?.contains("invalid.json") == true)
     }
 
@@ -174,17 +177,20 @@ final class AuthImportSessionTests: XCTestCase {
     }
 
     func testCancelledBatchDoesNotWriteFileReadBeforeCancellation() async throws {
-        let f = try fixture()
+        let f = try fixture(), (client, state) = client()
+        f.vm.setAuthImportClientForTesting(client)
         let gate = Gate(expectation(description: "取消前读取挂起"))
         f.vm.authImportReadHookForTesting = { _ in await gate.wait(); return self.content }
         let running = Task { await f.vm.importAuthFiles(from: urls) }
         await fulfillment(of: [gate.reached], timeout: 3)
         running.cancel(); gate.release(); await running.value
+        XCTAssertEqual(state.requestCount, 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.directory.path))
     }
 
     func testSingleImportAlsoPinsTargetBeforeReading() async throws {
-        let f = try fixture(), (client, state) = client()
+        let f = try fixture(), (old, oldState) = client(), (client, state) = client()
+        f.vm.setAuthImportClientForTesting(old)
         let gate = Gate(expectation(description: "单文件读取挂起"))
         f.vm.authImportReadHookForTesting = { _ in await gate.wait(); return self.content }
         let running = Task { try await f.vm.importAuthFile(from: urls[0]) }
@@ -193,6 +199,7 @@ final class AuthImportSessionTests: XCTestCase {
         gate.release()
         do { try await running.value; XCTFail("单文件也不能更换目标") }
         catch is CancellationError { }
+        XCTAssertEqual(oldState.requestCount, 0)
         XCTAssertEqual(state.requestCount, 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.directory.path))
     }

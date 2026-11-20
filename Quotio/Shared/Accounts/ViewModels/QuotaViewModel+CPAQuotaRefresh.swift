@@ -1,100 +1,122 @@
-//
-//  QuotaViewModel+CPAQuotaRefresh.swift
-//  Quotio
-//
-
 import Foundation
 
-/// CPA 运行期间按真实认证凭据获取额度的原接管方法。
-/// 扩展继续读取主类同一管理客户端和运行会话，不创建客户端、任务持有者或第二个用量队列消费者。
-/// 精确凭据键优先、旧邮箱仅唯一匹配时迁移、套餐与额度同身份清理的规则保持原样。
-/// 保留原 TaskGroup 并发、逐结果会话复核、取消路径及失败保留；返回 true 仍表示已接管而非成功。
 extension QuotaViewModel {
-    /// 整个接管事务完整迁移，目录发布、请求分发、逐账号写回和最终错误清理之间不新增挂起点。
-    /// 代理运行时复用 CPA 的账号索引和鉴权，批量与单账号刷新走完全相同的路径。
-    /// 返回 true 表示本次已由 CPA 接管；失败保留旧值并标记过期，不能再用本机另一账号覆盖。
-    /// 此方法只调用配额接口，绝不消费 /usage-queue 或改写客户端历史账本。
-    func refreshCPAQuotas(provider: AIProvider, accountKey: String? = nil) async -> Bool {
-        let context = refreshContext()
-        guard !modeManager.isMonitorMode, proxyManager.proxyStatus.running,
-              let apiClient, CPAQuotaFetcher.supports(provider) else { return false }
-        let session = proxyManager.runtimeSessionID
-        // 配额批量刷新可能由独立任务触发；账号/模式世代之外还必须校验代理会话，
-        // 避免停止后的取消错误把旧额度标为失败，或覆盖新服务的账号列表。
-        func canCommitSession() -> Bool {
-            canCommit(context) && !Task.isCancelled && self.apiClient === apiClient
-                && proxyManager.runtimeSessionID == session && proxyManager.proxyStatus.running
+    /// 批量、单提供商、单账号共用本会话的已确认凭据。CPA 已支持时即使取数失败也不试另一条路径。
+    /// 仅 CPA 未支持、且存在精确补查能力时允许补查，补查仍使用本次目录的单个认证文件。
+    func refreshCPAQuotas(provider: AIProvider, accountKey: String?, directory: [AuthFile],
+                          context: RefreshContext, client: ManagementAPIClient) async {
+        let usesCPA = CPAQuotaFetcher.supports(provider)
+        guard usesCPA || CPAQuotaFetcher.supportsSupplemental(provider),
+              canCommitQuotaRefresh(context, client: client) else { return }
+
+        let providerFiles = directory.filter { $0.providerType == provider }
+        let matching: [AuthFile]
+        if let accountKey {
+            let exact = providerFiles.filter { $0.quotaLookupKey == accountKey }
+            let legacy = providerFiles.filter { $0.legacyQuotaLookupKeys.contains(accountKey) }
+            // 老固定项只有唯一匹配时才迁移。暂未确认、已删除或歧义的键都不发出额度请求。
+            matching = exact.isEmpty && legacy.count == 1 ? legacy : exact
+        } else {
+            matching = providerFiles
         }
-        let fetcher = CPAQuotaFetcher(client: apiClient)
-        do {
-            let currentFiles = try await apiClient.fetchAuthFiles()
-            guard canCommitSession() else { return true }
-            // 列表与快照使用同一批 CPA 凭据，避免列表仍拿旧邮箱键而新结果已经改用凭据键。
-            authFiles = AuthFileIdentity.deduplicated(currentFiles)
-            reconcileAccountQuotaIdentities()
-            let providerFiles = authFiles.filter { $0.providerType == provider && !$0.disabled }
-            let files: [AuthFile]
-            if let accountKey {
-                let exactMatches = providerFiles.filter { $0.quotaLookupKey == accountKey }
-                let legacyMatches = providerFiles.filter { $0.legacyQuotaLookupKeys.contains(accountKey) }
-                // 旧菜单或缓存可能只记录邮箱。只有一对一匹配才允许迁移，绝不猜测同邮箱凭据。
-                files = exactMatches.isEmpty
-                    ? (legacyMatches.count == 1 ? legacyMatches : [])
-                    : exactMatches
-                guard !files.isEmpty else {
-                    providerQuotas[provider]?.removeValue(forKey: accountKey)
-                    if provider == .antigravity { subscriptionInfos[provider]?.removeValue(forKey: accountKey) }
-                    monitorAccountIssues[QuotaAccountID(provider: provider, accountKey: accountKey)] = MonitorRefreshIssue(
-                        message: "monitor.refresh.failed".localized(), occurredAt: Date()
-                    )
-                    return true
-                }
-                if files.first?.quotaLookupKey != accountKey {
-                    providerQuotas[provider]?.removeValue(forKey: accountKey)
-                    monitorAccountIssues.removeValue(forKey: QuotaAccountID(provider: provider, accountKey: accountKey))
-                    if provider == .antigravity { subscriptionInfos[provider]?.removeValue(forKey: accountKey) }
-                }
-            } else {
-                files = providerFiles
-            }
-            if accountKey == nil {
-                let activeKeys = Set(files.map(\.quotaLookupKey))
-                providerQuotas[provider] = providerQuotas[provider, default: [:]].filter { activeKeys.contains($0.key) }
-                // 套餐和额度必须采用相同账号身份；移除旧邮箱槽位，避免套餐被另一个项目复用。
-                if provider == .antigravity {
-                    // 外层按提供商隔离，只清理当前提供商的账号，不能过滤其他提供商的订阅。
-                    subscriptionInfos[provider] = subscriptionInfos[provider, default: [:]].filter { activeKeys.contains($0.key) }
-                }
-            }
-            await withTaskGroup(of: (String, ProviderQuotaData?).self) { group in
-                for file in files {
-                    group.addTask { (file.quotaLookupKey, try? await fetcher.fetch(file: file)) }
-                }
-                for await (key, quota) in group {
-                    guard canCommitSession() else { group.cancelAll(); return }
-                    let id = QuotaAccountID(provider: provider, accountKey: key)
-                    if var quota {
-                        // 内部键只负责隔离凭据，界面继续显示可读邮箱或账号标签，不泄露认证信息。
-                        if quota.accountDisplayName == nil {
-                            quota.accountDisplayName = files.first { $0.quotaLookupKey == key }?.quotaDisplayName
-                        }
-                        providerQuotas[provider, default: [:]][key] = quota
-                        if provider == .antigravity {
-                            // 附加套餐查询失败时移除旧套餐，避免新额度快照搭配陈旧权益信息。
-                            subscriptionInfos[provider, default: [:]][key] = quota.subscriptionInfo
-                        }
-                        monitorAccountIssues.removeValue(forKey: id)
-                    } else {
-                        monitorAccountIssues[id] = MonitorRefreshIssue(message: "monitor.refresh.failed".localized(), occurredAt: Date())
+
+        // 若多个真实文件投影到同一旧键，当前 UI 无法区分两条结果，跳过歧义，避免并发互相覆盖。
+        let counts = Dictionary(grouping: providerFiles, by: \.quotaLookupKey)
+        let files = matching.filter { !$0.disabled && counts[$0.quotaLookupKey]?.count == 1 }
+        guard !files.isEmpty else { return }
+
+        await withTaskGroup(of: (AuthFile, Result<ProviderQuotaData, any Error>).self) { group in
+            for file in files {
+                // 精确补查可能在一次额度刷新里发出多条请求。每次出站都复核原客户端和同一目录条目，
+                // 即使启动刷新的是菜单或页面的独立任务，代理停机、凭据变化后也不能继续访问提供商。
+                let fetcher = CPAQuotaFetcher(client: client, copilot: copilotFetcher, kiro: kiroFetcher,
+                    isCurrent: { [weak self] in
+                        guard let self else { return false }
+                        return await self.canUseCPAQuotaFile(file, context: context, client: client)
+                    })
+                group.addTask {
+                    do {
+                        let quota = try await (usesCPA ? fetcher.fetch(file: file) : fetcher.fetchSupplemental(file: file))
+                        return (file, .success(quota))
+                    } catch {
+                        return (file, .failure(error))
                     }
                 }
             }
-            guard canCommitSession() else { return true }
-            monitorIssues.removeValue(forKey: provider)
-        } catch {
-            guard canCommitSession(), !(error is CancellationError) else { return true }
-            monitorIssues[provider] = MonitorRefreshIssue(message: "monitor.refresh.failed".localized(), occurredAt: Date())
+            for await (file, result) in group {
+                guard canCommitQuotaRefresh(context, client: client) else { group.cancelAll(); return }
+                guard canUseCPAQuotaFile(file, context: context, client: client) else { continue }
+                let key = file.quotaLookupKey
+                let account = QuotaAccountID(provider: provider, accountKey: key)
+                var quota: ProviderQuotaData
+                switch result {
+                case .success(let fetched) where !fetched.isForbidden:
+                    quota = fetched
+                case .success:
+                    recordAccountQuotaFailure(account, error: QuotaFetchError.forbidden)
+                    continue
+                case .failure(let error):
+                    recordAccountQuotaFailure(account, error: error)
+                    continue
+                }
+                // 失败只登记状态，旧值、订阅和成功时间一律保留。实际成功才标记额度来源。
+                quota.accountDisplayName = quota.accountDisplayName ?? file.quotaDisplayName
+                quota.refreshSource = usesCPA ? .cpa : .matchedCredential
+                providerQuotas[provider, default: [:]][key] = quota
+                if provider == .antigravity {
+                    subscriptionInfos[provider, default: [:]][key] = quota.subscriptionInfo
+                }
+                monitorAccountIssues.removeValue(forKey: account)
+                recordAccountQuotaSuccess(at: quota.lastUpdated)
+            }
         }
-        return true
     }
+
+    /// 同一判断用于补查出站和额度写回。其他入口可能刷新了目录；新出现的歧义键、
+    /// 禁用或换号都让原请求失效。冷却、权重等显示字段的变动不影响额度归属。
+    private func canUseCPAQuotaFile(_ file: AuthFile, context: RefreshContext, client: ManagementAPIClient) -> Bool {
+        guard canCommitQuotaRefresh(context, client: client) else { return false }
+        let matches = authFiles.filter { $0.providerType == file.providerType && $0.quotaLookupKey == file.quotaLookupKey }
+        guard matches.count == 1, let current = matches.first else { return false }
+        return current.id == file.id && current.name == file.name && current.authIndex == file.authIndex
+            && current.account == file.account && current.email == file.email && current.quotaMetadata == file.quotaMetadata
+            && !current.disabled && current.unavailable == file.unavailable && current.runtimeOnly == file.runtimeOnly
+    }
+
+    /// 错误只转换为可信状态码和本地文案，不把上游任意正文带进额度卡片或存储。
+    /// 正常取消不登记失败，也不会冲掉上次查询成功后的状态。
+    func recordAccountQuotaFailure(_ account: QuotaAccountID, error: any Error) {
+        guard let message = Self.accountQuotaFailureMessage(error) else { return }
+        monitorAccountIssues[account] = MonitorRefreshIssue(message: message, occurredAt: Date())
+    }
+
+    static func accountQuotaFailureMessage(_ error: any Error) -> String? {
+        if error is CancellationError || (error as? URLError)?.code == .cancelled { return nil }
+        let status: Int?
+        if case .httpError(let code) = error as? QuotaFetchError {
+            status = code
+        } else if case .httpError(let code) = error as? APIError {
+            status = code
+        } else {
+            status = nil
+        }
+        let message: String
+        if (error as? URLError)?.code == .timedOut {
+            message = "remote.error.timeout".localized()
+        } else {
+            switch status {
+            case 401, 403: message = "remote.error.forbidden".localized()
+            case 408, 504: message = "remote.error.timeout".localized()
+            case 429: message = "routing.failure.rateLimited.title".localized()
+            default:
+                if case .forbidden = error as? QuotaFetchError {
+                    message = "remote.error.forbidden".localized()
+                } else {
+                    message = "monitor.refresh.failed".localized()
+                }
+            }
+        }
+        return status.map { "\(message) (HTTP \($0))" } ?? message
+    }
+
 }

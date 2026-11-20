@@ -10,6 +10,9 @@ nonisolated struct ClaudeDesktopCredential: Sendable {
 }
 
 nonisolated enum ClaudeDesktopCredentialReader {
+    /// 缓存格式无效时保留原失败语义，由读入流程尝试其他缓存或返回空。
+    private enum CacheReadError: Error { case invalidEncryptedData }
+
     private static let appSupport = MonitorIdentity.expand("~/Library/Application Support/Claude")
     private static let configPath = (appSupport as NSString).appendingPathComponent("config.json")
     private static let cookiePaths = [
@@ -119,12 +122,12 @@ nonisolated enum ClaudeDesktopCredentialReader {
                 }
             }
         }
-        guard status == kCCSuccess else { throw MonitorOAuthError.invalidResponse }
+        guard status == kCCSuccess else { throw CacheReadError.invalidEncryptedData }
         return key
     }
 
     private static func decrypt(_ encrypted: Data, key: Data) throws -> Data {
-        guard encrypted.starts(with: Data("v10".utf8)) else { throw MonitorOAuthError.invalidResponse }
+        guard encrypted.starts(with: Data("v10".utf8)) else { throw CacheReadError.invalidEncryptedData }
         let payload = encrypted.dropFirst(3)
         let iv = Data(repeating: 0x20, count: kCCBlockSizeAES128)
         var output = Data(count: payload.count + kCCBlockSizeAES128)
@@ -151,7 +154,7 @@ nonisolated enum ClaudeDesktopCredentialReader {
                 }
             }
         }
-        guard status == kCCSuccess else { throw MonitorOAuthError.invalidResponse }
+        guard status == kCCSuccess else { throw CacheReadError.invalidEncryptedData }
         output.count = outputLength
         return output
     }

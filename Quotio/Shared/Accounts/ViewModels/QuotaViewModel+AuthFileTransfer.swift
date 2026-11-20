@@ -5,27 +5,23 @@
 
 import Foundation
 
-/// 凭据上传、导入、下载与导出的原有入口，按原路径使用 CPA 客户端或主类注入的 DirectAuthFileService。
-/// AuthImportContext 及来源校验与传输方法放在同一文件，保持嵌套名称与 private 边界。
-/// JSON 上传和导入仍在第一次挂起前固定 client、模式世代与代理会话；途中失效时结束剩余传输。
-/// 保留逐文件容错、成功后一次刷新及原错误发布时序，不重新选择目标、不重建授权服务。
-/// 测试钩子和管理客户端指针仍存储在主类；这里仅调用原钩子，不增加状态或任务。
+/// 手动凭据传输在第一次挂起前固定当前 CPA 客户端和会话。即使文件对话框打开期间代理停止，
+/// 导入和导出也只会结束本批，不能从用户未选择的本机认证目录读取或写入凭据。
 extension QuotaViewModel {
-    /// 单次或批量传输都在第一次 await 前固定来源。client=nil 明确表示本地目录，
-    /// 不能在中途重新读取 apiClient 并把同一批敏感凭据分流到另一位置。
     private struct AuthImportContext {
-        let client: ManagementAPIClient?
+        let client: ManagementAPIClient
         let modeRevision: UInt64
         let runtimeSessionID: UUID
     }
 
-    private func authImportContext() -> AuthImportContext {
-        AuthImportContext(client: apiClient, modeRevision: modeManager.revision,
-            runtimeSessionID: proxyManager.runtimeSessionID)
+    private func authImportContext() -> AuthImportContext? {
+        guard !Task.isCancelled, canRefreshAccountQuotas, let apiClient else { return nil }
+        return AuthImportContext(client: apiClient, modeRevision: modeManager.revision,
+                                 runtimeSessionID: proxyManager.runtimeSessionID)
     }
 
     private func canContinueAuthImport(_ context: AuthImportContext) -> Bool {
-        !Task.isCancelled && modeManager.revision == context.modeRevision
+        !Task.isCancelled && canRefreshAccountQuotas && modeManager.revision == context.modeRevision
             && proxyManager.runtimeSessionID == context.runtimeSessionID && apiClient === context.client
     }
 
@@ -38,34 +34,27 @@ extension QuotaViewModel {
 
     private func writeAuthImport(name: String, content: Data, context: AuthImportContext) async throws {
         guard canContinueAuthImport(context) else { throw CancellationError() }
-        if let client = context.client {
-            try await client.uploadAuthFile(name: name, content: content)
-        } else {
-            try await directAuthService.uploadAuthFile(name: name, content: content)
-        }
+        try await context.client.uploadAuthFile(name: name, content: content)
         guard canContinueAuthImport(context) else { throw CancellationError() }
     }
 
     private func refreshAuthImport(_ context: AuthImportContext) async {
         guard canContinueAuthImport(context) else { return }
         #if DEBUG
-        if let hook = authImportRefreshHookForTesting { await hook(context.client != nil); return }
+        if let hook = authImportRefreshHookForTesting { await hook(true); return }
         #endif
-        if context.client != nil {
-            // 新增同型号的第二个账号也会改变菜单来源；沿用原会话和成功后一次刷新的事务边界。
-            await refreshAfterCPAAccountChange()
-        }
-        else { await loadDirectAuthFiles() }
+        // 新增同型号的第二个账号也会改变菜单来源。复用现有会话，批量成功后只刷新一次。
+        await refreshAfterCPAAccountChange()
     }
 
     func uploadAuthFile(name: String, content: Data) async throws {
-        let context = authImportContext()
+        guard let context = authImportContext() else { throw CancellationError() }
         try await writeAuthImport(name: name, content: content, context: context)
         await refreshAuthImport(context)
     }
 
     func importAuthFile(from url: URL) async throws {
-        let context = authImportContext()
+        guard let context = authImportContext() else { throw CancellationError() }
         let content = try await readAuthImport(url)
         try await writeAuthImport(name: url.lastPathComponent, content: content, context: context)
         await refreshAuthImport(context)
@@ -74,8 +63,7 @@ extension QuotaViewModel {
     /// 批量保留逐文件容错与一次刷新；来源失效时停止剩余文件，已经完成的写入不回滚。
     /// 不把旧批次的失败提示或刷新结果提交到新的模式／代理会话，用户可以在新会话重新导入。
     func importAuthFiles(from urls: [URL]) async {
-        guard !urls.isEmpty else { return }
-        let context = authImportContext()
+        guard !urls.isEmpty, let context = authImportContext() else { return }
         var errors: [String] = []
         var successCount = 0
         for url in urls {
@@ -95,20 +83,26 @@ extension QuotaViewModel {
     }
 
     func downloadAuthFile(name: String) async throws -> Data {
-        if let client = apiClient {
-            return try await client.downloadAuthFile(name: name)
-        } else {
-            return try await directAuthService.downloadAuthFile(name: name)
-        }
+        guard let context = authImportContext() else { throw CancellationError() }
+        return try await downloadAuthFile(name: name, context: context)
+    }
+
+    private func downloadAuthFile(name: String, context: AuthImportContext) async throws -> Data {
+        let content = try await context.client.downloadAuthFile(name: name)
+        guard canContinueAuthImport(context) else { throw CancellationError() }
+        return content
     }
 
     func exportAuthFile(name: String, to url: URL) async throws {
-        let content = try await downloadAuthFile(name: name)
+        guard let context = authImportContext() else { throw CancellationError() }
+        let content = try await downloadAuthFile(name: name, context: context)
+        guard canContinueAuthImport(context) else { throw CancellationError() }
+        // 用户选择的保存位置仍由原服务写入，与 CPA 的认证目录相互独立。
         try await directAuthService.writeDownloadedAuthFile(content, to: url)
     }
 
     func importVertexServiceAccount(url: URL) async {
-        guard let client = apiClient else {
+        guard canRefreshAccountQuotas, let client = apiClient else {
             errorMessage = "Proxy not running"
             return
         }

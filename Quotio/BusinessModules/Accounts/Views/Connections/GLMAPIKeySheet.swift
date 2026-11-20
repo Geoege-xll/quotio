@@ -368,7 +368,8 @@ enum GLMEndpoint: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var displayName: String {
         switch self {
-        case .zai: return "Z.ai (Global)"
+        // 连接表单沿用已有的多语言标签，区域标识和请求地址仍由枚举值确定。
+        case .zai: return "glm.endpoint.zaiGlobal".localizedStatic()
         case .bigmodel: return "bigmodel.cn (国内)"
         }
     }

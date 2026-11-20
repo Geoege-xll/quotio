@@ -361,10 +361,24 @@ public nonisolated struct UnmanagedSkill: Identifiable, Sendable {
     public let agent: WorkspaceAgent
     public let directoryPath: String
 
+    /// 与 SQLite 的二进制路径比较一致，避免 Swift 的 Unicode 等价规则合并不同的来源路径。
+    var sourceKey: Data { Data(id.utf8) }
+
     public init(name: String, agent: WorkspaceAgent, directoryPath: String) {
         self.name = name
         self.agent = agent
         self.directoryPath = directoryPath
+    }
+}
+
+/// 待纳管候选和全部忽略记录取自同一次服务读取，来源已移除的记录也可在页面上恢复。
+public nonisolated struct UnmanagedSkillSnapshot: Sendable {
+    public let candidates: [UnmanagedSkill]
+    public let ignored: [UnmanagedSkill]
+
+    public init(candidates: [UnmanagedSkill], ignored: [UnmanagedSkill]) {
+        self.candidates = candidates
+        self.ignored = ignored
     }
 }
 

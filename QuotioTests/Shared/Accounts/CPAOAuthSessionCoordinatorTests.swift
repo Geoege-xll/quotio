@@ -430,14 +430,12 @@ final class CPAOAuthSessionCoordinatorTests: XCTestCase {
         XCTAssertTrue(error.contains("error=access_denied"))
     }
 
-    func testManualAuthCapabilityDependsOnModeWithoutChangingQuotaSupport() {
-        for provider in [AIProvider.grok, .devin] {
-            XCTAssertTrue(provider.supportsManualAuth(in: .localProxy))
-            XCTAssertFalse(provider.supportsManualAuth(in: .monitor))
-            XCTAssertTrue(provider.supportsQuotaOnlyMode)
+    func testLocalProxyManualAuthPreservesProviderCapabilities() {
+        for provider in [AIProvider.grok, .devin, .claude, .codex] {
+            XCTAssertTrue(provider.supportsManualAuth)
         }
-        XCTAssertTrue(AIProvider.claude.supportsManualAuth(in: .monitor))
-        XCTAssertTrue(AIProvider.codex.supportsManualAuth(in: .monitor))
+        XCTAssertFalse(AIProvider.cursor.supportsManualAuth)
+        XCTAssertFalse(AIProvider.clinePass.supportsManualAuth)
     }
 
     func testCPAOAuthProviderKeyMapping() {

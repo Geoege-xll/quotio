@@ -194,21 +194,16 @@ struct AgentSkillsView: View {
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 8) {
-                ForEach(viewModel.unmanagedSkills) { unmanaged in
+                ForEach(viewModel.unmanagedSkills, id: \.sourceKey) { unmanaged in
                     HStack(spacing: 10) {
-                        Image(systemName: unmanaged.agent.systemIcon)
-                            .foregroundStyle(unmanaged.agent.color)
-                            .font(.system(size: 14))
+                        localSkillSourceLabel(unmanaged)
+                        Spacer(minLength: 8)
 
-                        Text(unmanaged.name)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.primary)
-
-                        Text("来源: \(unmanaged.agent.displayName)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-
-                        Spacer()
+                        Button("workspace.skills.ignore".localized()) {
+                            Task { await viewModel.ignoreUnmanagedSkill(unmanaged) }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
 
                         Button {
                             Task { await viewModel.importUnmanagedSkill(unmanaged) }
@@ -239,6 +234,58 @@ struct AgentSkillsView: View {
             RoundedRectangle(cornerRadius: QuotioTheme.Radius.lg, style: .continuous)
                 .strokeBorder(QuotioTheme.Colors.warning.opacity(0.3), lineWidth: 0.5)
         )
+    }
+
+    private var ignoredLocalSkills: some View {
+        DisclosureGroup {
+            VStack(spacing: 8) {
+                ForEach(viewModel.ignoredUnmanagedSkills, id: \.sourceKey) { ignored in
+                    HStack(spacing: 10) {
+                        localSkillSourceLabel(ignored)
+                        Spacer(minLength: 8)
+                        Button("workspace.skills.unignore".localized()) {
+                            Task { await viewModel.unignoreUnmanagedSkill(ignored) }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .padding(.vertical, 4)
+                    Divider()
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            Text(String.localizedStringWithFormat(
+                "workspace.skills.ignoredCount".localized(), viewModel.ignoredUnmanagedSkills.count
+            ))
+            .fontWeight(.semibold)
+        }
+        .quotioCard(cornerRadius: QuotioTheme.Radius.lg, padding: 16)
+    }
+
+    /// Codex 有两个扫描根目录；显示完整来源路径，方便对同一客户端的同名技能分别操作。
+    private func localSkillSourceLabel(_ skill: UnmanagedSkill) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: skill.agent.systemIcon)
+                .foregroundStyle(skill.agent.color)
+                .font(.system(size: 14))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(skill.name)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(skill.agent.displayName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(skill.directoryPath)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(skill.directoryPath)
+            }
+            .accessibilityElement(children: .combine)
+        }
     }
 
     // MARK: - Skills Sub-Tabs & Content Section
@@ -395,6 +442,10 @@ struct AgentSkillsView: View {
             // Unmanaged Local Skills Alert (if any)
             if !viewModel.unmanagedSkills.isEmpty {
                 unmanagedSkillsAlert
+            }
+            // 忽略清单独立于待纳管提示，即使全部候选已忽略仍能逐项恢复。
+            if !viewModel.ignoredUnmanagedSkills.isEmpty {
+                ignoredLocalSkills
             }
 
             if viewModel.isLoadingSkills && viewModel.installedSkills.isEmpty {

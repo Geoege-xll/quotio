@@ -9,18 +9,22 @@ struct QuotaHistoryView: View {
     let onClose: () -> Void
     var settings: MenuBarSettingsManager = .shared
     let service: QuotaHistoryService
+    private let isReadOnly: Bool
     @Environment(\.locale) private var locale
     @State private var model: QuotaHistoryScreenModel
-    @State private var range: QuotaHistoryRange = .week
+    @State private var range: QuotaHistoryRange
     @State private var metricID: String?
     @State private var hoveredDate: Date?
     @State private var confirmsClear = false
     @State private var clearError = false
 
     init(account: QuotaHistoryAccount, accountName: String, settings: MenuBarSettingsManager = .shared,
-         service: QuotaHistoryService, onClose: @escaping () -> Void) {
+         service: QuotaHistoryService, isReadOnly: Bool = false, onClose: @escaping () -> Void) {
         self.account = account; self.accountName = accountName; self.settings = settings
         self.service = service; self.onClose = onClose
+        self.isReadOnly = isReadOnly
+        // 旧历史没有持续采样，默认展示整个保留窗口以覆盖较早的旧观测。
+        _range = State(initialValue: isReadOnly ? .month : .week)
         _model = State(initialValue: QuotaHistoryScreenModel(service: service))
     }
 
@@ -64,10 +68,10 @@ struct QuotaHistoryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     controls
-                    if !service.recordingEnabled {
+                    if !isReadOnly && !service.recordingEnabled {
                         Label("quota.history.paused".localized(), systemImage: "pause.circle").font(.caption).foregroundStyle(.secondary)
                     }
-                    if service.recordingError {
+                    if !isReadOnly && service.recordingError {
                         Label("quota.history.writeFailed".localized(), systemImage: "exclamationmark.triangle")
                             .font(.caption).foregroundStyle(.orange)
                     }
@@ -84,21 +88,23 @@ struct QuotaHistoryView: View {
                         dailyRows
                     }
                     Text("quota.history.coverage".localized()).font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Toggle("quota.history.recording".localized(), isOn: Binding(
-                            get: { service.recordingEnabled }, set: { enabled in Task { await service.setRecordingEnabled(enabled) } }))
-                            .disabled(service.isSuspended || service.isClearing)
-                        Spacer()
-                        Button("quota.history.clear".localized(), role: .destructive) { confirmsClear = true }
-                            .disabled(service.isClearing || service.isSuspended)
+                    if !isReadOnly {
+                        HStack {
+                            Toggle("quota.history.recording".localized(), isOn: Binding(
+                                get: { service.recordingEnabled }, set: { enabled in Task { await service.setRecordingEnabled(enabled) } }))
+                                .disabled(service.isSuspended || service.isClearing)
+                            Spacer()
+                            Button("quota.history.clear".localized(), role: .destructive) { confirmsClear = true }
+                                .disabled(service.isClearing || service.isSuspended)
+                        }
+                        if clearError { Text("quota.history.clearFailed".localized()).font(.caption).foregroundStyle(.orange) }
                     }
-                    if clearError { Text("quota.history.clearFailed".localized()).font(.caption).foregroundStyle(.orange) }
                 }.padding(18)
             }
         }
-        .frame(minWidth: 600, minHeight: 520)
+        .frame(minWidth: 600, minHeight: isReadOnly ? 0 : 520)
         .background(Color(nsColor: .windowBackgroundColor))
-        .task(id: Query(account: account, metric: metricID, range: range, revision: service.revision)) {
+        .task(id: Query(account: account, metric: metricID, range: range, revision: isReadOnly ? 0 : service.revision)) {
             hoveredDate = nil
             await model.load(account: account, metricID: metricID, range: range)
         }

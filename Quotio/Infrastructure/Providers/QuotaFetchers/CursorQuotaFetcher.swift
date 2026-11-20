@@ -76,11 +76,14 @@ nonisolated struct CursorAuthData: Sendable {
 /// Fetches quota from Cursor using stored auth
 actor CursorQuotaFetcher {
     private var session: URLSession
+    private let readAuth: (@Sendable () -> CursorAuthData?)?
     private let cursorAPIBase = "https://api2.cursor.sh"
     private let stateDBPath = "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
     
-    init() {
-        let config = ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 15)
+    /// 生产读取原本机数据库；测试可注入独立读取与会话，验证请求发出前的账号匹配。
+    init(configuration: URLSessionConfiguration? = nil, readAuth: (@Sendable () -> CursorAuthData?)? = nil) {
+        self.readAuth = readAuth
+        let config = configuration ?? ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 15)
         config.httpAdditionalHeaders = [
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         ]
@@ -120,6 +123,7 @@ actor CursorQuotaFetcher {
     
     /// Read auth data from Cursor's state.vscdb
     func readAuthFromStateDB() -> CursorAuthData? {
+        if let readAuth { return readAuth() }
         let expandedPath = NSString(string: stateDBPath).expandingTildeInPath
         
         guard FileManager.default.fileExists(atPath: expandedPath) else {
@@ -190,87 +194,50 @@ actor CursorQuotaFetcher {
         )
     }
     
-    /// Fetch quota from Cursor API using usage-summary endpoint
+    /// 用户显式读取时仍可在服务不可达时查看本地套餐。
     func fetchQuota() async -> CursorQuotaInfo? {
-        guard let authData = readAuthFromStateDB(),
-              let accessToken = authData.accessToken else {
-            return nil
-        }
-        
-        // Fetch usage-summary endpoint (has both plan and on-demand info)
-        guard let usageURL = URL(string: "\(cursorAPIBase)/auth/usage-summary") else { return nil }
-        
+        guard let authData = readAuthFromStateDB() else { return nil }
+        return await fetchQuota(authData: authData, allowLocalInfo: true, isCurrent: { true })
+    }
+
+    /// 请求与身份匹配必须使用同一份本机凭据；禁止在校验后再次读取数据库。
+    private func fetchQuota(authData: CursorAuthData, allowLocalInfo: Bool,
+                            isCurrent: @Sendable () async -> Bool) async -> CursorQuotaInfo? {
+        guard !Task.isCancelled, let accessToken = authData.accessToken,
+              let usageURL = URL(string: "\(cursorAPIBase)/auth/usage-summary") else { return nil }
+
         var request = URLRequest(url: usageURL)
         request.httpMethod = "GET"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        
+
+        // 读取凭据与发请求之间可能切换 CPA 会话；凭据匹配本身不延续旧会话的出站许可。
+        guard await isCurrent(), !Task.isCancelled else { return nil }
         do {
             let (data, response) = try await session.data(for: request)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                return nil
-            }
-            
-            // If unauthorized, return basic info from local auth
-            if httpResponse.statusCode == 401 {
-                return CursorQuotaInfo(
-                    email: authData.email,
-                    membershipType: authData.membershipType,
-                    subscriptionStatus: authData.subscriptionStatus,
-                    billingCycleStart: nil,
-                    billingCycleEnd: nil,
-                    isUnlimited: false,
-                    planUsage: nil,
-                    onDemandUsage: nil
-                )
-            }
-            
+            guard let httpResponse = response as? HTTPURLResponse else { return nil }
             guard httpResponse.statusCode == 200 else {
-                // Return basic info from local auth if API fails
-                return CursorQuotaInfo(
-                    email: authData.email,
-                    membershipType: authData.membershipType,
-                    subscriptionStatus: authData.subscriptionStatus,
-                    billingCycleStart: nil,
-                    billingCycleEnd: nil,
-                    isUnlimited: false,
-                    planUsage: nil,
-                    onDemandUsage: nil
-                )
+                return allowLocalInfo ? Self.localAccountInfo(authData) : nil
             }
-            
-            return Self.parseUsageSummaryResponse(data, authData: authData)
+            return Self.parseUsageSummaryResponse(data, authData: authData, allowLocalInfo: allowLocalInfo)
         } catch {
-            // Return basic info from local auth on network error
-            return CursorQuotaInfo(
-                email: authData.email,
-                membershipType: authData.membershipType,
-                subscriptionStatus: authData.subscriptionStatus,
-                billingCycleStart: nil,
-                billingCycleEnd: nil,
-                isUnlimited: false,
-                planUsage: nil,
-                onDemandUsage: nil
-            )
+            return allowLocalInfo ? Self.localAccountInfo(authData) : nil
         }
     }
-    
-    /// Parse usage-summary API response
-    nonisolated static func parseUsageSummaryResponse(_ data: Data, authData: CursorAuthData) -> CursorQuotaInfo? {
+
+    private nonisolated static func localAccountInfo(_ authData: CursorAuthData) -> CursorQuotaInfo {
+        CursorQuotaInfo(email: authData.email, membershipType: authData.membershipType,
+                        subscriptionStatus: authData.subscriptionStatus, billingCycleStart: nil,
+                        billingCycleEnd: nil, isUnlimited: false, planUsage: nil, onDemandUsage: nil)
+    }
+
+    /// 明示导入兼容本地套餐；已导入刷新遇到不可解析的响应时保留原成功额度。
+    nonisolated static func parseUsageSummaryResponse(_ data: Data, authData: CursorAuthData,
+                                                      allowLocalInfo: Bool = true) -> CursorQuotaInfo? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return CursorQuotaInfo(
-                email: authData.email,
-                membershipType: authData.membershipType,
-                subscriptionStatus: authData.subscriptionStatus,
-                billingCycleStart: nil,
-                billingCycleEnd: nil,
-                isUnlimited: false,
-                planUsage: nil,
-                onDemandUsage: nil
-            )
+            return allowLocalInfo ? localAccountInfo(authData) : nil
         }
-        
+
         // Parse membership type
         let membershipType = json["membershipType"] as? String ?? authData.membershipType
         let isUnlimited = json["isUnlimited"] as? Bool ?? false
@@ -342,10 +309,19 @@ actor CursorQuotaFetcher {
         )
     }
     
-    /// Convert to ProviderQuotaData for unified display
-    func fetchAsProviderQuota() async -> [String: ProviderQuotaData] {
-        guard await isInstalled() else { return [:] }
-        guard let info = await fetchQuota() else { return [:] }
+    /// 已导入刷新只能查询同一邮箱。没有邮箱时的旧展示占位符不能授权网络请求。
+    func fetchAsProviderQuota(matchingAccountKeys: Set<String>? = nil,
+                              isCurrent: @Sendable () async -> Bool = { true }) async -> [String: ProviderQuotaData] {
+        guard await isCurrent(), !Task.isCancelled else { return [:] }
+        if readAuth == nil, await !isInstalled() { return [:] }
+        // 安装探测可挂起。读令牌前重新向当前 CPA 会话确认许可。
+        guard await isCurrent(), !Task.isCancelled, let authData = readAuthFromStateDB() else { return [:] }
+        let identity = authData.email.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        if let matchingAccountKeys {
+            guard let identity, identity != "Cursor User", matchingAccountKeys.contains(identity) else { return [:] }
+        }
+        guard let info = await fetchQuota(authData: authData, allowLocalInfo: matchingAccountKeys == nil,
+                                          isCurrent: isCurrent) else { return [:] }
         
         var models: [ModelQuota] = []
         
@@ -385,7 +361,12 @@ actor CursorQuotaFetcher {
             models.append(onDemandModel)
         }
         
-        // If no usage data but have account info, create a placeholder
+        // 成功响应也可能只有 "enabled" 标记。已导入刷新至少需要实际读数或明确的不限额状态，
+        // 避免用未知占位替换上次成功额度、推进成功时间。
+        if matchingAccountKeys != nil, !info.isUnlimited,
+           !models.contains(where: { $0.percentage >= 0 || $0.used != nil || $0.limit != nil || $0.remaining != nil }) {
+            return [:]
+        }
         if models.isEmpty {
             models.append(ModelQuota(
                 name: "cursor-usage",
@@ -394,7 +375,7 @@ actor CursorQuotaFetcher {
             ))
         }
         
-        let email = info.email ?? "Cursor User"
+        let accountKey = identity ?? "Cursor User"
         
         // Format plan type for display (e.g., "pro_student" -> "Pro Student")
         var planDisplayName: String? = nil
@@ -413,6 +394,6 @@ actor CursorQuotaFetcher {
             planType: planDisplayName
         )
         
-        return [email: quotaData]
+        return [accountKey: quotaData]
     }
 }

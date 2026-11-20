@@ -4,6 +4,10 @@
 
 Quotio 是原生 macOS 菜单栏与窗口应用，用于管理本机 CLIProxyAPI、提供商账号、配额和 CLI 代理配置。使用 Swift 6、SwiftUI，最低支持 macOS 15，仅维护 Apple Silicon（arm64）；通过 Xcode 的 `QuotioPlus` scheme 构建。源码按业务聚合，跨业务能力和外部系统接入分别放入 `Shared` 与 `Infrastructure`；完整入口见[源码目录与归属规范](SOURCE_LAYOUT.md)。
 
+已安装 CPA 8.x 时，Quotio 启动即启动本地服务。关闭窗口继续运行，通过应用菜单正常退出时等待本次启动的进程停止。路由中心与菜单栏提供「重启服务」，缺少内核时从路由中心安装。旧运行偏好统一迁移到本地代理，首次引导完成标志、现有凭据仍可读取。菜单栏「旧额度历史」按原提供商和账号展示保留期内的历史。实现入口见[本地代理生命周期](SOURCE_LAYOUT.md#本地代理生命周期)。
+
+账号管理和菜单栏以 CPA 认证目录及用户显式添加的连接为准。额度通过 CPA 优先读取，精确补查沿用同一账号凭据。CPA 停机后展示上次成功额度和更新时间。详见[账号与额度维护入口](SOURCE_LAYOUT.md#cpa-账号目录与额度来源)。
+
 ## Active features
 
 | Feature | Current summary | Detail |

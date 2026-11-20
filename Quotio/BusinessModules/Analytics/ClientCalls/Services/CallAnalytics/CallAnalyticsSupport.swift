@@ -37,6 +37,20 @@ nonisolated struct CallAnalyticsClock {
         isoWithFraction.date(from: text) ?? isoPlain.date(from: text)
     }
 
+    /// ISO8601DateFormatter 会把小数截到毫秒；清理边界需要保留客户端声明的亚毫秒发起时间。
+    /// 不清理时沿用历史解析；旧格式仍可由原解析器读取，不借用文件或结果时间。
+    func invocationDate(fromISO text: String, cutoff: Date?) -> Date? {
+        if cutoff != nil,
+           let exact = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(text) { return exact }
+        return date(fromISO: text)
+    }
+
+    /// 未重置时保留旧兼容规则；重置后只有可证实且严格晚于水位的发起时间才有资格计数。
+    static func includesInvocation(at date: Date?, after cutoff: Date?) -> Bool {
+        guard let cutoff else { return true }
+        return date.map { $0 > cutoff } ?? false
+    }
+
     func dayKey(_ date: Date) -> String {
         let comps = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", comps.year ?? 1970, comps.month ?? 1, comps.day ?? 1)
@@ -381,4 +395,5 @@ nonisolated enum CallAnalyticsReadError: Error {
     case unreadable
     case database
     case archive
+    case resetDuringScan
 }

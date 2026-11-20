@@ -28,7 +28,7 @@ Quotio/
 │   ├── Accounts/                # Models、Presentation 及账号公共能力
 │   ├── AgentClients/            # 公共客户端配置模型，含 Models/Claude
 │   ├── Analytics/               # 公共统计模型及唯一 CPA 账本
-│   ├── AppSettings/             # 共享运行模式、外观、刷新、额度与菜单栏偏好
+│   ├── AppSettings/             # 首次引导兼容、外观、刷新、额度与菜单栏偏好
 │   ├── Formatting/              # 隐私脱敏及数值格式化纯规则
 │   ├── ModelManagement/
 │   └── UI/                      # 主题、分段控件、图表等基础组件
@@ -62,13 +62,13 @@ Quotio/
 | 路由中心、光流与执行记录 | [Dashboard/Routing](../Quotio/BusinessModules/Dashboard/Routing) |
 | 账号管理与额度融合页 | [ProvidersScreen.swift](../Quotio/BusinessModules/Accounts/Views/ProvidersScreen.swift)、[AccountQuotaContent.swift](../Quotio/BusinessModules/Accounts/Views/AccountQuotaContent.swift)；原 `QuotaScreen` 仅保留旧导航兼容壳 |
 | 公共账号状态、身份及刷新协调 | [QuotaViewModel.swift](../Quotio/Shared/Accounts/ViewModels/QuotaViewModel.swift) 持有原状态、任务、上下文、槽位、私有节流及预热调度／缓存；[ViewModels](../Quotio/Shared/Accounts/ViewModels) 下的同类型扩展承载只读展示、菜单投影、凭据传输、OAuth、IDE、账号变更与切换、取数、刷新、代理启动及预热执行 |
-| 监控账号、凭据、快照及刷新协调 | [Accounts/Monitor](../Quotio/Shared/Accounts/Monitor)：原合集已按 16 个现有类型归位；入口为 [MonitorAccount](../Quotio/Shared/Accounts/Monitor/MonitorAccount.swift)、[MonitorCredentialVault](../Quotio/Shared/Accounts/Monitor/MonitorCredentialVault.swift)、[MonitorSnapshotStore](../Quotio/Shared/Accounts/Monitor/MonitorSnapshotStore.swift)、[MonitorRefreshCoordinator](../Quotio/Shared/Accounts/Monitor/MonitorRefreshCoordinator.swift) |
+| 兼容账号身份、凭据与快照 | [Accounts/Monitor](../Quotio/Shared/Accounts/Monitor) 仍承载本地取数使用的身份与凭据类型、原子文件写入及旧快照的定点清理 |
 | 提供商、认证文件、额度及授权状态模型 | [Accounts/Models](../Quotio/Shared/Accounts/Models)，授权状态入口为 [OAuthState.swift](../Quotio/Shared/Accounts/Models/OAuthState.swift) |
 | 额度百分比纯投影 | [QuotaPercentagePresentation.swift](../Quotio/Shared/Accounts/Presentation/QuotaPercentagePresentation.swift) |
 | 账号身份与菜单候选解析 | [MenuBarAccountCatalog.swift](../Quotio/Shared/Accounts/Presentation/MenuBarAccountCatalog.swift)：原目录／别名／固定项和精确额度解析，状态提交仍归原宿主 |
 | IDE 显式扫描契约与原状态宿主 | [IDEScanSettings.swift](../Quotio/Shared/Accounts/Services/IDEScanSettings.swift)：选项、结果、隐私提示与原 manager 同文件，扫描 Sheet 留 Accounts |
 | CPA 授权协调与共享弹窗 | [CPAOAuthSessionCoordinator.swift](../Quotio/Shared/Accounts/Services/CPAOAuthSessionCoordinator.swift)、[OAuthSheet.swift](../Quotio/Shared/Accounts/Views/OAuthSheet.swift)：原协调器与两个紧密视图类型完整保留 |
-| 共享运行模式与 App 导航 | [OperatingMode.swift](../Quotio/Shared/AppSettings/OperatingMode.swift) 保留模式、单例、偏好和私有 setter；[OperatingMode+Navigation.swift](../Quotio/App/Navigation/OperatingMode+Navigation.swift) 维护原两个只读导航成员 |
+| 本地代理旧偏好迁移、历史标记与导航 | [OperatingMode.swift](../Quotio/Shared/AppSettings/OperatingMode.swift) 迁移旧偏好并保存引导完成标记；[NavigationPage.swift](../Quotio/App/Navigation/NavigationPage.swift) 提供固定侧栏 |
 | 客户端枚举与配置模型 | [AgentClients/Models](../Quotio/Shared/AgentClients/Models) |
 | Claude 菜单、显示与后端身份兼容规则 | [AgentClients/Models/Claude](../Quotio/Shared/AgentClients/Models/Claude)；`ClaudeModelReference` 统一角色／1M／wire ID，`ClaudeConfigurationPlan` 统一预览与输出；归属、有效操作及来源为同目录纯规则，位置契约归 Infrastructure，目录和任务仍归原 ViewModel，磁盘事务仍归原配置 actor |
 | 共享模型目录读取、候选筛选与连接探测 | [AgentModelCatalogService.swift](../Quotio/Shared/ModelManagement/Services/AgentModelCatalogService.swift) 保留三种结果语义；配置页同次读取分别取得注册证据与筛选候选；[DashboardModelCatalogLoader.swift](../Quotio/Shared/ModelManagement/Services/DashboardModelCatalogLoader.swift) 保留原凭据先行事务，状态仍归 QuotaViewModel |
@@ -191,7 +191,7 @@ Pi 的路径展开、agent 目录和会话根整体归客户端本地环境契�
 |---|---|
 | [QuotaViewModel+LocalQuotaFetching.swift](../Quotio/Shared/Accounts/ViewModels/QuotaViewModel+LocalQuotaFetching.swift) | 12 个原本地／CLI／直连取数及辅助方法；保留 CPA 优先、原空结果与合并规则、Kiro 凭据映射、Antigravity 套餐及检测顺序，两个局部辅助保持私有 |
 | [QuotaViewModel+CPAQuotaRefresh.swift](../Quotio/Shared/Accounts/ViewModels/QuotaViewModel+CPAQuotaRefresh.swift) | 原 CPA 接管方法；精确凭据与唯一旧邮箱映射、原 TaskGroup 并发、逐结果会话复核及失败保留不变，不消费用量队列 |
-| [QuotaViewModel+MonitorQuotaRefresh.swift](../Quotio/Shared/Accounts/ViewModels/QuotaViewModel+MonitorQuotaRefresh.swift) | 3 个原监控批量／单提供商及 Copilot 合并方法；保留凭据存在性、Codex 分组、Copilot 合并后归一、原 async let 并发和不挂起的内存发布段 |
+| `QuotaViewModel+MonitorQuotaRefresh.swift`（历史） | 原监控刷新扩展，已经随仅监控模式退役 |
 
 主类仍唯一持有全部获取器、状态、任务和 Debug 钩子；刷新上下文校验、槽位、错误恢复判定及统一收尾继续由主类原入口提供。仅将 13 个原只读获取器和 13 个必要方法开放为应用 Target 内部可见，不开放私有可变存储和七个私有 setter。16 个方法的完整正文与属性保持原样，先前六个扩展及原测试源码不变。白名单和实际验证见[提供商取数拆分记录](features/quota-viewmodel-provider-fetching-split-2026-10-15.md)。
 
@@ -250,17 +250,17 @@ Pi 的路径展开、agent 目录和会话根整体归客户端本地环境契�
 
 新增回归分别位于 `QuotioTests/Shared/Accounts/QuotaAPIKeyIsolationTests.swift`、`Infrastructure/System/NotificationIdentityTests.swift`、`BusinessModules/Dashboard/DashboardRefreshSessionTests.swift` 和 `Shared/Analytics/UsageDashboardRefreshTests.swift`。前述第三至九批的行数与成员计数是各批实施时的历史事实；当前修复按实际行为需要增加私有校验成员，保持原存储、Task 与 `private(set)` 的所有权。
 
-## Monitor 运行类型按完整声明归位
+## Monitor 运行类型的历史拆分
 
 第三轮第一批将原 1,110 行的 `MonitorRuntime.swift` 拆为同目录 16 个类型文件，旧合集已移除。以下路径均位于 `Quotio/Shared/Accounts/Monitor`，类型名称和原所有权不变：
 
 | 职责 | 当前文件与边界 |
 |---|---|
 | 账号来源与值 | [MonitorAccountSource.swift](../Quotio/Shared/Accounts/Monitor/MonitorAccountSource.swift)、[MonitorAccount.swift](../Quotio/Shared/Accounts/Monitor/MonitorAccount.swift)：原身份、优先级、权限、禁用及显示回退规则 |
-| 刷新模型与错误 | [MonitorRefreshIssue.swift](../Quotio/Shared/Accounts/Monitor/MonitorRefreshIssue.swift)、[MonitorRefreshBatch.swift](../Quotio/Shared/Accounts/Monitor/MonitorRefreshBatch.swift)、[MonitorCredentialAvailability.swift](../Quotio/Shared/Accounts/Monitor/MonitorCredentialAvailability.swift)、[MonitorRuntimeError.swift](../Quotio/Shared/Accounts/Monitor/MonitorRuntimeError.swift) |
+| 刷新模型与错误 | [MonitorRefreshIssue.swift](../Quotio/Shared/Accounts/Monitor/MonitorRefreshIssue.swift)、`MonitorRefreshBatch.swift`（历史）、`MonitorCredentialAvailability.swift`（历史）、[MonitorRuntimeError.swift](../Quotio/Shared/Accounts/Monitor/MonitorRuntimeError.swift) |
 | 凭据契约与保险库 | [MonitorCredentialStore.swift](../Quotio/Shared/Accounts/Monitor/MonitorCredentialStore.swift)、[MonitorOAuthCredential.swift](../Quotio/Shared/Accounts/Monitor/MonitorOAuthCredential.swift)、[MonitorCredentialVault.swift](../Quotio/Shared/Accounts/Monitor/MonitorCredentialVault.swift)：协议默认实现同文件，原 actor 同步 CAS、后端及读取世代完整保留 |
 | 世代与存储 | [MonitorStateRevision.swift](../Quotio/Shared/Accounts/Monitor/MonitorStateRevision.swift)、[MonitorMetadataStore.swift](../Quotio/Shared/Accounts/Monitor/MonitorMetadataStore.swift)、[MonitorSnapshotStore.swift](../Quotio/Shared/Accounts/Monitor/MonitorSnapshotStore.swift)：原锁边界、路径、旧格式兼容与快照提交不变 |
-| 发现与协调 | [MonitorAccountDiscovery.swift](../Quotio/Shared/Accounts/Monitor/MonitorAccountDiscovery.swift)、[MonitorRefreshCoordinator.swift](../Quotio/Shared/Accounts/Monitor/MonitorRefreshCoordinator.swift)：原依赖与挂起顺序、私有状态、嵌套 Flight、Task、共享等待及退避不变 |
+| 发现与协调 | `MonitorAccountDiscovery.swift`（历史）、[MonitorRefreshCoordinator.swift](../Quotio/Shared/Accounts/Monitor/MonitorRefreshCoordinator.swift)：原依赖与挂起顺序、私有状态、嵌套 Flight、Task、共享等待及退避不变 |
 | 原辅助类型 | [SecureAtomicFileWriter.swift](../Quotio/Shared/Accounts/Monitor/SecureAtomicFileWriter.swift)、[MonitorIdentity.swift](../Quotio/Shared/Accounts/Monitor/MonitorIdentity.swift)：原安全写入与身份规则；仅空白辅助从文件私有 String 扩展等价归入领域类型 |
 
 16 个类型及一个协议默认扩展均保留；14 个声明正文逐字一致，另三个声明仅涉及约定的空白辅助等价适配。未开放任何原可变私有状态或 setter。原 111 个测试文件不改动，新增两项账号工厂回退测试；构建及 29 项定向回归通过。详见[第三轮第一批实施记录](features/monitor-runtime-type-split-2026-10-15.md)。
@@ -319,9 +319,21 @@ Pi 的路径展开、agent 目录和会话根整体归客户端本地环境契�
 
 原跨业务维护测试整体归 `QuotioTests/App/Composition/AnalyticsMaintenanceLifecycleTests.swift`，所有 115 个原测试文件内容保留，不为文件移动新增镜像测试。构建及 17 项相关定向回归通过；实际验证范围见[存储维护应用装配归位记录](features/storage-maintenance-composition-2026-10-15.md)。
 
-## 监控授权会话专项修复
+## 监控授权会话专项修复（历史）
 
-整理后专项修复仍在原 `Infrastructure/Providers/Monitor/MonitorOAuthCoordinator.swift` 维护监控授权，不再进行目录迁移。协调器通过原 MonitorStateRevision 同步锁保护 Claude 授权世代；保险库和元数据的受保护重载在实际写入前复核。原 activeTask 继续由原 actor 持有，只增加所属世代；VM 只注入默认 shared 的只读协调器引用，原 OAuthState 与 Task 所有权不变。旧请求不能保存取消后的凭据、清除新 pending 或回写新 UI；原保存接口、CAS、配置与类型保留。详见[监控 Claude 授权隔离修复](features/monitor-claude-oauth-session-isolation-2026-10-15.md)。
+本节记录旧监控授权实现。原 `MonitorOAuthCoordinator.swift` 已随仅监控模式退役。协调器通过原 MonitorStateRevision 同步锁保护 Claude 授权世代；保险库和元数据的受保护重载在实际写入前复核。原 activeTask 继续由原 actor 持有，只增加所属世代；VM 只注入默认 shared 的只读协调器引用，原 OAuthState 与 Task 所有权不变。旧请求不能保存取消后的凭据、清除新 pending 或回写新 UI；原保存接口、CAS、配置与类型保留。详见[监控 Claude 授权隔离修复](features/monitor-claude-oauth-session-isolation-2026-10-15.md)。
+
+## 本地代理生命周期
+
+[QuotioApp.swift](../Quotio/App/QuotioApp.swift) 的 AppDelegate 持有应用启动和退出编排。启动无需等待首次引导。退出使用主运行循环完成 AppKit 退出请求，关闭窗口继续驻留。[QuotaViewModel](../Quotio/Shared/Accounts/ViewModels/QuotaViewModel.swift) 统一安装后启动、重启与额度会话，启动前读取上次成功快照，后续取数须通过代理运行状态与会话校验。
+
+[CLIProxyManager](../Quotio/Infrastructure/CPA/Runtime/CLIProxyManager.swift) 持有 CPA 子进程。端口冲突作为启动错误呈现。[ProxyProcessOwnership.swift](../Quotio/Infrastructure/CPA/Runtime/ProxyProcessOwnership.swift) 验证 CPA 实际拥有监听端口，按本轮进程对象进行限时清理。路由中心和菜单栏调用同一个重启事务。旧监控入口、独立授权与批量刷新已退役。凭据、历史标记及 CPA 和 IDE 仍依赖的旧格式读取按原边界保留。菜单栏从同一历史服务打开旧额度历史，按原始身份查询并沿用三十天保留期。
+
+## CPA 账号目录与额度来源
+
+[QuotaViewModel](../Quotio/Shared/Accounts/ViewModels/QuotaViewModel.swift) 接收并保存同一 CPA 会话内成功的目录和额度。账号页与菜单栏使用最近成功的目录和用户显式添加的连接，额外的额度记录不衍生账号。停机、目录读取失败和初始等待期保留只读快照。恢复的目录须重新确认后才可执行 CPA 更新。
+
+[CPAQuotaFetcher](../Quotio/Infrastructure/Providers/QuotaFetchers/CPAQuotaFetcher.swift) 对支持的提供商发送 CPA 额度请求。缺少对应能力时，Copilot 与 Kiro 可从当前目录精确核对同一凭据单独取数。失败保留最近成功值与时间。快照以展示字段白名单落盘，不包含认证文件正文。GitHub CLI 本机登录不参与后台账号发现。
 
 ## CPA 启动首轮额度同步
 

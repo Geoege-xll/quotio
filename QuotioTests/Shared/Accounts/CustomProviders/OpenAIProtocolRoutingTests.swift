@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import CryptoKit
+import SwiftUI
 import Yams
 import XCTest
 @testable import QuotioPlus
@@ -44,6 +46,150 @@ final class OpenAIProtocolRoutingTests: XCTestCase {
         XCTAssertFalse(chat.usesResponsesAPI)
         XCTAssertNotNil(try patch(empty, provider: chat)["openai-compatibility"])
         XCTAssertTrue(provider(url: "http://127.0.0.1:1234/v1", mode: .responses).usesResponsesAPI)
+    }
+
+    /// 用离线会话执行表单读取目录和保存校验共用的网络路径，核对认证、动态型号与错误反馈。
+    func testOfficialAdditionUsesFixedCatalogAndRejectsUnauthorizedKeys() async throws {
+        let host = "api.openai.com"
+        let outsideHost = UUID().uuidString.lowercased() + ".invalid"
+        let state = LifecycleHTTPState { request, _ in
+            guard request.cachePolicy == .reloadIgnoringLocalCacheData else {
+                return .replyStatus("fixture-expected-fresh-authentication", 500)
+            }
+            switch request.value(forHTTPHeaderField: "Authorization") {
+            case "Bearer fixture-valid":
+                return .reply(#"{"data":[{"id":"fixture-model-from-catalog","owned_by":"openai"}]}"#)
+            case "Bearer fixture-forbidden":
+                return .replyStatus("fixture-forbidden", 403)
+            case "Bearer fixture-redirect":
+                return .redirect("https://\(outsideHost)/models")
+            default:
+                return .replyStatus("fixture-unauthorized", 401)
+            }
+        }
+        LifecycleHTTPProtocol.register(state, host: host)
+        defer { LifecycleHTTPProtocol.remove(host: host) }
+        let redirected = LifecycleHTTPState { _, _ in .reply(#"{"data":[]}"#) }
+        LifecycleHTTPProtocol.register(redirected, host: outsideHost)
+        defer { LifecycleHTTPProtocol.remove(host: outsideHost) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LifecycleHTTPProtocol.self]
+        // URLProtocol 在 Foundation 拒绝跳转后可能不再完成伪造响应；缩短测试会话的等待，
+        // 并用假目的地主机收到零个请求来验证未转发认证，而不是要求传输必须保留 302。
+        configuration.timeoutIntervalForResource = 1
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+
+        let models = try await CustomProviderService.fetchOfficialOpenAIModels(apiKey: " fixture-valid\n ", session: session)
+        XCTAssertEqual(models.map(\.id), ["fixture-model-from-catalog"])
+        // 使用真实保存回调前的同一门槛，已认证但未选模、目录为空或有失效选择时都不能生成配置。
+        var draft = provider()
+        draft.models = []
+        let modelID = try XCTUnwrap(models.first?.id)
+        XCTAssertNil(CustomProviderSheet.verifiedOfficialOpenAIProvider(draft, selectedIDs: [], catalog: models))
+        XCTAssertNil(CustomProviderSheet.verifiedOfficialOpenAIProvider(draft, selectedIDs: [modelID], catalog: []))
+        XCTAssertNil(CustomProviderSheet.verifiedOfficialOpenAIProvider(
+            draft, selectedIDs: [modelID, "no-longer-in-catalog"], catalog: models
+        ))
+        let verified = try XCTUnwrap(CustomProviderSheet.verifiedOfficialOpenAIProvider(
+            draft, selectedIDs: [modelID], catalog: models
+        ))
+        XCTAssertEqual(verified.models.map(\.name), [modelID])
+        let groups = try XCTUnwrap(try patch(empty, provider: verified)["codex"] as? [[String: Any]])
+        let registrations = try XCTUnwrap(groups.first?["models"] as? [[String: Any]])
+        XCTAssertEqual(registrations.compactMap { $0["name"] as? String }, [modelID])
+
+        let authMessageKey = "customProviders.openAIOfficial.unauthorized"
+        for key in ["fixture-unauthorized", "fixture-forbidden", "fixture\ninvalid"] {
+            do {
+                _ = try await CustomProviderService.fetchOfficialOpenAIModels(apiKey: key, session: session)
+                XCTFail("无效密钥不得通过保存前校验")
+            } catch let error as CustomProviderTestError {
+                guard case .unauthorized = error else { throw error }
+                let message = CustomProviderSheet.officialOpenAIErrorMessage(error)
+                XCTAssertEqual(message, authMessageKey.localized())
+                XCTAssertNotEqual(message, authMessageKey, "认证提示必须解析为真实的本地化资源")
+            }
+        }
+        let chineseBundlePath = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj"))
+        let chineseBundle = try XCTUnwrap(Bundle(path: chineseBundlePath))
+        let chineseAuthMessage = chineseBundle.localizedString(forKey: authMessageKey, value: nil, table: nil)
+        XCTAssertTrue(chineseAuthMessage.contains("权限"))
+
+        do {
+            _ = try await CustomProviderService.fetchOfficialOpenAIModels(apiKey: " \n", session: session)
+            XCTFail("空密钥不得发出请求")
+        } catch CustomProviderTestError.noAPIKey {}
+
+        do {
+            _ = try await CustomProviderService.fetchOfficialOpenAIModels(apiKey: "fixture-redirect", session: session)
+            XCTFail("携带密钥的请求不得跟随重定向")
+        } catch CustomProviderTestError.serverError(302, _) {
+        } catch CustomProviderTestError.invalidResponse {}
+        XCTAssertEqual(redirected.requestCount, 0)
+        XCTAssertEqual(state.requests.map(\.url.absoluteString), Array(repeating: "https://api.openai.com/v1/models", count: 4))
+        XCTAssertEqual(state.requests.map(\.method), ["GET", "GET", "GET", "GET"])
+        XCTAssertEqual(state.requests.map(\.authorization), [
+            "Bearer fixture-valid", "Bearer fixture-unauthorized", "Bearer fixture-forbidden", "Bearer fixture-redirect"
+        ])
+    }
+
+    /// 像表单关闭时一样取消持有目录请求的任务。夹具本身不返回结果，
+    /// 因而任务必须通过 URLSession 的取消传播结束，而不能等待目录或超时。
+    func testOfficialAdditionCancelsPendingCatalogBeforeTimeout() async {
+        let host = "api.openai.com"
+        let started = expectation(description: "离线目录收到请求")
+        let finished = expectation(description: "取消结束目录任务")
+        let state = LifecycleHTTPState { _, _ in
+            started.fulfill()
+            return .hold
+        }
+        LifecycleHTTPProtocol.register(state, host: host)
+        defer { LifecycleHTTPProtocol.remove(host: host) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LifecycleHTTPProtocol.self]
+        configuration.timeoutIntervalForResource = 10
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+
+        let task = Task {
+            defer { finished.fulfill() }
+            return try await CustomProviderService.fetchOfficialOpenAIModels(apiKey: "fixture-cancel", session: session)
+        }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        await fulfillment(of: [finished], timeout: 2)
+        if case .success = await task.result {
+            XCTFail("取消的目录请求不得返回模型")
+        }
+        XCTAssertEqual(state.requestCount, 1)
+    }
+
+    /// 在 XCTest 宿主中布局真实账号选择器与官方表单，不启动真实账号页、代理或授权服务。
+    func testOfficialAdditionEntryAndFormRenderInNativeHost() throws {
+        let mode = CustomProviderSheetMode.addOfficialOpenAI
+        XCTAssertNil(mode.provider)
+        XCTAssertEqual(mode.initialProviderType, .openaiCompatibility)
+        XCTAssertTrue(mode.isAddingOfficialOpenAI)
+
+        let picker = NSHostingView(rootView: AddProviderPopover(providers: [.codex], existingCounts: [:],
+            onSelectProvider: { _ in }, onScanIDEs: {}, onAddOfficialOpenAI: {}, onAddCustomProvider: {}, onDismiss: {}))
+        let form = NSHostingView(rootView: CustomProviderSheet(provider: mode.provider,
+            initialProviderType: mode.initialProviderType, isAddingOfficialOpenAI: mode.isAddingOfficialOpenAI) { _ in
+                XCTFail("展示或关闭空表单不得调用保存回调")
+            })
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 700),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = picker
+        picker.layoutSubtreeIfNeeded()
+        XCTAssertEqual(picker.fittingSize.width, 320)
+        XCTAssertGreaterThan(picker.fittingSize.height, 0)
+        window.contentView = form
+        form.layoutSubtreeIfNeeded()
+        XCTAssertEqual(form.fittingSize, CGSize(width: 600, height: 700))
+        window.contentView = nil
     }
 
     func testProtocolRoundTripAndMissingOldFieldKeepIDsAndKeys() throws {

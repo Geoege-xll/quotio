@@ -26,6 +26,9 @@ actor CallAnalyticsEngine {
     func refresh() throws -> CallAnalyticsSnapshot {
         try Task.checkCancellation()
         let archiveTimeZone = try archive.aggregationTimeZone(preferred: timeZone)
+        // 每次刷新从同一持久边界取得归类时间和提交代次；代次不在 actor 内跨轮缓存。
+        let reset = try archive.lastReset()
+        let resetTime = reset?.clearedAt
         let cached = try archive.load()
         let inventory = CallAnalyticsInventory(homeDirectory: homeDirectory, environment: environment)
         let skills = inventory.installedSkills()
@@ -52,10 +55,10 @@ actor CallAnalyticsEngine {
                 switch source {
                 case .pi:
                     // Pi 与其他客户端一样只读取本地事件，CPA 请求不会进入工具调用账本。
-                    let result = try PiCallEventSource(homeDirectory: homeDirectory, timeZone: archiveTimeZone, environment: environment).collect(cutoff: nil)
+                    let result = try PiCallEventSource(homeDirectory: homeDirectory, timeZone: archiveTimeZone, environment: environment).collect(cutoff: resetTime)
                     entries += result.entries; statuses.append(result.status)
                 case .claude:
-                    let result = try ClaudeCallEventSource(homeDirectory: homeDirectory, timeZone: archiveTimeZone, environment: environment).collect(cutoff: nil)
+                    let result = try ClaudeCallEventSource(homeDirectory: homeDirectory, timeZone: archiveTimeZone, environment: environment).collect(cutoff: resetTime)
                     entries += result.entries; statuses.append(result.status)
                     // 保留上游的会话日桶，纯文本子代理同样进入归档；空键代表日期未知。
                     invocations = result.agentInvocationsByDay.flatMap { day, values in
@@ -63,10 +66,10 @@ actor CallAnalyticsEngine {
                             count: $0.count, dayKey: day.isEmpty ? nil : day) }
                     }
                 case .codex:
-                    let result = try CodexCallEventSource(homeDirectory: homeDirectory, timeZone: archiveTimeZone, environment: environment).collect(cutoff: nil)
+                    let result = try CodexCallEventSource(homeDirectory: homeDirectory, timeZone: archiveTimeZone, environment: environment).collect(cutoff: resetTime)
                     entries += result.entries; statuses.append(result.status)
                 case .opencode:
-                    let result = try OpenCodeCallEventSource(homeDirectory: homeDirectory, timeZone: archiveTimeZone, environment: environment, knownMCPServers: knownServers).collect(cutoff: nil)
+                    let result = try OpenCodeCallEventSource(homeDirectory: homeDirectory, timeZone: archiveTimeZone, environment: environment, knownMCPServers: knownServers).collect(cutoff: resetTime)
                     entries += result.entries; statuses.append(result.status)
                 }
                 // 只有扫描前后来源完全一致且解析无部分错误，才推进成功指纹。
@@ -88,6 +91,6 @@ actor CallAnalyticsEngine {
         return try archive.merge(CallAnalyticsSnapshot(generatedAt: Date(), rangeKey: "all", entries: entries,
             installedSkills: skills, installedMCPServers: servers, agentInvocations: invocations, sources: statuses,
             aggregationTimeZoneIdentifier: archiveTimeZone.identifier),
-            scannedSources: scannedSources, successfulFingerprints: successfulFingerprints)
+            scannedSources: scannedSources, successfulFingerprints: successfulFingerprints, observedReset: reset)
     }
 }

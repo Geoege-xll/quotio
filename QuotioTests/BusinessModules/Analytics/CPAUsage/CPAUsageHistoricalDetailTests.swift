@@ -304,4 +304,32 @@ final class CPAUsageHistoricalDetailTests: XCTestCase {
         XCTAssertEqual(unchanged.metrics.requests, 1)
     }
 
+
+    func testDashboardCostAgreesWithPricingAcrossIncludedOmittedHistoryAndPriceEdits() async throws {
+        let ledger = try historicalLedger([record("old", model: "MODEL", cached: 80)])
+        _ = try await ledger.ingest([record("new-upper", model: "MODEL"), record("new-lower", model: "model")],
+                                     collectedAt: day.addingTimeInterval(7200))
+        let full = CPAUsageQuery()
+        let short = CPAUsageQuery(start: day.addingTimeInterval(3599), end: day.addingTimeInterval(3600))
+        let now = day.addingTimeInterval(12 * 3600)
+        for rate in [0.0, 2.0] {
+            try await ledger.savePrice(CPAModelPrice(model: "model", input: rate, output: rate))
+            for (query, requests, pricedTokens) in [(full, 3, 280), (short, 2, 240)] {
+                let report = try await ledger.queryDashboard(query, dimension: .model, metric: .cost, limit: 8, now: now)
+                let pricing = try await ledger.queryPricing(query)
+                let expected = Double(pricedTokens) * rate / 1_000_000
+                XCTAssertEqual(report.summary.metrics.requests, requests)
+                XCTAssertEqual(pricing.summary.metrics.requests, requests)
+                XCTAssertEqual(try XCTUnwrap(pricing.estimatedCost), expected, accuracy: 1e-12)
+                XCTAssertEqual(try XCTUnwrap(report.estimatedCost.amount), expected, accuracy: 1e-12)
+                XCTAssertEqual(try XCTUnwrap(report.categories.first?.cost.amount), expected, accuracy: 1e-12)
+                XCTAssertEqual(report.estimatedCost.isPartial, pricing.hasPartialEstimate)
+                XCTAssertTrue(report.estimatedCost.isPartial, "纳入的旧日缺缓存拆分；范围不全时，旧日整体省略")
+                let annualCost = report.heatmapCosts.values.reduce(into: CPAUsageCostEstimate()) { $0.add($1) }
+                XCTAssertEqual(try XCTUnwrap(annualCost.amount), 280 * rate / 1_000_000, accuracy: 1e-12)
+                XCTAssertTrue(annualCost.isPartial)
+            }
+        }
+    }
+
 }

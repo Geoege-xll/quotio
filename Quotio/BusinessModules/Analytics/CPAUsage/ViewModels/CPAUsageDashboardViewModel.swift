@@ -12,7 +12,7 @@ final class CPAUsageDashboardViewModel {
     /// 用户刷新单独使查询任务失效；后台采集状态不参与查询身份或导航按钮状态。
     private(set) var refreshRevision = 0
     @ObservationIgnored private var generation = UUID()
-    @ObservationIgnored private var previous: Query?
+    private var previous: Query?
 
     struct Query: Hashable {
         let selection: CPAUsageSelection
@@ -25,7 +25,14 @@ final class CPAUsageDashboardViewModel {
 
     func requestRefresh() { refreshRevision &+= 1 }
 
-    func load(_ query: Query, store: UsageStatisticsStore) async -> Bool {
+    /// SwiftUI 先重绘、后启动查询；只在报表和当前条件匹配时引用它，防止用新标签解释旧数值。
+    func result(matching query: Query) -> CPAUsageDashboardReport? {
+        guard let previous, previous.selection == query.selection,
+              previous.dimension == query.dimension, previous.metric == query.metric else { return nil }
+        return result
+    }
+
+    func load(_ query: Query, store: UsageStatisticsStore, now: Date = .now) async -> Bool {
         let token = UUID()
         generation = token
         if let previous, previous.selection != query.selection || previous.dimension != query.dimension || previous.metric != query.metric {
@@ -35,11 +42,11 @@ final class CPAUsageDashboardViewModel {
         errorKey = nil
         do {
             let value = try await store.queryDashboard(query.selection, dimension: query.dimension,
-                metric: query.metric, limit: query.limit, now: Date())
+                metric: query.metric, limit: query.limit, now: now)
             try Task.checkCancellation()
             guard generation == token else { return false }
             // 无变化的后台查询不重新发布整份图表，减少轮询导致的无效布局与重绘。
-            if result != value { result = value }
+            if result?.hasSamePresentation(as: value) != true { result = value }
             return true
         } catch {
             if generation == token && !Task.isCancelled { errorKey = "usage.records.readFailed" }
@@ -48,7 +55,7 @@ final class CPAUsageDashboardViewModel {
     }
 }
 
-/// 价格汇总仅在价格子页面打开时查询，编辑价格后刷新，不在首页常驻计算费用。
+/// 价格子页保留独立明细和编辑查询；总览选中费用口径时只读取聚合。
 @MainActor @Observable
 final class CPAUsagePricingViewModel {
     private(set) var result: CPAUsagePricingReport?

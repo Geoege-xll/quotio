@@ -5,58 +5,18 @@
 
 import Foundation
 
-/// 账号禁用、删除、监控密钥账号保存、自定义连接变更及 Antigravity IDE 切换的原有入口。
-/// 全部方法仍作用于同一个 QuotaViewModel；监控账号复用原协调器，IDE 切换复用主类原切换器。
-/// 凭据与连接变更仍在原时点推进世代；IDE 切换不新增世代，每次挂起后的原校验和账号范围不变。
-/// 删除继续同步清理同一身份对应的目录、额度、套餐、错误、固定项及需要持久化的 IDE 镜像。
-/// 同名不同凭据、不同认证目录、独立账号并行操作与用户保留的固定项继续沿用既有保护。
-/// 刷新收尾及禁用偏好读写仍调用主类原入口；不增加任务、重复状态或第二个凭据存储服务。
+/// 原账号变更入口复用主类的世代、凭据和 IDE 切换器。
 extension QuotaViewModel {
-    func setMonitorAccountDisabled(_ disabled: Bool, accountID: String) async {
-        let context = beginAccountMutation(accountID: accountID)
-        let account = monitorAccounts.first { $0.id == accountID }
-        if disabled, let account { removeQuotaEntry(provider: account.provider, accountKey: account.accountKey) }
-        await monitorCoordinator.setDisabled(disabled, accountID: accountID, revision: context.revision)
-        guard canApplyMutation(context) else { return }
-        await finishScopedRefresh(provider: account?.provider ?? .codex, context: refreshContext())
-    }
-
-    func deleteMonitorAccount(accountID: String) async {
-        guard let account = monitorAccounts.first(where: { $0.id == accountID }), account.canDelete else { return }
-        let context = beginAccountMutation(accountID: accountID)
-        removeQuotaEntry(provider: account.provider, accountKey: account.accountKey)
-        monitorAccounts.removeAll { $0.id == accountID }
-        await monitorCoordinator.deleteOwnedAccount(accountID: accountID, revision: context.revision)
-        guard canApplyMutation(context) else { return }
-        await monitorCoordinator.forgetSnapshotAccount(provider: account.provider, accountKey: account.accountKey,
-                                                       revision: context.revision, mutationAccountID: accountID)
-        guard canApplyMutation(context) else { return }
-        await finishScopedRefresh(provider: account.provider, context: refreshContext())
-    }
-
-    /// Delete an account imported from a local IDE (Cursor, Trae) via "Scan for IDEs".
-    ///
-    /// These accounts own no credential — they exist only as imported quota data — so
-    /// deleting one means clearing every copy of that data: the in-memory quotas, the
-    /// `persisted.ideQuotas` UserDefaults mirror, the Monitor snapshot, any Monitor
-    /// disabled flag, and the menu bar selection (issue #213).
-    ///
-    /// The Monitor state is cleared in **every** mode, not only Monitor mode: these rows
-    /// are only shown outside Monitor mode (Monitor rows are dispatched to
-    /// `deleteMonitorAccount` first), while `initializeQuotaOnlyMode()` bootstraps from
-    /// the Monitor snapshot, so a stale entry would restore the account on the next
-    /// switch back into Monitor mode. The removal is targeted rather than a
-    /// `finish(quotas:)` rewrite because outside Monitor mode `providerQuotas` holds
-    /// that mode's quota data, which must not overwrite the Monitor snapshot.
+    /// 用户主动删除 IDE 导入的账号时，同步移除偏好镜像，并定点清理旧监控快照与禁用标记。
+    /// 历史兼容写入仍核对该账号的变更世代，不重写其他账号及额度历史。
     func deleteAutoDetectedAccount(provider: AIProvider, accountKey: String) async {
         guard provider.isImportedFromLocalIDE else { return }
         let accountID = MonitorAccount.make(provider: provider, accountKey: accountKey, source: .localIDE).id
         let context = beginAccountMutation(accountID: accountID)
         removeQuotaEntry(provider: provider, accountKey: accountKey)
-        monitorAccounts.removeAll { $0.provider == provider && $0.accountKey == accountKey }
         await monitorCoordinator.forgetSnapshotAccount(provider: provider, accountKey: accountKey, revision: context.revision, mutationAccountID: accountID)
         guard canApplyMutation(context) else { return }
-        await finishScopedRefresh(provider: provider, context: refreshContext())
+        await finishScopedRefresh(context: refreshContext())
     }
 
     /// Remove one account's quota entry from the in-memory map and, for IDE-imported
@@ -83,102 +43,8 @@ extension QuotaViewModel {
             // the deleted account does not resurrect on the next launch (issue #213).
             savePersistedIDEQuotas()
         }
+        if removed { persistAccountSnapshot() }
         return removed
-    }
-
-    func saveOpenRouterAccount(label: String, apiKey: String, existingAccountID: String? = nil) async throws {
-        try await saveMonitorAPIKeyAccount(
-            provider: .openRouter,
-            label: label,
-            apiKey: apiKey,
-            existingAccountID: existingAccountID
-        )
-    }
-
-    func saveAmpAccount(label: String, apiKey: String, existingAccountID: String? = nil) async throws {
-        try await saveMonitorAPIKeyAccount(
-            provider: .amp,
-            label: label,
-            apiKey: apiKey,
-            existingAccountID: existingAccountID
-        )
-    }
-
-    func saveFactoryDroidAccount(label: String, apiKey: String, existingAccountID: String? = nil) async throws {
-        try await saveMonitorAPIKeyAccount(
-            provider: .factoryDroid,
-            label: label,
-            apiKey: apiKey,
-            existingAccountID: existingAccountID
-        )
-    }
-
-    private func saveMonitorAPIKeyAccount(
-        provider: AIProvider,
-        label: String,
-        apiKey: String,
-        existingAccountID: String?
-    ) async throws {
-        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let mutationID = existingAccountID ?? MonitorAccount.make(provider: provider, accountKey: trimmedLabel, source: .quotioKeychain).id
-        let context = beginAccountMutation(accountID: mutationID)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedLabel.isEmpty, !trimmedKey.isEmpty else { throw MonitorRuntimeError.invalidCredential }
-        guard provider != .amp || trimmedLabel.caseInsensitiveCompare(AmpQuotaFetcher.localAccountKey) != .orderedSame else {
-            throw MonitorRuntimeError.invalidCredential
-        }
-
-        let account: MonitorAccount
-        if let existingAccountID,
-           let existing = monitorAccounts.first(where: { $0.id == existingAccountID && $0.provider == provider }) {
-            guard !monitorAccounts.contains(where: {
-                $0.id != existing.id
-                    && $0.provider == provider
-                    && $0.accountKey.caseInsensitiveCompare(trimmedLabel) == .orderedSame
-            }) else { throw MonitorRuntimeError.invalidCredential }
-            account = MonitorAccount(
-                id: existing.id,
-                provider: existing.provider,
-                accountKey: trimmedLabel,
-                displayName: trimmedLabel,
-                source: existing.source,
-                credentialReference: existing.credentialReference,
-                canDelete: existing.canDelete,
-                isDisabled: existing.isDisabled
-            )
-            _ = await MonitorCredentialVault.shared.credential(for: existing.id)
-            guard canCommit(context) else { return }
-            if existing.accountKey != trimmedLabel {
-                providerQuotas[provider]?.removeValue(forKey: existing.accountKey)
-            }
-        } else {
-            guard !monitorAccounts.contains(where: {
-                $0.provider == provider && $0.accountKey.caseInsensitiveCompare(trimmedLabel) == .orderedSame
-            }) else { throw MonitorRuntimeError.invalidCredential }
-            account = .make(
-                provider: provider,
-                accountKey: trimmedLabel,
-                source: .quotioKeychain,
-                credentialReference: "keychain",
-                canDelete: true
-            )
-        }
-
-        try await MonitorCredentialVault.shared.save(
-            MonitorOAuthCredential(
-                accessToken: trimmedKey,
-                refreshToken: nil,
-                idToken: nil,
-                accountID: nil,
-                expiresAt: nil,
-                extra: [:]
-            ),
-            metadata: account
-        )
-        let accounts = await discoverMonitorAccounts(merging: providerQuotas)
-        guard canCommit(context) else { return }
-        monitorAccounts = accounts
-        await refreshQuotasDirectly(force: true)
     }
 
     /// 删除完成后立即更新目录、额度、套餐和固定项。推进账号世代，使删除前
@@ -206,6 +72,7 @@ extension QuotaViewModel {
         authFiles.removeAll { $0.name == file.name && $0.providerType == file.providerType }
         let diskIDs = Set(matchingDisks.map(\.id))
         directAuthFiles.removeAll { diskIDs.contains($0.id) }
+        persistAccountSnapshot()
         syncMenuBarSelection()
         notifyQuotaDataChanged()
     }
@@ -261,6 +128,19 @@ extension QuotaViewModel {
             if replacement?.type == previous.type && replacement?.name == previous.name { preservedPins.insert(previous.name) }
         }
         clearQuotaAccounts(provider: provider, keys: removed, preservingPins: preservedPins)
+        persistAccountSnapshot()
+        notifyQuotaDataChanged()
+    }
+
+    /// Warp 过去以配置名称作为额度键。换密钥或改名时立即废弃在途额度并清除旧值，
+    /// 同名换密钥仍保留固定项。若同名本就属于多条配置，清理歧义额度但保留共享名称的固定项。
+    func prepareWarpQuotaMutation(previous: WarpService.WarpToken, replacement: WarpService.WarpToken?) {
+        guard previous.name != replacement?.name || previous.token != replacement?.token else { return }
+        beginAccountMutation(accountID: "warp:" + previous.id.uuidString)
+        let sameNameStillExists = WarpService.shared.tokens.contains { $0.id != previous.id && $0.name == previous.name }
+        let keepPin = sameNameStillExists || replacement?.name == previous.name
+        clearQuotaAccounts(provider: .warp, keys: [previous.name], preservingPins: keepPin ? [previous.name] : [])
+        persistAccountSnapshot()
         notifyQuotaDataChanged()
     }
 
@@ -277,7 +157,7 @@ extension QuotaViewModel {
     }
 
     func deleteAuthFile(_ file: AuthFile) async {
-        guard let client = apiClient else { return }
+        guard hasCurrentCPAAccountDirectory, let client = apiClient else { return }
         let context = beginAccountMutation(accountID: "cpa:" + file.id)
         let session = proxyManager.runtimeSessionID
         do {
@@ -292,9 +172,7 @@ extension QuotaViewModel {
             disabledSet.remove(file.name)
             disabledSet.remove(file.quotaLookupKey)
             saveDisabledAuthFiles(disabledSet)
-            // 没有 path 的 CPA 响应不能证明本地文件归属，删除后重新扫描本地目录，
-            // 以磁盘实际结果消除旧快照，而不是按同名误删另一认证目录的记录。
-            await loadDirectAuthFiles()
+            // 删除立即同步改写展示快照；之后仅以 CPA 再确认目录，不扫描本机凭据。
             await refreshData(refreshQuotas: false)
             await refreshModelsAfterCPAAccountChange(modelRefresh)
         } catch {
@@ -305,7 +183,7 @@ extension QuotaViewModel {
     }
 
     func toggleAuthFileDisabled(_ file: AuthFile) async {
-        guard let client = apiClient else {
+        guard hasCurrentCPAAccountDirectory, let client = apiClient else {
             Log.error("toggleAuthFileDisabled: No API client available")
             return
         }
@@ -330,6 +208,8 @@ extension QuotaViewModel {
 
             let modelRefresh = invalidateModelsAfterCPAAccountChange(source: source)
 
+            // 使禁用更新前在途的额度或目录拒绝提交；新目录通过原入口重新确认。
+            beginAccountMutation(accountID: "cpa:" + file.id)
             Log.debug("toggleAuthFileDisabled: Success, refreshing data")
             await refreshData()
             // 保留原账号刷新顺序，随后复用原目录加载入口；过期页面／手动新刷新由原世代校验拒绝。
@@ -343,7 +223,7 @@ extension QuotaViewModel {
 
     /// 重置单个凭据在 CPA 内核中的冷却或配额耗尽惩罚状态。
     func resetAuthFileCooldown(authIndex: String) async {
-        guard let client = apiClient else {
+        guard hasCurrentCPAAccountDirectory, let client = apiClient else {
             Log.error("resetAuthFileCooldown: No API client available")
             return
         }
@@ -367,7 +247,7 @@ extension QuotaViewModel {
 
     /// 一键解除所有当前处于冷却或限流惩罚期的凭据。
     func resetAllCooldowns() async {
-        guard let client = apiClient else {
+        guard hasCurrentCPAAccountDirectory, let client = apiClient else {
             Log.error("resetAllCooldowns: No API client available")
             return
         }
@@ -411,7 +291,7 @@ extension QuotaViewModel {
 
         // Refresh to update active account
         if case .success = antigravitySwitcher.switchState {
-            await refreshAntigravityQuotasWithoutDetect()
+            await refreshQuota(for: .antigravity)
         }
     }
 

@@ -65,7 +65,9 @@ public final class WorkspaceViewModel {
     public var discoverableSkills: [DiscoverableSkill] = []
     public var repos: [SkillRepo] = []
     public var selectedRepo: SkillRepo? = nil
-    public var unmanagedSkills: [UnmanagedSkill] = []
+    private var unmanagedSkillSnapshot = UnmanagedSkillSnapshot(candidates: [], ignored: [])
+    public var unmanagedSkills: [UnmanagedSkill] { unmanagedSkillSnapshot.candidates }
+    public var ignoredUnmanagedSkills: [UnmanagedSkill] { unmanagedSkillSnapshot.ignored }
     public var skillSearchText = ""
     public var isLoadingSkills = false
     public private(set) var isCheckingSkillUpdates = false
@@ -347,6 +349,15 @@ public final class WorkspaceViewModel {
         expandedParentSessionIDs.contains(parentID)
     }
 
+    // 手动状态与搜索派生状态分开：清空搜索即恢复折叠偏好，无需保存或回填快照。
+    func isSessionExpandedBySearch(_ session: WorkspaceSession) -> Bool {
+        session.agent == selectedAgentFilter && sessionListSnapshot.searchExpandedRootIDs.contains(session.id)
+    }
+
+    func isSessionBranchExpanded(_ session: WorkspaceSession) -> Bool {
+        isSessionExpandedBySearch(session) || isSubagentExpanded(session.id)
+    }
+
     public func toggleSubagentExpansion(_ parentID: String) {
         if expandedParentSessionIDs.contains(parentID) {
             expandedParentSessionIDs.remove(parentID)
@@ -383,7 +394,7 @@ public final class WorkspaceViewModel {
             try await skillService.prepareStorage()
             let loadedRepos = try await skillService.loadRepos()
             let installed = try await skillService.loadInstalledSkills()
-            let unmanaged = try await skillService.scanUnmanagedSkills()
+            let unmanaged = try await skillService.loadUnmanagedSkillSnapshot()
             guard revision == skillRevision, !Task.isCancelled else { return }
             // 仓库保存可能在下面两个磁盘读取的挂起期间完成；只提交仍然有效的仓库快照。
             // 技能内容仍可独立刷新，避免为了保护仓库而丢掉整次本地读取。
@@ -392,7 +403,7 @@ public final class WorkspaceViewModel {
             installedSkills = installed
             // 本地刷新可移除技能，但远端差异只有用户重新检测后才能更新结论。
             availableSkillUpdates.formIntersection(Set(installed.map(\.directory)))
-            unmanagedSkills = unmanaged
+            unmanagedSkillSnapshot = unmanaged
             backfillMissingSourceDates(from: installed, revision: revision)
             if let repo = selectedRepo { await fetchDiscoverableSkills(repo: repo) }
         } catch {
@@ -548,6 +559,46 @@ public final class WorkspaceViewModel {
         }
     }
 
+    public func ignoreUnmanagedSkill(_ unmanaged: UnmanagedSkill) async {
+        await setUnmanagedSkillIgnored(unmanaged, ignored: true)
+    }
+
+    public func unignoreUnmanagedSkill(_ ignored: UnmanagedSkill) async {
+        await setUnmanagedSkillIgnored(ignored, ignored: false)
+    }
+
+    private func setUnmanagedSkillIgnored(_ unmanaged: UnmanagedSkill, ignored: Bool) async {
+        // 忽略与单项、批量纳管共用页面已有的写入互斥，列表中的同名项仍按精确来源更新。
+        guard !isMutatingSkills else { return }
+        isMutatingSkills = true
+        defer { isMutatingSkills = false }
+        let sourceStillExists: Bool
+        do {
+            if ignored {
+                try await skillService.ignoreUnmanagedSkill(unmanaged)
+                sourceStillExists = false
+            } else {
+                sourceStillExists = try await skillService.unignoreUnmanagedSkill(unmanaged)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+
+        // 只有 SQLite 提交后才发布变更。即使之后扫描报错，已忽略项也不会回到待纳管或批量列表。
+        let key = unmanaged.sourceKey
+        var candidates = unmanagedSkills.filter { $0.sourceKey != key }
+        var ignoredSkills = ignoredUnmanagedSkills.filter { $0.sourceKey != key }
+        if ignored { ignoredSkills.append(unmanaged) }
+        if sourceStillExists { candidates.append(unmanaged) }
+        unmanagedSkillSnapshot = UnmanagedSkillSnapshot(candidates: candidates, ignored: ignoredSkills)
+        showToast((ignored ? "workspace.skills.ignoreSuccess" : "workspace.skills.unignoreSuccess").localized())
+
+        // 复用本地重载的世代检查，确保变更前已开始的扫描无法再提交。
+        do { try await reloadLocalSkills() }
+        catch { errorMessage = "读取技能失败: \(error.localizedDescription)" }
+    }
+
     public func importAllUnmanagedSkills() async {
         guard !unmanagedSkills.isEmpty, !isMutatingSkills else { return }
         isMutatingSkills = true
@@ -570,13 +621,14 @@ public final class WorkspaceViewModel {
     private func reloadLocalSkills() async throws {
         skillRevision += 1
         let revision = skillRevision
+        // 即使本地读取失败，旧刷新也已失效，不能把加载状态留给旧请求清理。
+        defer { if revision == skillRevision { isLoadingSkills = false } }
         let installed = try await skillService.loadInstalledSkills()
-        let unmanaged = try await skillService.scanUnmanagedSkills()
+        let unmanaged = try await skillService.loadUnmanagedSkillSnapshot()
         guard revision == skillRevision else { return }
         installedSkills = installed
         availableSkillUpdates.formIntersection(Set(installed.map(\.directory)))
-        unmanagedSkills = unmanaged
-        isLoadingSkills = false
+        unmanagedSkillSnapshot = unmanaged
     }
 
     public func exportSkillsBackup() async {

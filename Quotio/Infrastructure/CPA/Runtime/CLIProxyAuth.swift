@@ -56,6 +56,11 @@ struct AuthCommandResult {
 extension CLIProxyManager {
 
     func runAuthCommand(_ command: AuthCommand) async -> AuthCommandResult {
+        guard !isShuttingDown else {
+            return AuthCommandResult(
+                success: false, message: "proxy.error.applicationExiting".localizedStatic(), deviceCode: nil
+            )
+        }
         terminateAuthProcess()
 
         guard isBinaryInstalled else {
@@ -119,8 +124,10 @@ extension CLIProxyManager {
             newAuthProcess.terminationHandler = { [weak self] terminatedProcess in
                 outputPipe.fileHandleForReading.readabilityHandler = nil
 
-                Task { @MainActor in
-                    self?.authProcess = nil
+                Task { @MainActor [weak self] in
+                    // 旧授权的终止回调可能迟到，只能清掉它自己的进程句柄。
+                    guard let self, self.authProcess === terminatedProcess else { return }
+                    self.authProcess = nil
                 }
 
                 let status = terminatedProcess.terminationStatus
@@ -136,9 +143,8 @@ extension CLIProxyManager {
             do {
                 try newAuthProcess.run()
 
-                Task { @MainActor in
-                    self.authProcess = newAuthProcess
-                }
+                // 启动和登记在同一个主 Actor 同步段完成，退出不能遗漏本轮已启动的授权进程。
+                self.authProcess = newAuthProcess
 
                 DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 3.0) {
                     guard newAuthProcess.isRunning else { return }

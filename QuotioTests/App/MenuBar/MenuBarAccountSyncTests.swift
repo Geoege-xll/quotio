@@ -15,19 +15,41 @@ final class MenuBarAccountSyncTests: XCTestCase {
         let vm: QuotaViewModel
     }
 
-    private func fixture(_ mode: OperatingMode = .localProxy) throws -> Fixture {
+    private func fixture(running: Bool = false, directory: [AuthFile] = []) throws -> Fixture {
         let suite = "quotio-menubar-sync-tests-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defaults.set(mode.rawValue, forKey: "operatingMode")
         let manager = OperatingModeManager(defaults: defaults)
         let settings = MenuBarSettingsManager(defaults: defaults)
         let refresh = RefreshSettingsManager(defaults: defaults)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let vm = QuotaViewModel(directAuthService: DirectAuthFileService(authDirectory: directory),
-            startsBackgroundServices: false, modeManager: manager, menuBarSettings: settings, refreshSettings: refresh)
+        let sandbox = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let vm = QuotaViewModel(directAuthService: DirectAuthFileService(authDirectory: sandbox),
+            startsBackgroundServices: false, modeManager: manager, menuBarSettings: settings, refreshSettings: refresh,
+            accountSnapshotDefaults: defaults)
         vm.customProvidersForTesting = []
+        let proxy = vm.proxyManager, originalRunning = proxy.proxyStatus.running, originalSession = proxy.runtimeSessionID
+        proxy.setRuntimeStateForTesting(running: running, sessionID: UUID())
+        if running {
+            let body = String(decoding: try JSONEncoder().encode(AuthFilesResponse(files: directory)), as: UTF8.self)
+            let state = LifecycleHTTPState { request, _ in
+                if request.url?.path.hasSuffix("/credentials") == true { return .reply(body) }
+                if request.url?.path.hasSuffix("/api-keys") == true { return .reply("[]") }
+                return .fail(.unsupportedURL)
+            }
+            let host = UUID().uuidString.lowercased() + ".invalid"
+            LifecycleHTTPProtocol.register(state, host: host)
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [LifecycleHTTPProtocol.self]
+            let client = ManagementAPIClient(baseURL: "https://" + host + ManagementAPIClient.managementPath,
+                                             authKey: "fixture", configuration: configuration)
+            vm.setAuthImportClientForTesting(client)
+            addTeardownBlock {
+                await client.invalidate()
+                LifecycleHTTPProtocol.remove(host: host)
+            }
+        }
         addTeardownBlock { @MainActor in
             vm.stopQuotaAutoRefresh()
+            proxy.setRuntimeStateForTesting(running: originalRunning, sessionID: originalSession)
             defaults.removePersistentDomain(forName: suite)
         }
         return Fixture(defaults: defaults, mode: manager, settings: settings, refresh: refresh, vm: vm)
@@ -59,104 +81,57 @@ final class MenuBarAccountSyncTests: XCTestCase {
         MenuBarQuotaItem(provider: provider.rawValue, accountKey: key)
     }
 
-    func testCPAStartDoesNotAutoAddOldDiskEmailAgain() throws {
-        let runtime = try file(path: "/isolated/claude-work.json"), disk = direct()
-        let quotas = [AIProvider.claude: [runtime.quotaLookupKey: quota(70), "work@example.com": quota(80)]]
-        let items = MenuBarAccountCatalog.items(mode: .localProxy, proxyRunning: true, authFiles: [runtime],
-            directFiles: [disk], monitorAccounts: [], quotas: quotas)
-        XCTAssertEqual(items, [pin(runtime.quotaLookupKey)])
+    func testMenuCatalogOnlyUsesCPAOrExplicitIdentities() throws {
+        let runtime = try file(path: "/isolated/claude-work.json")
         let f = try fixture()
-        f.settings.autoSelectNewAccounts(availableItems: items)
-        f.settings.autoSelectNewAccounts(availableItems: items)
-        XCTAssertEqual(f.settings.selectedItems, items, "持续刷新不能再固定旧邮箱或挤占上限")
-    }
-
-    func testCatalogUsesOnlyCurrentModeDirectoryAndPreservesIndependentCache() throws {
-        let runtime = try file(), disk = direct("claude-other.json"), cache = pin("cache")
-        let monitor = MonitorAccount.make(provider: .copilot, accountKey: "monitor", source: .nativeCredential)
-        func items(_ mode: OperatingMode, _ running: Bool) -> Set<MenuBarQuotaItem> {
-            Set(MenuBarAccountCatalog.items(mode: mode, proxyRunning: running, authFiles: [runtime],
-                directFiles: [disk], monitorAccounts: [monitor], quotas: [.claude: ["cache": quota(20)]]))
-        }
-        XCTAssertEqual(items(.localProxy, true), [pin(runtime.quotaLookupKey), cache])
-        XCTAssertEqual(items(.localProxy, false), [pin(disk.menuBarAccountKey), cache])
-        XCTAssertEqual(items(.monitor, true), [pin("monitor", provider: .copilot), cache])
+        f.vm.authFiles = [runtime]
+        f.vm.directAuthFiles = [direct()]
+        f.vm.providerQuotas = [.claude: ["cached-only": quota(80)], .cursor: ["explicit-ide": quota(55)]]
+        f.vm.syncMenuBarSelection()
+        XCTAssertEqual(Set(f.settings.selectedItems), [pin(runtime.quotaLookupKey), pin("explicit-ide", provider: .cursor)])
     }
 
     func testResolverRejectsSameEmailGuessEvenWithOnlyOneSuccessfulQuota() throws {
         let a = try file("team-a.json", index: "a"), b = try file("team-b.json", index: "b")
         let quotas = [AIProvider.claude: [a.quotaLookupKey: quota(70)]]
-        XCTAssertNil(MenuBarAccountCatalog.resolve(pin("work@example.com"), mode: .localProxy,
-            proxyRunning: true, authFiles: [a, b], directFiles: [], quotas: quotas))
-        XCTAssertEqual(MenuBarAccountCatalog.resolve(pin(a.quotaLookupKey), mode: .localProxy,
-            proxyRunning: true, authFiles: [a, b], directFiles: [], quotas: quotas)?.models.first?.percentage, 70)
+        XCTAssertNil(MenuBarAccountCatalog.resolve(pin("work@example.com"), authFiles: [a, b], quotas: quotas))
+        XCTAssertEqual(MenuBarAccountCatalog.resolve(pin(a.quotaLookupKey), authFiles: [a, b], quotas: quotas)?.models.first?.percentage, 70)
     }
 
     func testResolverUsesConfirmedAliasButExactCPASnapshotWins() throws {
         let runtime = try file(path: "/isolated/claude-work.json")
         let quotas = [AIProvider.claude: [runtime.quotaLookupKey: quota(30), "work@example.com": quota(90, updated: 50)]]
-        XCTAssertEqual(MenuBarAccountCatalog.resolve(pin("work@example.com"), mode: .localProxy,
-            proxyRunning: true, authFiles: [runtime], directFiles: [direct()], quotas: quotas)?.models.first?.percentage, 30)
-        let different = try file(path: "/remote/claude-work.json")
-        XCTAssertNil(MenuBarAccountCatalog.resolve(pin("work@example.com"), mode: .localProxy,
-            proxyRunning: true, authFiles: [different], directFiles: [direct()],
-            quotas: [.claude: [different.quotaLookupKey: quota(60)]]))
+        XCTAssertEqual(MenuBarAccountCatalog.resolve(pin("work@example.com"), authFiles: [runtime], quotas: quotas)?.models.first?.percentage, 30)
     }
 
-    func testCopilotMigrationCannotBypassDifferentDirectoryProtection() throws {
-        let remote = try file("github-copilot-local.json", provider: "github-copilot",
-            path: "/remote/github-copilot-local.json", account: "remote")
-        let local = direct(remote.name, provider: .copilot, path: "/local/" + remote.name, login: "local")
-        let aliases = MenuBarAccountCatalog.aliases(mode: .localProxy, proxyRunning: true,
-            authFiles: [remote], directFiles: [local], monitorAccounts: [])
-        XCTAssertNil(aliases[.copilot]?["local"])
-        XCTAssertEqual(AuthFileIdentity.rekeyMenuBarItems([pin("local", provider: .copilot)], aliases: aliases),
-            [pin("local", provider: .copilot)], "固定迁移也必须使用同一份安全映射")
-    }
-
-    func testMonitorPreservesOldProviderAndExplicitLoginPins() throws {
-        let f = try fixture(.monitor)
-        f.vm.monitorAccounts = [MonitorAccount.make(provider: .copilot, accountKey: "canonical", source: .legacyCLIProxy)]
-        f.vm.directAuthFiles = [direct("github-copilot-canonical.json", provider: .copilot,
-            login: "canonical", legacy: ["old-login"])]
-        f.vm.providerQuotas = [.copilot: ["canonical": quota(65)]]
-        f.settings.toggleItem(MenuBarQuotaItem(provider: "copilot", accountKey: "old-login"))
+    func testStoppedProxyKeepsVerifiedCPAIdentityAndIgnoresUnverifiedCopilotLogin() throws {
+        let f = try fixture()
+        let file = try file("github-copilot-canonical.json", provider: "github-copilot", account: "canonical")
+        f.vm.authFiles = [file]
+        f.vm.directAuthFiles = [direct("github-copilot-unrelated.json", provider: .copilot, login: "unrelated")]
+        f.vm.providerQuotas = [.copilot: [file.quotaLookupKey: quota(65)]]
+        f.settings.toggleItem(MenuBarQuotaItem(provider: "copilot", accountKey: "canonical"))
         f.vm.syncMenuBarSelection()
-        XCTAssertEqual(f.settings.selectedItems, [pin("canonical", provider: .copilot)])
-        XCTAssertTrue(f.settings.hasUserModifiedMenuBar, "兼容迁移不能恢复自动选择偏好")
-        let unknown = direct("github-copilot-other.json", provider: .copilot, login: "other", legacy: ["old-login"])
-        XCTAssertNil(MenuBarAccountCatalog.aliases(mode: .monitor, proxyRunning: false, authFiles: [],
-            directFiles: [unknown], monitorAccounts: f.vm.monitorAccounts)[.copilot]?["old-login"])
+        XCTAssertEqual(f.settings.selectedItems, [pin(file.quotaLookupKey, provider: .copilot)])
+        XCTAssertTrue(f.settings.hasUserModifiedMenuBar)
+        XCTAssertNil(MenuBarAccountCatalog.aliases(authFiles: [file])[.copilot]?["unrelated"])
     }
 
     func testLoadedOldCopilotProviderPinsDeduplicateWithoutChangingOrder() throws {
-        let f = try fixture(.monitor)
+        let f = try fixture()
         let canonical = pin("login", provider: .copilot)
         f.settings.selectedItems = [MenuBarQuotaItem(provider: "copilot", accountKey: "login"), canonical, pin("other")]
         let loaded = MenuBarSettingsManager(defaults: f.defaults)
         XCTAssertEqual(loaded.selectedItems, [canonical, pin("other")])
     }
 
-    func testMonitorMigratesUniqueCodexEmailButRejectsSharedSubscriptionEmail() throws {
-        let plus = direct("work-plus.json", provider: .codex)
-        let team = direct("work-team.json", provider: .codex)
-        let accounts = [plus, team].map { MonitorAccount.makeLegacy($0) }
-        let unique = MenuBarAccountCatalog.aliases(mode: .monitor, proxyRunning: false,
-            authFiles: [], directFiles: [plus], monitorAccounts: [accounts[0]])
-        XCTAssertEqual(unique[.codex]?["work@example.com"], plus.menuBarAccountKey)
-        let ambiguous = MenuBarAccountCatalog.aliases(mode: .monitor, proxyRunning: false,
-            authFiles: [], directFiles: [plus, team], monitorAccounts: accounts)
+    func testStoppedProxyMigratesUniqueCodexEmailButRejectsSharedSubscriptionEmail() throws {
+        let plus = try file("codex-work-plus.json", index: "plus", provider: "codex")
+        let team = try file("codex-work-team.json", index: "team", provider: "codex")
+        let unique = MenuBarAccountCatalog.aliases(authFiles: [plus])
+        XCTAssertEqual(unique[.codex]?["work@example.com"], plus.quotaLookupKey)
+        let ambiguous = MenuBarAccountCatalog.aliases(authFiles: [plus, team])
         XCTAssertNil(ambiguous[.codex]?["work@example.com"], "同邮箱多套餐不能擅自指定固定归属")
-    }
-
-    func testAmbiguousDiskRowsCannotPinAnotherCredentialsCache() {
-        let rows = AccountPageData.groupedAccounts(mode: .localProxy, proxyRunning: false, authFiles: [],
-            directAuthFiles: [direct("a.json"), direct("b.json")], monitorAccounts: [],
-            quotas: [.claude: ["work@example.com": quota(40)]], customProviders: [], warpTokens: [],
-            monitorStatus: { _ in (nil, nil) })[.claude] ?? []
-        XCTAssertEqual(rows.filter { $0.source == .direct }.count, 2)
-        XCTAssertTrue(rows.filter { $0.source == .direct }.allSatisfy { $0.menuBarItems.isEmpty })
-        XCTAssertEqual(rows.first { $0.source == .quotaCache }?.menuBarItems, [pin("work@example.com")])
     }
 
     private func glm() -> CustomProvider {
@@ -170,9 +145,8 @@ final class MenuBarAccountSyncTests: XCTestCase {
 
     func testGLMSecondKeyCanBePinnedAndRemovedAtLimit() throws {
         let f = try fixture(), provider = glm(), keys = keys(provider)
-        let rows = AccountPageData.groupedAccounts(mode: .localProxy, proxyRunning: false, authFiles: [],
-            directAuthFiles: [], monitorAccounts: [], quotas: [:], customProviders: [provider], warpTokens: [],
-            monitorStatus: { _ in (nil, nil) })[.glm] ?? []
+        let rows = AccountPageData.groupedAccounts(hasCurrentCPAAccountDirectory: false, authFiles: [],
+            importedIDEAccountKeys: [:], customProviders: [provider], warpTokens: [])[.glm] ?? []
         let row = try XCTUnwrap(rows.first)
         XCTAssertEqual(row.menuBarItems, keys.map { pin($0, provider: .glm) })
         f.settings.menuBarMaxItems = 1
@@ -199,12 +173,11 @@ final class MenuBarAccountSyncTests: XCTestCase {
         XCTAssertEqual(f.vm.providerQuotas[.glm]?[key]?.models.first?.percentage, 60)
         XCTAssertNil(f.vm.providerQuotas[.glm]?[provider.name])
         let multi = glm()
-        XCTAssertNil(MenuBarAccountCatalog.aliases(mode: .localProxy, proxyRunning: false,
-            authFiles: [], directFiles: [], monitorAccounts: [], customProviders: [multi])[.glm]?[multi.name])
+        XCTAssertNil(MenuBarAccountCatalog.aliases(authFiles: [], customProviders: [multi])[.glm]?[multi.name])
     }
 
     func testManualRefreshUsesSharedPlanAndCoalescesDuplicateClicks() async throws {
-        let f = try fixture()
+        let f = try fixture(running: true)
         var steps: [AccountRefreshStep] = [], resume: CheckedContinuation<Void, Never>?
         f.vm.accountRefreshStepHookForTesting = { step in
             steps.append(step)
@@ -218,14 +191,13 @@ final class MenuBarAccountSyncTests: XCTestCase {
         resume?.resume()
         await first.value
         XCTAssertFalse(f.vm.manualAccountRefreshState.isRefreshing)
-        XCTAssertEqual(steps, AccountRefreshStep.plan(mode: .localProxy, proxyRunning: f.vm.proxyManager.proxyStatus.running))
-        XCTAssertEqual(AccountRefreshStep.plan(mode: .localProxy, proxyRunning: true),
-            [.cpaDirectory, .cpaQuotas, .provider(.grok), .provider(.devin)])
-        XCTAssertEqual(AccountRefreshStep.plan(mode: .monitor, proxyRunning: true), [.monitorQuotas])
+        XCTAssertEqual(steps, AccountRefreshStep.plan(proxyRunning: f.vm.proxyManager.proxyStatus.running))
+        XCTAssertEqual(AccountRefreshStep.plan(proxyRunning: true), [.cpaDirectory, .cpaQuotas])
+        XCTAssertEqual(AccountRefreshStep.plan(proxyRunning: false), [])
     }
 
     func testModeChangeStopsRemainingManualRefreshSteps() async throws {
-        let f = try fixture()
+        let f = try fixture(running: true)
         var steps: [AccountRefreshStep] = [], resume: CheckedContinuation<Void, Never>?
         f.vm.accountRefreshStepHookForTesting = { step in
             steps.append(step)
@@ -241,33 +213,31 @@ final class MenuBarAccountSyncTests: XCTestCase {
     }
 
     func testScopedWaitCannotRefreshNewModeAfterOldSlotReleases() async throws {
-        let f = try fixture()
-        var reads = 0, resume: CheckedContinuation<Void, Never>?
-        f.vm.localQuotaFetchHookForTesting = { _ in
-            reads += 1
-            await withCheckedContinuation { resume = $0 }
-            return ["old": self.quota(20)]
-        }
-        let background = Task { await f.vm.refreshQuota(for: .glm) }
-        while resume == nil { await Task.yield() }
+        let f = try fixture(running: true)
+        var reads = 0
+        f.vm.localQuotaFetchHookForTesting = { _ in reads += 1; return [:] }
+        f.vm.customProvidersForTesting = [glm()]
+        XCTAssertTrue(f.vm.beginScopedRefresh(provider: .glm))
         let waiting = Task { await f.vm.refreshQuota(for: .glm, waitForAvailability: true) }
         // 先让等待者进入真实预约循环，再跨模式；不能让它在切换后才采样上下文。
         await Task.yield()
         try await Task.sleep(for: .milliseconds(20))
         f.mode.setMode(.monitor)
-        resume?.resume()
-        await background.value
         await waiting.value
-        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(f.vm.refreshingProviders, [.glm])
+        f.vm.endScopedRefresh(provider: .glm)
+        XCTAssertEqual(reads, 0)
         XCTAssertNil(f.vm.providerQuotas[.glm])
         XCTAssertTrue(f.vm.refreshingProviders.isEmpty, "拒绝旧来源之后也必须释放已预约槽位")
     }
 
     func testGLMDeletionRejectsLateResultAndPreservesOtherConnection() async throws {
-        let f = try fixture(), provider = glm(), keys = keys(provider)
-        f.vm.providerQuotas = [.glm: [keys[0]: quota(10), keys[1]: quota(20), "other": quota(90)]]
+        let f = try fixture(running: true), provider = glm(), keys = keys(provider)
+        let retained = glm(), retainedKey = self.keys(retained)[0]
+        f.vm.customProvidersForTesting = [provider, retained]
+        f.vm.providerQuotas = [.glm: [keys[0]: quota(10), keys[1]: quota(20), retainedKey: quota(90)]]
         f.settings.toggleItem(pin(keys[1], provider: .glm))
-        f.settings.toggleItem(pin("other", provider: .glm))
+        f.settings.toggleItem(pin(retainedKey, provider: .glm))
         var resume: CheckedContinuation<Void, Never>?
         f.vm.localQuotaFetchHookForTesting = { _ in
             await withCheckedContinuation { resume = $0 }
@@ -278,8 +248,8 @@ final class MenuBarAccountSyncTests: XCTestCase {
         f.vm.prepareCustomProviderQuotaMutation(previous: provider, replacement: nil, legacyNameIsUnique: true)
         resume?.resume()
         await old.value
-        XCTAssertEqual(Set(f.vm.providerQuotas[.glm]?.keys ?? Dictionary<String, ProviderQuotaData>().keys), ["other"])
-        XCTAssertEqual(f.settings.selectedItems, [pin("other", provider: .glm)])
+        XCTAssertEqual(Set(f.vm.providerQuotas[.glm]?.keys ?? Dictionary<String, ProviderQuotaData>().keys), [retainedKey])
+        XCTAssertEqual(f.settings.selectedItems, [pin(retainedKey, provider: .glm)])
         XCTAssertTrue(f.settings.hasUserModifiedMenuBar)
     }
 
@@ -348,43 +318,53 @@ final class MenuBarAccountSyncTests: XCTestCase {
         XCTAssertTrue(f.vm.authFiles.isEmpty)
     }
 
-    func testAccountDeletionRejectsLateQuotaEvenWhenSameKeyIsReadded() async throws {
-        let f = try fixture(), deleted = try file(), key = deleted.quotaLookupKey
-        try XCTSkipIf(f.vm.proxyManager.proxyStatus.running, "额度提交夹具不调用真实 CPA")
-        f.vm.authFiles = [deleted]
-        var resume: CheckedContinuation<Void, Never>?
-        // 外部读取挂起，实际 Claude 提交路径仍执行世代校验；同名重新添加后，
-        // 旧响应不能覆盖新额度。不会调用用户的 CLI 或 CPA。
-        f.vm.localQuotaFetchHookForTesting = { _ in
-            await withCheckedContinuation { resume = $0 }
-            return [key: self.quota(5)]
+    func testSnapshotSurvivesRestartWithoutSensitiveFieldsAndPersistsDeletion() async throws {
+        let f = try fixture()
+        let originalTime = Date(timeIntervalSince1970: 1_000)
+        let file = AuthFile(id: "fixture", name: "claude-fixture.json", provider: "claude",
+            statusMessage: "secret-response-body", path: "/fixture/private/path", email: "fixture@example.invalid",
+            authIndex: "fixture-opaque-index", quotaMetadata: AuthFileQuotaMetadata(projectID: "secret-project"))
+        let published = try await f.vm.refreshAuthDirectoryForTesting { [file] }
+        XCTAssertTrue(published)
+        f.vm.providerQuotas[.claude] = [file.quotaLookupKey: quota(70, updated: originalTime.timeIntervalSince1970),
+                                       "orphan": quota(30)]
+        f.vm.recordAccountQuotaSuccess(at: originalTime)
+
+        let json = try XCTUnwrap(f.defaults.data(forKey: CPAAccountQuotaSnapshot.preferenceKey))
+        let text = String(decoding: json, as: UTF8.self)
+        for excluded in ["secret-response-body", "/fixture/private/path", "secret-project", "orphan"] {
+            XCTAssertFalse(text.contains(excluded))
         }
-        let old = Task { await f.vm.refreshQuota(for: .claude) }
-        while resume == nil { await Task.yield() }
-        f.vm.commitAuthFileDeletion(deleted)
-        f.vm.providerQuotas[.claude] = [key: quota(90)]
-        resume?.resume()
-        await old.value
-        XCTAssertEqual(f.vm.providerQuotas[.claude]?[key]?.models.first?.percentage, 90)
+        func restore() -> QuotaViewModel {
+            QuotaViewModel(startsBackgroundServices: false, modeManager: f.mode, menuBarSettings: f.settings,
+                           refreshSettings: f.refresh, accountSnapshotDefaults: f.defaults)
+        }
+        let restored = restore()
+        XCTAssertEqual(restored.authFiles.map(\.quotaLookupKey), [file.quotaLookupKey])
+        XCTAssertEqual(restored.providerQuotas[.claude]?[file.quotaLookupKey]?.lastUpdated, originalTime)
+        XCTAssertEqual(restored.lastQuotaRefreshTime, originalTime)
+        XCTAssertFalse(restored.hasCurrentCPAAccountDirectory)
+        restored.commitAuthFileDeletion(file)
+        XCTAssertTrue(restore().authFiles.isEmpty)
+        XCTAssertNil(restore().providerQuotas[.claude])
     }
 
-    func testStoppedModeSchedulesQuotaTimerAndManualCadenceCancelsIt() throws {
+    func testStoppedModeDoesNotScheduleQuotaTimerAtAnyCadence() throws {
         let f = try fixture()
-        f.refresh.refreshCadence = .fiveMinutes
-        f.vm.restartAutoRefresh()
-        XCTAssertTrue(f.vm.isQuotaAutoRefreshScheduledForTesting)
-        f.refresh.refreshCadence = .manual
-        f.vm.restartAutoRefresh()
-        XCTAssertFalse(f.vm.isQuotaAutoRefreshScheduledForTesting)
+        for cadence in [RefreshCadence.fiveMinutes, .manual] {
+            f.refresh.refreshCadence = cadence
+            f.vm.restartAutoRefresh()
+            XCTAssertFalse(f.vm.isQuotaAutoRefreshScheduledForTesting)
+        }
     }
 
     func testNativeMultiKeyAndSingleKeyControlsRenderWithIsolatedSelection() throws {
         let f = try fixture(), provider = glm(), keys = keys(provider)
         f.vm.providerQuotas = [.glm: [keys[0]: quota(30), keys[1]: quota(70)]]
         f.settings.toggleItem(pin(keys[1], provider: .glm))
-        let groups = AccountPageData.groupedAccounts(mode: .localProxy, proxyRunning: false, authFiles: [],
-            directAuthFiles: [], monitorAccounts: [], quotas: f.vm.providerQuotas, customProviders: [provider],
-            warpTokens: [], monitorStatus: { _ in (nil, nil) })
+        let groups = AccountPageData.groupedAccounts(hasCurrentCPAAccountDirectory: false, authFiles: [],
+            importedIDEAccountKeys: [:], customProviders: [provider],
+            warpTokens: [])
         var renderedGroups = groups
         renderedGroups[.claude] = [AccountRowData.from(provider: .claude, accountKey: "single-fixture")]
         let root = VStack {

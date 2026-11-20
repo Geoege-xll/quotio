@@ -116,6 +116,99 @@ final class AnalyticsMaintenanceLifecycleTests: XCTestCase {
         model.cancel()
     }
 
+    func testCallOnlyClearDoesNotRestoreOldSessionCalls() async throws {
+        try await verifyCallReset(modules: [.callAnalytics])
+    }
+
+    func testAllModulesClearDoesNotRestoreOldSessionCalls() async throws {
+        try await verifyCallReset(modules: Set(AnalyticsStorageModule.allCases))
+    }
+
+    /// 通过设置页共用的真实服务验证两种模块集合，不使用真实应用的任何统计库或会话目录。
+    private func verifyCallReset(modules: Set<AnalyticsStorageModule>) async throws {
+        let directory = try root()
+        let databaseURL = AnalyticsDatabase.defaultURL(homeDirectory: directory.path)
+        let file = directory.appendingPathComponent(".claude/projects/p/session.jsonl")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let utc = TimeZone(secondsFromGMT: 0)!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = utc
+        // 避免测试恰好跨 UTC 午夜时把同日验收变成不同日；测试数据只由隔离快照的水位派生。
+        let now = Date()
+        let hour = calendar.component(.hour, from: now)
+        let zone = hour == 0 || hour == 23 ? TimeZone(secondsFromGMT: 12 * 3600)! : utc
+        let format = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        func declaration(_ id: String, at date: Date) -> String {
+            #"{"type":"assistant","timestamp":"\#(format.format(date))","sessionId":"same-session","message":{"content":[{"type":"tool_use","id":"\#(id)","name":"Read"}]}}"# + "\n"
+        }
+        let old = now.addingTimeInterval(-60)
+        let original = Data(declaration("before", at: old).utf8)
+        try original.write(to: file)
+
+        let engine = CallAnalyticsEngine(homeDirectory: directory.path, timeZone: zone, environment: [:])
+        let calls = CallAnalyticsViewModel(engine: engine)
+        calls.range = .all
+        calls.refresh()
+        try await waitUntil { !calls.isLoading && calls.report.totalCalls == 1 }
+        XCTAssertEqual(calls.snapshot.agentInvocations.first?.count, 1)
+        let clientUsage = ClientUsageViewModel(engine: ClientUsageEngine(databaseURL: databaseURL,
+            homeDirectory: directory.path, environment: [:]))
+        let usage = UsageStatisticsStore(ledger: UsageLedger(databaseURL: databaseURL))
+        let quotaHistory = QuotaHistoryService(store: QuotaHistoryStore(databaseURL: databaseURL))
+        let coordinator = AnalyticsMaintenanceCoordinator()
+        coordinator.configure(clientUsage: clientUsage, callAnalytics: calls, usage: usage,
+            store: StorageMaintenanceStore(databaseURL: databaseURL), history: quotaHistory)
+        let service = try XCTUnwrap(coordinator.service)
+        await service.clearStatistics(modules)
+        XCTAssertNil(service.errorKey)
+        XCTAssertEqual(service.messageKey, "storage.data.cleared")
+        XCTAssertEqual(Set((try XCTUnwrap(service.lastClearResult)).deletedCounts.keys), modules)
+        XCTAssertEqual(calls.report.totalCalls, 0)
+        XCTAssertEqual(try Data(contentsOf: file), original)
+
+        let archive = CallAnalyticsArchiveStore(homeDirectory: directory.path)
+        let reset = try XCTUnwrap(archive.lastReset())
+        let cutoff = reset.clearedAt
+        let zero = try await engine.refresh()
+        XCTAssertEqual(zero.totalCalls, 0)
+        XCTAssertTrue(zero.agentInvocations.isEmpty)
+        XCTAssertEqual(zero.sources.first { $0.source == .claude }?.filesScanned, 1)
+        XCTAssertGreaterThanOrEqual(zero.generatedAt, cutoff)
+        // 刷新更新时间和指纹，但不能推进仅由清理事务持久化的代次。
+        XCTAssertEqual(try archive.lastReset(), reset)
+
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        let newTime = cutoff.addingTimeInterval(1)
+        let lateResult = #"{"type":"user","timestamp":"\#(format.format(newTime))","sessionId":"same-session","message":{"content":[{"type":"tool_result","tool_use_id":"before"}]}}"# + "\n"
+        try handle.write(contentsOf: Data(lateResult.utf8))
+        let late = try await engine.refresh()
+        XCTAssertEqual(late.totalCalls, 0)
+        XCTAssertTrue(late.agentInvocations.isEmpty)
+        try handle.write(contentsOf: Data(declaration("after", at: newTime).utf8))
+        // mtime 保留为旧值，证明追加到旧会话的资格只由声明决定。
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: file.path)
+        XCTAssertEqual(try Data(contentsOf: file).prefix(original.count), original)
+
+        let dayClock = CallAnalyticsClock(timeZone: zone)
+        XCTAssertEqual(dayClock.dayKey(old), dayClock.dayKey(newTime))
+        let added = try await engine.refresh()
+        XCTAssertEqual(added.totalCalls, 1)
+        XCTAssertEqual(added.entries.first?.dayKey, dayClock.dayKey(old))
+        XCTAssertTrue(added.agentInvocations.isEmpty, "旧会话追加工具调用不是新会话启动")
+        let restarted = CallAnalyticsEngine(homeDirectory: directory.path, timeZone: zone, environment: [:])
+        let cached = try await restarted.cachedSnapshot()
+        XCTAssertEqual(cached.totalCalls, 1)
+        // 强制重扫而不是仅命中成功指纹，验证新引擎确实读到已持久化的重置边界。
+        try FileManager.default.setAttributes([.modificationDate: old.addingTimeInterval(-1)], ofItemAtPath: file.path)
+        let rescanned = try await restarted.refresh()
+        XCTAssertEqual(rescanned.sources.first { $0.source == .claude }?.filesScanned, 1)
+        XCTAssertEqual(rescanned.totalCalls, 1)
+        XCTAssertTrue(rescanned.agentInvocations.isEmpty)
+        calls.cancel()
+    }
+
     func testFreshCallPageEnteredDuringMaintenanceRefreshesAfterDataClear() async throws {
         let directory = try root()
         let model = CallAnalyticsViewModel(engine: CallAnalyticsEngine(homeDirectory: directory.path, environment: [:]))

@@ -29,7 +29,7 @@ struct AccountQuotaContent: View {
     }
 
     private var isRefreshing: Bool {
-        viewModel.isRefreshing(account: accountID)
+        viewModel.canRefreshAccountQuotas && viewModel.isRefreshing(account: accountID)
     }
 
     /// Check if OAuth is in progress for this provider
@@ -114,7 +114,7 @@ struct AccountQuotaContent: View {
                 .accessibilityElement(children: .combine)
             }
 
-            if isLoading {
+            if isLoading && viewModel.canRefreshAccountQuotas {
                 QuotaLoadingView()
             } else if hasQuotaData {
                 usageSection
@@ -191,7 +191,7 @@ struct AccountQuotaContent: View {
             Spacer()
 
             HStack(spacing: 6) {
-                if showsIdentity && provider == .antigravity {
+                if showsIdentity && provider == .antigravity && viewModel.hasCurrentCPAAccountDirectory {
                     Button {
                         showWarmupSheet = true
                     } label: {
@@ -215,7 +215,7 @@ struct AccountQuotaContent: View {
                     .help("action.warmup".localized())
                 }
 
-                if showsIdentity && isActiveInIDE {
+                if showsIdentity && isActiveInIDE && viewModel.hasCurrentCPAAccountDirectory {
                     Text("antigravity.active".localized())
                         .font(.caption2)
                         .fontWeight(.medium)
@@ -229,7 +229,8 @@ struct AccountQuotaContent: View {
                         )
                 }
 
-                if showsIdentity && provider == .antigravity && !isActiveInIDE {
+                if showsIdentity && provider == .antigravity && !isActiveInIDE
+                    && viewModel.hasCurrentCPAAccountDirectory {
                     Button {
                         showSwitchSheet = true
                     } label: {
@@ -259,7 +260,7 @@ struct AccountQuotaContent: View {
                         await viewModel.refreshQuota(for: accountID)
                     }
                 } label: {
-                    if isRefreshing || isLoading {
+                    if isRefreshing || (isLoading && viewModel.canRefreshAccountQuotas) {
                         ProgressView()
                             .controlSize(.small)
                             .padding(.horizontal, 10)
@@ -284,14 +285,14 @@ struct AccountQuotaContent: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(
-                    viewModel.isRefreshBlocked(for: accountID)
+                    !viewModel.canRefreshAccountQuotas || viewModel.isRefreshBlocked(for: accountID)
                         || !viewModel.supportsScopedRefresh(for: provider)
                 )
                 .help("action.refreshQuota".localized())
                 }
 
                 if let data = account.quotaData, data.isForbidden {
-                    if provider == .claude {
+                    if provider == .claude && viewModel.hasCurrentCPAAccountDirectory {
                         // When reauthenticating with authURL available, show "Open Link" button
                         if isReauthenticating, let url = reauthURL {
                             Button {
@@ -352,6 +353,13 @@ struct AccountQuotaContent: View {
                             .help("Limit Reached")
                     }
                 }
+            }
+        }
+        .onChange(of: viewModel.hasCurrentCPAAccountDirectory) { _, canManage in
+            if !canManage {
+                // 停机时收起仍可发起账号操作的表单，模型明细仍可浏览。
+                showSwitchSheet = false
+                showWarmupSheet = false
             }
         }
         .sheet(isPresented: $showSwitchSheet) {
@@ -574,9 +582,8 @@ private struct AccountQuotaFreshnessView: View {
     let data: ProviderQuotaData?
 
     private var account: MonitorAccount {
-        // 代理模式可能没有 monitorAccounts 条目；仅构造查询状态所需的身份，不保存或读取凭据。
-        viewModel.monitorAccounts.first { $0.provider == provider && $0.accountKey == accountKey }
-            ?? MonitorAccount.make(provider: provider, accountKey: accountKey, source: .legacyCLIProxy)
+        // 本地代理按规范账号键查询配额状态。只构造查询身份，不保存或读取凭据。
+        MonitorAccount.make(provider: provider, accountKey: accountKey, source: .legacyCLIProxy)
     }
 
     var body: some View {
@@ -589,8 +596,16 @@ private struct AccountQuotaFreshnessView: View {
                 }
                 if let updated = data?.lastUpdated {
                     // 始终使用配额快照时间，不使用按钮点击时间或失败请求的完成时间。
-                    Text(String(format: "monitor.status.updated".localized(), updated.formatted(date: .abbreviated, time: .shortened)))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text(String(format: "monitor.status.updated".localized(),
+                                    updated.formatted(date: .abbreviated, time: .shortened)))
+                        if let source = data?.refreshSource {
+                            Text("·").accessibilityHidden(true)
+                            Text(source.localizationKey.localized())
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                    .accessibilityElement(children: .combine)
                 }
             }
             .font(.caption)

@@ -9,14 +9,12 @@ import SwiftUI
 
 enum OnboardingStep: Int, CaseIterable {
     case welcome = 0
-    case modeSelection = 1
-    case providers = 2
-    case completion = 3
+    case providers = 1
+    case completion = 2
     
     var title: String {
         switch self {
         case .welcome: return "onboarding.step.welcome".localizedStatic()
-        case .modeSelection: return "onboarding.step.mode".localizedStatic()
         case .providers: return "onboarding.step.providers".localizedStatic()
         case .completion: return "onboarding.step.completion".localizedStatic()
         }
@@ -27,12 +25,11 @@ enum OnboardingStep: Int, CaseIterable {
 @Observable
 final class OnboardingViewModel {
     var currentStep: OnboardingStep = .welcome
-    var selectedMode: OperatingMode = .monitor
     var direction: SlideDirection = .forward
     @ObservationIgnored private let modeManager = OperatingModeManager.shared
     
     var visibleSteps: [OnboardingStep] {
-        [.welcome, .modeSelection, .providers, .completion]
+        OnboardingStep.allCases
     }
     
     var currentStepIndex: Int {
@@ -60,7 +57,8 @@ final class OnboardingViewModel {
     }
     
     func completeOnboarding() {
-        modeManager.completeOnboarding(mode: selectedMode)
+        // 首次引导只记录完成状态，应用启动时已经独立发起 CPA 初始化。
+        modeManager.completeOnboarding()
     }
 }
 
@@ -72,8 +70,6 @@ enum SlideDirection {
 struct OnboardingFlow: View {
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel = OnboardingViewModel()
-    
-    var onComplete: (() -> Void)?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -94,14 +90,11 @@ struct OnboardingFlow: View {
         switch viewModel.currentStep {
         case .welcome:
             WelcomeStep(viewModel: viewModel)
-        case .modeSelection:
-            ModeSelectionStep(viewModel: viewModel)
         case .providers:
             ProviderStep(viewModel: viewModel)
         case .completion:
-            CompletionStep(viewModel: viewModel) {
+            CompletionStep {
                 viewModel.completeOnboarding()
-                onComplete?()
                 dismiss()
             }
         }

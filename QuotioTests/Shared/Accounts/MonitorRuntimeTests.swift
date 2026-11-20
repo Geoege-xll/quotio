@@ -202,39 +202,11 @@ final class MonitorRuntimeTests: XCTestCase {
         XCTAssertEqual(KeychainHelper.legacyKeychainInteractionAllowedForTesting(), before)
     }
 
-    func testMonitorProvidersDoNotRequireInstalledCLI() {
-        let providers: Set<AIProvider> = [.codex, .claude, .factoryDroid, .devin, .grok, .openRouter, .amp]
-
-        let filtered = StatusBarMenuBuilder.filterProviders(
-            providers,
-            isMonitorMode: true,
-            isCLIInstalled: { _ in false }
-        )
-
-        XCTAssertEqual(Set(filtered), providers)
-    }
-
     func testMonitorOnlyProvidersDoNotOfferLocalProxySetup() {
         for provider in [AIProvider.factoryDroid, .devin, .grok, .openRouter, .amp, .warp] {
             XCTAssertFalse(provider.supportsLocalProxySetup)
         }
         XCTAssertTrue(AIProvider.claude.supportsLocalProxySetup)
-    }
-
-    func testStatusBarIncludesEnabledMonitorAccountsWithoutQuota() {
-        let enabled = MonitorAccount.make(
-            provider: .claude,
-            accountKey: "enabled@example.com",
-            source: .nativeCredential
-        )
-        var disabled = MonitorAccount.make(
-            provider: .codex,
-            accountKey: "disabled@example.com",
-            source: .nativeCredential
-        )
-        disabled.isDisabled = true
-
-        XCTAssertEqual(StatusBarMenuBuilder.monitorProviders([enabled, disabled]), Set([.claude]))
     }
 
     func testMonitorAccountSourcesUseLocalizationKeys() {
@@ -248,37 +220,6 @@ final class MonitorRuntimeTests: XCTestCase {
                 "monitor.source.apiKey",
             ])
         )
-    }
-
-    func testDiscoveryCanonicalizesNativeCodexAccountBeforeDeduplication() {
-        let legacy = MonitorAccount.make(
-            provider: .codex,
-            accountKey: "same@example.com-pro",
-            displayName: "same@example.com",
-            source: .legacyCLIProxy
-        )
-        let native = MonitorAccount.make(
-            provider: .codex,
-            accountKey: "same@example.com",
-            source: .nativeCredential
-        )
-
-        let canonicalNative = MonitorAccountDiscovery.canonicalizeCodexAccount(
-            native,
-            accountID: "account-1",
-            aliases: ["account-1": "same@example.com-pro"]
-        )
-        let duplicate = MonitorAccountDiscovery.selectPreferred([legacy, canonicalNative])
-        XCTAssertEqual(duplicate.count, 1)
-        XCTAssertEqual(duplicate.first?.accountKey, "same@example.com-pro")
-        XCTAssertEqual(duplicate.first?.source, .nativeCredential)
-
-        let distinctNative = MonitorAccountDiscovery.canonicalizeCodexAccount(
-            native,
-            accountID: "account-2",
-            aliases: ["account-1": "same@example.com-pro"]
-        )
-        XCTAssertEqual(MonitorAccountDiscovery.selectPreferred([legacy, distinctNative]).count, 2)
     }
 
     func testCodexQuotaReconciliationRemovesOnlyLegacyAliases() {
@@ -695,18 +636,6 @@ final class MonitorRuntimeTests: XCTestCase {
 
         XCTAssertEqual(native.id, legacy.id)
         XCTAssertEqual(native.deduplicationKey, legacy.deduplicationKey)
-    }
-
-    func testDiscoveryPrefersQuotioThenNativeThenLegacy() {
-        let legacy = MonitorAccount.make(provider: .codex, accountKey: "same@example.com", source: .legacyCLIProxy)
-        let native = MonitorAccount.make(provider: .codex, accountKey: "same@example.com", source: .nativeCredential)
-        let owned = MonitorAccount.make(provider: .codex, accountKey: "same@example.com", source: .quotioKeychain, canDelete: true)
-
-        let selected = MonitorAccountDiscovery.selectPreferred([legacy, native, owned])
-
-        XCTAssertEqual(selected.count, 1)
-        XCTAssertEqual(selected.first?.source, .quotioKeychain)
-        XCTAssertEqual(selected.first?.canDelete, true)
     }
 
     func testSnapshotRoundTripUsesIsolatedTemporaryDirectory() async throws {
@@ -1510,7 +1439,7 @@ final class MonitorRuntimeTests: XCTestCase {
             canDelete: true
         )
 
-        XCTAssertEqual(MonitorAccountDiscovery.selectPreferred([native, named]).count, 2)
+        XCTAssertNotEqual(native.deduplicationKey, named.deduplicationKey)
         XCTAssertEqual(native.displayName, "Amp")
         XCTAssertNotEqual(native.accountKey, named.accountKey)
     }
@@ -1573,48 +1502,6 @@ final class MonitorRuntimeTests: XCTestCase {
         XCTAssertTrue(reloadedDisabled.isEmpty)
     }
 
-    func testQuotaDerivedAccountPreservesDisabledState() {
-        let account = MonitorAccount.make(
-            provider: .cursor,
-            accountKey: "cursor@example.com",
-            source: .localIDE
-        )
-
-        let derived = MonitorRefreshCoordinator.makeQuotaDerivedAccount(
-            provider: .cursor,
-            accountKey: account.accountKey,
-            source: .localIDE,
-            disabledIDs: [account.id]
-        )
-
-        XCTAssertTrue(derived.isDisabled)
-    }
-
-    func testQuotaDerivedIDEAccountsAllowDeletion() {
-        // Cursor/Trae accounts imported from local IDE databases must be deletable (issue #213).
-        for provider in [AIProvider.cursor, .trae] {
-            let account = MonitorRefreshCoordinator.makeQuotaDerivedAccount(
-                provider: provider,
-                accountKey: "user@example.com",
-                source: .localIDE,
-                disabledIDs: []
-            )
-            XCTAssertTrue(account.canDelete, "\(provider.rawValue) account should be deletable")
-        }
-
-        // Quota-derived placeholders for credential-backed providers would resurrect
-        // on the next discovery pass, so they must stay non-deletable.
-        for (provider, source) in [(AIProvider.claude, MonitorAccountSource.nativeCredential), (.amp, .apiKey)] {
-            let account = MonitorRefreshCoordinator.makeQuotaDerivedAccount(
-                provider: provider,
-                accountKey: "user@example.com",
-                source: source,
-                disabledIDs: []
-            )
-            XCTAssertFalse(account.canDelete, "\(provider.rawValue) account should not be deletable")
-        }
-    }
-
     @MainActor
     func testAutoDetectedAccountRowsAllowDeleteOnlyForIDEProviders() {
         // Providers screen rows for scanned IDE accounts must offer delete (issue #213).
@@ -1636,73 +1523,6 @@ final class MonitorRuntimeTests: XCTestCase {
         )
     }
 
-    /// A credential vault with nothing in it, so Monitor discovery in these tests depends
-    /// only on the injected snapshot/metadata files and never on the host Keychain.
-    private struct EmptyCredentialVault: MonitorCredentialStore {
-        func accounts() async -> [MonitorAccount] { [] }
-        func credential(for accountID: String) async -> MonitorOAuthCredential? { nil }
-        func reloadLatest(accountID: String) async -> MonitorOAuthCredential? { nil }
-        func save(_ credential: MonitorOAuthCredential, metadata: MonitorAccount) async throws {}
-        func delete(accountID: String) async {}
-    }
-
-    private func makeIsolatedCoordinator(
-        snapshots: URL,
-        metadata: URL
-    ) -> MonitorRefreshCoordinator {
-        MonitorRefreshCoordinator(
-            discovery: MonitorAccountDiscovery(
-                vault: EmptyCredentialVault(),
-                metadata: MonitorMetadataStore(url: metadata)
-            ),
-            snapshots: MonitorSnapshotStore(url: snapshots)
-        )
-    }
-
-    /// Reproduces the exact resurrection sequence from issue #213: import Cursor in
-    /// Monitor mode, delete the auto-detected row while a different mode is active, then
-    /// re-enter Monitor mode. `initializeQuotaOnlyMode()` bootstraps from the snapshot, so
-    /// the deletion only sticks if it cleared the snapshot outside Monitor mode too.
-    func testDeletingIDEAccountOutsideMonitorModeSurvivesMonitorBootstrap() async {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let snapshots = directory.appendingPathComponent("snapshots-v1.json")
-        let metadata = directory.appendingPathComponent("accounts-v1.json")
-
-        // 1. Monitor mode imports Cursor and persists it in the Monitor snapshot, next to
-        //    an unrelated Monitor-only account.
-        await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).finish(quotas: [
-            .cursor: ["cursor@example.com": ideQuota(50)],
-            .codex: ["codex@example.com": ideQuota(42)],
-        ])
-
-        let imported = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
-        XCTAssertNotNil(imported.quotas[.cursor]?["cursor@example.com"])
-        XCTAssertTrue(
-            imported.accounts.contains { $0.provider == .cursor && $0.accountKey == "cursor@example.com" },
-            "Precondition: the Monitor snapshot restores the imported Cursor account"
-        )
-
-        // 2. Local Proxy mode: deleting the auto-detected Cursor row. This is the call
-        //    `QuotaViewModel.deleteAutoDetectedAccount` makes, and it runs regardless of
-        //    the active mode.
-        await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
-            .forgetSnapshotAccount(provider: .cursor, accountKey: "cursor@example.com")
-
-        // 3. Back in Monitor mode: `initializeQuotaOnlyMode()` calls `bootstrap()`.
-        let rebootstrapped = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
-        XCTAssertNil(
-            rebootstrapped.quotas[.cursor],
-            "Deleted Cursor account must not come back from the Monitor snapshot"
-        )
-        XCTAssertFalse(
-            rebootstrapped.accounts.contains { $0.provider == .cursor },
-            "Deleted Cursor account must not reappear as a Monitor account"
-        )
-        // The delete must not take the rest of the Monitor snapshot with it, and must not
-        // replace it with the quota data of whichever mode performed the deletion.
-        XCTAssertEqual(rebootstrapped.quotas[.codex]?["codex@example.com"]?.models.first?.percentage, 42)
-    }
-
     /// The targeted removal must not rewrite the snapshot from the deleting mode's quota
     /// data: entries for other providers, and other accounts of the same provider, stay
     /// exactly as they were written by Monitor mode.
@@ -1711,13 +1531,14 @@ final class MonitorRuntimeTests: XCTestCase {
         let snapshots = directory.appendingPathComponent("snapshots-v1.json")
         let metadata = directory.appendingPathComponent("accounts-v1.json")
 
-        await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).finish(quotas: [
+        let store = MonitorSnapshotStore(url: snapshots)
+        let coordinator = MonitorRefreshCoordinator(metadata: MonitorMetadataStore(url: metadata), snapshots: store)
+        await store.store([
             .cursor: ["gone@example.com": ideQuota(10), "kept@example.com": ideQuota(20)],
             .trae: ["trae@example.com": ideQuota(30)],
         ])
 
-        await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
-            .forgetSnapshotAccount(provider: .cursor, accountKey: "gone@example.com")
+        await coordinator.forgetSnapshotAccount(provider: .cursor, accountKey: "gone@example.com")
 
         let reloaded = await MonitorSnapshotStore(url: snapshots).load()
         XCTAssertNil(reloaded[.cursor]?["gone@example.com"])
@@ -1762,11 +1583,11 @@ final class MonitorRuntimeTests: XCTestCase {
             canDelete: true
         )
         try await metadata.setDisabled(true, accountID: account.id)
-        await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadataURL)
-            .finish(quotas: [.cursor: [account.accountKey: ideQuota(50)]])
+        let store = MonitorSnapshotStore(url: snapshots)
+        let coordinator = MonitorRefreshCoordinator(metadata: metadata, snapshots: store)
+        await store.store([.cursor: [account.accountKey: ideQuota(50)]])
 
-        await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadataURL)
-            .forgetSnapshotAccount(provider: .cursor, accountKey: account.accountKey)
+        await coordinator.forgetSnapshotAccount(provider: .cursor, accountKey: account.accountKey)
 
         let disabled = await MonitorMetadataStore(url: metadataURL).disabledAccountIDs()
         XCTAssertFalse(disabled.contains(account.id), "Deleted account must not keep a disabled flag")
@@ -1791,131 +1612,6 @@ final class MonitorRuntimeTests: XCTestCase {
         for provider in [AIProvider.devin, .grok, .glm, .clinePass] {
             XCTAssertFalse(provider.isImportedFromLocalIDE, "\(provider.rawValue) is not an IDE import")
         }
-    }
-
-    func testQuotaDisplayNameEnrichmentPreservesFactoryAccountIdentity() {
-        let account = MonitorAccount.make(
-            provider: .factoryDroid,
-            accountKey: "org-123",
-            displayName: "Factory Droid",
-            source: .nativeCredential
-        )
-        let quota = ProviderQuotaData(accountDisplayName: "factory@example.com")
-
-        let enriched = MonitorRefreshCoordinator.applyingQuotaDisplayNames(
-            [account],
-            quotas: [.factoryDroid: [account.accountKey: quota]]
-        )
-
-        XCTAssertEqual(enriched.first?.displayName, "factory@example.com")
-        XCTAssertEqual(enriched.first?.accountKey, account.accountKey)
-        XCTAssertEqual(enriched.first?.id, account.id)
-    }
-
-    func testCoordinatorRetainsLastGoodQuotaOnTransientFailure() async {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let coordinator = MonitorRefreshCoordinator(
-            snapshots: MonitorSnapshotStore(url: directory.appendingPathComponent("snapshot.json"))
-        )
-        let previous = ProviderQuotaData(
-            models: [ModelQuota(name: "test", percentage: 75, resetTime: "")],
-            lastUpdated: Date()
-        )
-
-        let result = await coordinator.refresh(
-            provider: .codex,
-            force: true,
-            previous: ["account": previous],
-            operation: { [:] }
-        )
-
-        XCTAssertEqual(result["account"]?.models.first?.percentage, 75)
-        let issues = await coordinator.currentIssues()
-        XCTAssertNotNil(issues[.codex])
-    }
-
-    /// 上游缓存语义：旧额度与本轮失败提示一起落盘，重启后不能把缓存显示成刷新成功。
-    func testCoordinatorRestoresFailureAlongsideLastGoodQuota() async {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let snapshots = directory.appendingPathComponent("snapshot.json")
-        let metadata = directory.appendingPathComponent("accounts.json")
-        let coordinator = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
-        let previous = ProviderQuotaData(
-            models: [ModelQuota(name: "test", percentage: 75, resetTime: "")],
-            lastUpdated: Date(timeIntervalSince1970: 1_234)
-        )
-
-        let retained = await coordinator.refresh(provider: .codex, force: true, previous: ["account": previous]) { [:] }
-        await coordinator.finish(quotas: [.codex: retained])
-        let restarted = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
-        let restored = await restarted.bootstrap()
-
-        XCTAssertEqual(restored.quotas[.codex]?["account"]?.models.first?.percentage, 75)
-        XCTAssertNotNil(restored.issues[.codex])
-
-        // 后续成功刷新必须同时清除磁盘上的失败标记，避免再重启时重复出现旧告警。
-        let fresh = await restarted.refresh(provider: .codex, force: true, previous: retained) {
-            ["account": ProviderQuotaData(models: [ModelQuota(name: "test", percentage: 50, resetTime: "")])]
-        }
-        await restarted.finish(quotas: [.codex: fresh])
-        let recovered = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
-        XCTAssertEqual(recovered.quotas[.codex]?["account"]?.models.first?.percentage, 50)
-        XCTAssertNil(recovered.issues[.codex])
-    }
-
-    /// 快照读完后同世代刷新可能先完成；启动恢复只合并未刷新的服务商。
-    func testBootstrapDoesNotOverwriteConcurrentRefreshIssues() async {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let snapshots = directory.appendingPathComponent("snapshot.json")
-        let metadata = directory.appendingPathComponent("accounts.json")
-        let previous = ProviderQuotaData(models: [ModelQuota(name: "test", percentage: 75, resetTime: "")])
-        let oldIssue = MonitorRefreshIssue(message: "older failure", occurredAt: Date(timeIntervalSince1970: 1_234))
-        let store = MonitorSnapshotStore(url: snapshots)
-        await store.store([.codex: ["account": previous]], issues: [.claude: oldIssue])
-
-        let coordinator = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
-        let gate = BootstrapGate()
-        let loaded = expectation(description: "快照已读取")
-        await coordinator.setBootstrapLoadedHookForTesting {
-            loaded.fulfill()
-            await gate.wait()
-        }
-        let bootstrap = Task { await coordinator.bootstrap() }
-        await fulfillment(of: [loaded], timeout: 5)
-
-        _ = await coordinator.refresh(provider: .codex, force: true, previous: ["account": previous]) { [:] }
-        await gate.open()
-        let result = await bootstrap.value
-        XCTAssertNotNil(result.issues[.codex])
-        XCTAssertEqual(result.issues[.claude], oldIssue)
-        await coordinator.setBootstrapLoadedHookForTesting(nil)
-    }
-
-    /// 并发成功同样要阻止旧失败回流，即使刷新前内存中没有错误可供 removeValue 删除。
-    func testBootstrapDoesNotRestoreFailureAfterConcurrentSuccess() async {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let snapshots = directory.appendingPathComponent("snapshot.json")
-        let metadata = directory.appendingPathComponent("accounts.json")
-        let oldIssue = MonitorRefreshIssue(message: "older failure", occurredAt: Date(timeIntervalSince1970: 1_234))
-        await MonitorSnapshotStore(url: snapshots).store([:], issues: [.codex: oldIssue])
-
-        let coordinator = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
-        let gate = BootstrapGate()
-        let loaded = expectation(description: "快照已读取")
-        await coordinator.setBootstrapLoadedHookForTesting {
-            loaded.fulfill()
-            await gate.wait()
-        }
-        let bootstrap = Task { await coordinator.bootstrap() }
-        await fulfillment(of: [loaded], timeout: 5)
-
-        _ = await coordinator.refresh(provider: .codex, force: true, previous: [:]) {
-            ["account": ProviderQuotaData(models: [ModelQuota(name: "test", percentage: 50, resetTime: "")])]
-        }
-        await gate.open()
-        let result = await bootstrap.value
-        XCTAssertNil(result.issues[.codex])
-        await coordinator.setBootstrapLoadedHookForTesting(nil)
     }
 
     /// 失败标记按服务商记录；删除额度快照不能擅自推断其他账号已恢复。
@@ -1945,14 +1641,13 @@ final class MonitorRuntimeTests: XCTestCase {
     func testAccountFailureRoundTripAndIssueOnlyRemoval() async {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let snapshots = directory.appendingPathComponent("snapshot.json")
-        let metadata = directory.appendingPathComponent("accounts.json")
         let store = MonitorSnapshotStore(url: snapshots)
         let failed = QuotaAccountID(provider: .codex, accountKey: "failed@example.com")
         let unrelated = QuotaAccountID(provider: .claude, accountKey: "other@example.com")
         let issue = MonitorRefreshIssue(message: "refresh failed", occurredAt: Date(timeIntervalSince1970: 1_234))
         await store.store([:], accountIssues: [failed: issue, unrelated: issue])
 
-        let restored = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
+        let restored = await store.loadSnapshot()
         XCTAssertEqual(restored.accountIssues[failed], issue)
         XCTAssertEqual(restored.accountIssues[unrelated], issue)
 
@@ -1961,48 +1656,6 @@ final class MonitorRuntimeTests: XCTestCase {
         let remaining = await store.loadSnapshot()
         XCTAssertNil(remaining.accountIssues[failed])
         XCTAssertEqual(remaining.accountIssues[unrelated], issue)
-    }
-
-    /// 当前凭据返回套餐但不再返回额度时，用空窗口的新观察覆盖旧百分比，不能回填旧额度。
-    func testCoordinatorReplacesOldQuotaWithPlanOnlyObservation() async {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let snapshots = directory.appendingPathComponent("snapshot.json")
-        let metadata = directory.appendingPathComponent("accounts.json")
-        let coordinator = makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata)
-        let previous = ProviderQuotaData(models: [ModelQuota(name: "old", percentage: 75, resetTime: "")])
-        let planOnly = ProviderQuotaData(models: [], planType: "Pro")
-
-        let result = await coordinator.refresh(provider: .codex, force: true, previous: ["account": previous]) {
-            ["account": planOnly]
-        }
-
-        XCTAssertEqual(result["account"]?.planType, "Pro")
-        XCTAssertTrue(result["account"]?.models.isEmpty == true)
-        let issues = await coordinator.currentIssues()
-        XCTAssertNil(issues[.codex])
-
-        // 上游 413b02b：当前套餐观察还必须覆盖磁盘旧窗口，下一次启动不可恢复旧百分比。
-        await coordinator.finish(quotas: [.codex: result])
-        let restored = await makeIsolatedCoordinator(snapshots: snapshots, metadata: metadata).bootstrap()
-        XCTAssertEqual(restored.quotas[.codex]?["account"]?.planType, "Pro")
-        XCTAssertTrue(restored.quotas[.codex]?["account"]?.models.isEmpty == true)
-    }
-
-    func testCoordinatorRemovesStaleQuotaWhenCredentialsAreMissing() async {
-        let coordinator = MonitorRefreshCoordinator()
-        let previous = ["account": ProviderQuotaData(models: [], lastUpdated: Date())]
-
-        let result = await coordinator.refresh(
-            provider: .codex,
-            force: true,
-            previous: previous,
-            credentialAvailability: .missing,
-            operation: { [:] }
-        )
-
-        XCTAssertTrue(result.isEmpty)
-        let issues = await coordinator.currentIssues()
-        XCTAssertNil(issues[.codex])
     }
 
     func testMonitorStatusDoesNotBorrowSiblingTimestamp() {
@@ -2019,17 +1672,6 @@ final class MonitorRuntimeTests: XCTestCase {
         )
 
         XCTAssertNil(updated)
-    }
-
-    func testKiroFallbackAccountKeysDoNotCollide() {
-        let first = MonitorOAuthCoordinator.kiroAccountKey(identity: nil, clientID: "client-1")
-        let second = MonitorOAuthCoordinator.kiroAccountKey(identity: nil, clientID: "client-2")
-
-        XCTAssertNotEqual(first, second)
-        XCTAssertEqual(
-            MonitorOAuthCoordinator.kiroAccountKey(identity: "builder@example.com", clientID: "client-1"),
-            "builder@example.com"
-        )
     }
 
     func testNumericCamelCaseKiroExpiryIsParsed() async throws {
@@ -2059,45 +1701,6 @@ final class MonitorRuntimeTests: XCTestCase {
         XCTAssertEqual(token?.expiresAt, ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: timestamp)))
     }
 
-    func testCoordinatorCoalescesConcurrentRefreshForProvider() async {
-        let coordinator = MonitorRefreshCoordinator()
-        let counter = Counter()
-        async let first = coordinator.refresh(provider: .codex, force: true, previous: [:]) {
-            await counter.increment()
-            try? await Task.sleep(for: .milliseconds(200))
-            return ["account": ProviderQuotaData(models: [], lastUpdated: Date())]
-        }
-        async let second = coordinator.refresh(provider: .codex, force: true, previous: [:]) {
-            await counter.increment()
-            try? await Task.sleep(for: .milliseconds(200))
-            return ["other": ProviderQuotaData(models: [], lastUpdated: Date())]
-        }
-
-        _ = await (first, second)
-        let coalescedCount = await counter.value
-        XCTAssertEqual(coalescedCount, 1)
-    }
-
-    func testManualRefreshBypassesProviderBackoff() async {
-        let coordinator = MonitorRefreshCoordinator()
-        let counter = Counter()
-        let previous = ["account": ProviderQuotaData(models: [], lastUpdated: Date())]
-        _ = await coordinator.refresh(provider: .codex, force: true, previous: previous) { [:] }
-        _ = await coordinator.refresh(provider: .codex, force: false, previous: previous) {
-            await counter.increment()
-            return [:]
-        }
-        let backedOffCount = await counter.value
-        XCTAssertEqual(backedOffCount, 0)
-
-        _ = await coordinator.refresh(provider: .codex, force: true, previous: previous) {
-            await counter.increment()
-            return previous
-        }
-        let forcedCount = await counter.value
-        XCTAssertEqual(forcedCount, 1)
-    }
-
     func testAtomicWriterRefusesSymbolicLinkDestination() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2108,42 +1711,6 @@ final class MonitorRuntimeTests: XCTestCase {
 
         XCTAssertThrowsError(try SecureAtomicFileWriter.write(Data("new".utf8), to: link))
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "old")
-    }
-
-    func testLoopbackCallbackReturnsCodeAndState() async throws {
-        let server = MonitorOAuthCallbackServer()
-        let port = try await server.start()
-        async let callback = server.waitForCallback(timeout: .seconds(2))
-
-        let url = URL(string: "http://127.0.0.1:\(port)/oauth2callback?code=test-code&state=test-state")!
-        _ = try await URLSession.shared.data(from: url)
-        let result = try await callback
-        let items = URLComponents(url: result, resolvingAgainstBaseURL: false)?.queryItems
-
-        XCTAssertEqual(items?.first(where: { $0.name == "code" })?.value, "test-code")
-        XCTAssertEqual(items?.first(where: { $0.name == "state" })?.value, "test-state")
-    }
-
-    func testLoopbackCallbackTimesOut() async throws {
-        let server = MonitorOAuthCallbackServer()
-        _ = try await server.start()
-        do {
-            _ = try await server.waitForCallback(timeout: .milliseconds(30))
-            XCTFail("Expected timeout")
-        } catch MonitorOAuthError.expired {
-            // Expected.
-        }
-    }
-
-    func testOAuthCallbackRejectsMismatchedState() throws {
-        let callback = URL(string: "http://localhost/callback?code=test&state=unexpected")!
-        XCTAssertThrowsError(
-            try MonitorOAuthCoordinator.authorizationCode(from: callback, expectedState: "expected")
-        ) { error in
-            guard case MonitorOAuthError.stateMismatch = error else {
-                return XCTFail("Expected state mismatch")
-            }
-        }
     }
 
     // MARK: - 上游优先修复定向回归测试

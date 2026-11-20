@@ -48,7 +48,8 @@ struct CPAUsageRecordsView: View {
     var body: some View {
         CPAUsageDetailPage {
             VStack(alignment: .leading, spacing: 12) {
-                CPAUsageFilterBar(selection: $filters, options: viewModel.result).quotioCard()
+                CPAUsageFilterBar(selection: $filters, options: viewModel.result, modelSearchPopoverWidth: 320)
+                    .quotioCard()
                 if let result = viewModel.result {
                     if selectedSection == .history {
                         CPAUsageHistoricalMetrics(buckets: result.historicalBuckets)

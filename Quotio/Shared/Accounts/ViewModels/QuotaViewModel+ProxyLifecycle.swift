@@ -6,12 +6,7 @@
 import Foundation
 import Observation
 
-/// 代理启动、切换、完整模式初始化及附属配置／用量观察的原有流程，仍属于同一个 QuotaViewModel。
-/// 本扩展不新增存储、Task 句柄或管理器；ProxyStartFlow、管理客户端、采集器及所有状态继续由主类持有。
-/// 启动仍经原协调器合并重复操作；首次读取、禁用同步、再次读取、预热、升级检查与隧道启动不重新排序。
-/// 停止、客户端替换、三种自动刷新循环和独立恢复任务仍在主类，保留原取消传播、会话隔离和受保护写入。
-/// 跨文件仅调用主类原同步／异步入口，不开放可变私有存储或 private(set)，不另建启动或恢复状态副本。
-/// Observation 回调、原非持有句柄的 Task 及强弱引用随完整方法保留，不重复注册或改变运行时任务所有权。
+/// 代理启动以进程已就绪为完成边界。主类继续持有客户端、后台初始化及轮询任务。
 extension QuotaViewModel {
     /// 主类初始化仍只注册一次原观察；回调继续弱引用同一实例并在 MainActor 重订阅，采集仍复用唯一 usageMonitor。
     /// 在组合层监听真实代理会话，无窗口/登录启动和代理自动恢复也会启动采集。
@@ -52,46 +47,10 @@ extension QuotaViewModel {
         await ampFetcher.updateProxyConfiguration()
     }
 
-    /// 完整模式仍先直读额度，再按原偏好决定自动启动代理或启动停服直读定时器；模式选择入口继续留在主类。
-    func initializeFullMode() async {
-        await initializeFullMode(
-            refreshQuotas: { await self.refreshQuotasUnified() },
-            shouldAutoStartProxy: { UserDefaults.standard.bool(forKey: "autoStartProxy") }
-        )
-    }
-
-    /// 初始化的外部读取和偏好读取可单独替换，流程仍属于原调用者，不持有新的初始化 Task。
-    private func initializeFullMode(refreshQuotas: () async -> Void, shouldAutoStartProxy: () -> Bool) async {
-        let modeRevision = modeManager.revision
-        // Always refresh quotas directly first (works without proxy)
-        await refreshQuotas()
-        guard !Task.isCancelled, modeManager.revision == modeRevision, !modeManager.isMonitorMode else { return }
-        // 首轮本地读取可能很慢，用户可在它挂起期间从界面启动 CPA。
-        // 此时 startProxy 已建立 CPA 轮询，原启动流程负责首轮读取；迟到的初始化不能再用
-        // “代理停止时才读取”的循环覆盖同一 refreshTask，否则 CPA 运行期间会永久空转。
-        guard !proxyManager.proxyStatus.running else { return }
-
-        let autoStartProxy = shouldAutoStartProxy()
-        if autoStartProxy && proxyManager.isBinaryInstalled {
-            await startProxy()
-            // Note: checkForProxyUpgrade() is now called inside startProxy()
-        } else {
-            // If not auto-starting proxy, start quota auto-refresh
-            startQuotaAutoRefreshWithoutProxy()
-        }
-    }
-
-    #if DEBUG
-    /// 仅隔离首轮外部读取与启动偏好，验证真实初始化收尾不会覆盖用户稍早启动的 CPA 定时任务。
-    func initializeFullModeForTesting(refreshQuotas: () async -> Void, shouldAutoStartProxy: () -> Bool) async {
-        await initializeFullMode(refreshQuotas: refreshQuotas, shouldAutoStartProxy: shouldAutoStartProxy)
-    }
-    #endif
-
     /// 启动后的禁用同步保留原目录与偏好来源，每个账号请求前都复核取消、客户端身份和代理运行会话。
     /// Sync local disabled state to backend after proxy starts
     private func syncDisabledStatesToBackend() async {
-        guard let client = apiClient else { return }
+        guard hasCurrentCPAAccountDirectory, let client = apiClient else { return }
         let session = proxyManager.runtimeSessionID
 
         let localDisabled = loadDisabledAuthFiles()
@@ -112,12 +71,6 @@ extension QuotaViewModel {
         }
     }
 
-    /// 保留原非阻塞升级检查的被调用方法；启动流程中的 Task 创建位置、会话校验和触发顺序不变。
-    /// Check for proxy upgrade (non-blocking)
-    private func checkForProxyUpgrade() async {
-        await proxyManager.checkForUpgrade()
-    }
-
     /// 代理启动后的账号初始化使用真实运行会话，不依赖账号页是否打开或上一次本地刷新时间。
     /// 两次目录读取仅更新目录／客户端密钥，避免它们额外派生额度任务；禁用同步后明确执行首轮额度读取。
     /// 首轮复用原批量槽位并等待已有刷新释放，保留精确 CPA 身份、失败回退边界及菜单栏原通知入口。
@@ -135,7 +88,7 @@ extension QuotaViewModel {
         guard let client = apiClient else { throw CancellationError() }
         func checkSession() throws {
             try Task.checkCancellation()
-            guard !modeManager.isMonitorMode, canUseRefreshSource(source), apiClient === client,
+            guard canUseRefreshSource(source), apiClient === client,
                   proxyManager.proxyStatus.running, proxyManager.runtimeSessionID == sessionID else {
                 throw CancellationError()
             }
@@ -147,9 +100,8 @@ extension QuotaViewModel {
         try checkSession()
         await refreshData(refreshQuotas: false)
         try checkSession()
-        // 启动是数据来源从本地切到 CPA 的边界，必须绕过旧来源节流；手动频率也需要这一轮初始化。
-        // 若启动前的直读仍占用槽位，在原启动 Task 内等待，不能静默丢掉这次 CPA 首轮读取。
-        await refreshQuotas()
+        // 首轮额度绕过节流。第二次目录失败时继续保留快照，启动后的其他服务仍按原流程处理。
+        if hasCurrentCPAAccountDirectory { await refreshQuotas() }
         try checkSession()
     }
 
@@ -161,10 +113,11 @@ extension QuotaViewModel {
     }
     #endif
 
-    /// 保留原启动协调器、目录／禁用同步、预热及后续副作用顺序；首轮额度现在明确等待完成。
+    /// 多个入口仍使用同一个启动协调器。进程就绪后立即装配客户端并返回，
+    /// 账号目录和首轮额度交由可取消的会话初始化任务处理。
     func startProxy() async {
         await proxyStartFlow.run { [self] in
-            // 重启／恢复同样先撤销旧目录提交，再由原协调器启动新运行会话；合并等待者不重复执行。
+            guard !proxyManager.proxyStatus.running || apiClient == nil else { return }
             invalidateAgentModelSource()
             errorMessage = nil
             do {
@@ -175,24 +128,7 @@ extension QuotaViewModel {
                 setupAPIClient()
                 startAutoRefresh()
                 restartWarmupScheduler()
-
-                try await refreshProxyStartupData(sessionID: session)
-
-                await runWarmupCycle()
-                try Task.checkCancellation()
-                guard proxyManager.runtimeSessionID == session, proxyManager.proxyStatus.running else { return }
-
-                // Check for proxy upgrade (non-blocking, fire-and-forget)
-                Task {
-                    guard !Task.isCancelled, proxyManager.runtimeSessionID == session,
-                          proxyManager.proxyStatus.running else { return }
-                    await checkForProxyUpgrade()
-                }
-
-                let autoStartTunnel = UserDefaults.standard.bool(forKey: "autoStartTunnel")
-                if autoStartTunnel && tunnelManager.installation.isInstalled {
-                    await tunnelManager.startTunnel(port: proxyManager.port)
-                }
+                scheduleProxyStartupData(sessionID: session)
             } catch is CancellationError {
                 // 停止服务属于正常操作，不显示启动错误，也不继续旧初始化。
             } catch {
@@ -201,12 +137,29 @@ extension QuotaViewModel {
         }
     }
 
-    /// 切换入口继续读取真实运行状态，调用同一实例的原停止或启动方法；停止事务仍在主类写回私有状态。
-    func toggleProxy() async {
-        if proxyManager.proxyStatus.running {
-            stopProxy()
-        } else {
-            await startProxy()
+    /// 原目录、禁用同步、额度与预热顺序继续在同一会话内执行。
+    func completeProxyStartupData(sessionID: UUID) async {
+        do {
+            try await refreshProxyStartupData(sessionID: sessionID)
+            await runWarmupCycle()
+            try Task.checkCancellation()
+            guard proxyManager.runtimeSessionID == sessionID, proxyManager.proxyStatus.running else { return }
+
+            Task { [weak self] in
+                guard let self, proxyManager.runtimeSessionID == sessionID,
+                      proxyManager.proxyStatus.running else { return }
+                await proxyManager.checkForUpgrade()
+            }
+
+            if UserDefaults.standard.bool(forKey: "autoStartTunnel"), tunnelManager.installation.isInstalled {
+                await tunnelManager.startTunnel(port: proxyManager.port)
+            }
+        } catch is CancellationError {
+            // 旧会话结束后退出后台流水线，保留新会话的界面状态。
+        } catch {
+            if !Task.isCancelled, proxyManager.runtimeSessionID == sessionID {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

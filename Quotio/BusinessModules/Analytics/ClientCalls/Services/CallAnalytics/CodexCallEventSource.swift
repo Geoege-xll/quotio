@@ -46,21 +46,23 @@ nonisolated struct CodexCallEventSource {
             return ([], CallSourceStatus(source: .codex, available: false, eventCount: 0, filesScanned: 0, errorCode: nil))
         }
 
-        let files = try collectJSONLFiles(roots: roots, cutoff: cutoff)
+        // 即使文件依然留在旧会话目录或 mtime 被保留，发起记录也必须按事件时间判断。
+        let files = try collectJSONLFiles(roots: roots)
         var accumulator = CallEventAccumulator()
         var calls: [String: ParsedCall] = [:]
+        var completions: [String: MCPCompletion] = [:]
         var hadErrors = false
         var filesScanned = 0
         for file in files {
             try Task.checkCancellation()
-            let fallbackDayKey = clock.dayKey(fileModificationDate(file) ?? Date())
+            let fallbackDayKey = cutoff == nil ? clock.dayKey(fileModificationDate(file) ?? Date()) : nil
             do {
                 let stamp = try CodexUsageFileStamp(path: file)
                 let read = try CodexUsageLineReader.read(path: file, offset: 0, limit: stamp.size,
                     acceptFinalLine: false, progress: { _ in },
                     isIrrelevantLine: { CodexLogEnvelope.isIrrelevantToCalls($0) }) { line in
-                    parseLine(line, clock: clock, fallbackDayKey: fallbackDayKey,
-                              calls: &calls, hadErrors: &hadErrors)
+                    parseLine(line, clock: clock, cutoff: cutoff, fallbackDayKey: fallbackDayKey,
+                              calls: &calls, completions: &completions, hadErrors: &hadErrors)
                 }
                 hadErrors = hadErrors || read.oversized
                 filesScanned += 1
@@ -72,8 +74,11 @@ nonisolated struct CodexCallEventSource {
             }
         }
 
-        for call in calls.values {
-            accumulator.add(source: .codex, kind: call.kind, name: call.name, server: call.server, dayKey: call.day, success: call.success, durationMs: call.duration)
+        for (key, call) in calls {
+            // 清理后，结果可来自另一份日志并先读到；只补全已有声明，不改变其发起日，也不单独计数。
+            let measured = completions[key]?.call(on: call.day) ?? call
+            accumulator.add(source: .codex, kind: measured.kind, name: measured.name, server: measured.server,
+                            dayKey: measured.day, success: measured.success, durationMs: measured.duration)
         }
         let status = CallSourceStatus(
             source: .codex,
@@ -97,16 +102,28 @@ nonisolated struct CodexCallEventSource {
         var duration: Double?
     }
 
+    private struct MCPCompletion {
+        let server: String
+        let tool: String
+        let success: Bool?
+        let duration: Double?
+
+        func call(on day: String) -> ParsedCall {
+            ParsedCall(kind: .mcp, name: CallAnalyticsNaming.mcpDisplayName(server: server, tool: tool),
+                       server: server, day: day, success: success, duration: duration)
+        }
+    }
+
     private func parseLine(
-        _ line: Data, clock: CallAnalyticsClock, fallbackDayKey: String,
-        calls: inout [String: ParsedCall], hadErrors: inout Bool
+        _ line: Data, clock: CallAnalyticsClock, cutoff: Date?, fallbackDayKey: String?,
+        calls: inout [String: ParsedCall], completions: inout [String: MCPCompletion], hadErrors: inout Bool
     ) {
         // 只接受结构化事件，防止工具输出正文里的 function_call 字样被当作真实调用。
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let type = object["type"] as? String,
               let payload = object["payload"] as? [String: Any],
               let eventType = payload["type"] as? String else { hadErrors = true; return }
-        let day = (object["timestamp"] as? String).flatMap(clock.date(fromISO:)).map(clock.dayKey) ?? fallbackDayKey
+        let date = (object["timestamp"] as? String).flatMap { clock.invocationDate(fromISO: $0, cutoff: cutoff) }
         let identity = (payload["call_id"] as? String) ?? (payload["id"] as? String)
         // 缺少调用 ID 的日志仍可分析，但用完整记录的稳定摘要式值去重；该值只留在内存中。
         let key = identity ?? SHA256.hash(data: line).map { String(format: "%02x", $0) }.joined()
@@ -119,10 +136,18 @@ nonisolated struct CodexCallEventSource {
             let secs = (duration?["secs"] as? NSNumber)?.doubleValue
             let nanos = (duration?["nanos"] as? NSNumber)?.doubleValue
             let milliseconds = secs != nil || nanos != nil ? (secs ?? 0) * 1000 + (nanos ?? 0) / 1_000_000 : nil
-            calls[key] = ParsedCall(kind: .mcp, name: CallAnalyticsNaming.mcpDisplayName(server: server, tool: tool),
-                server: server, day: day, success: success, duration: milliseconds)
+            let completion = MCPCompletion(server: server, tool: tool, success: success, duration: milliseconds)
+            if let cutoff {
+                // 结束事件只有可配对的 ID 才有用；有日期且不晚于水位的结果不可能完成新调用。
+                if let identity, date.map({ $0 > cutoff }) ?? true { completions[identity] = completion }
+            } else if let day = date.map(clock.dayKey) ?? fallbackDayKey {
+                // 未清理的库继续接受只有结束事件的历史格式，日期也保持原口径。
+                calls[key] = completion.call(on: day)
+            }
         } else if type == "response_item", ["function_call", "custom_tool_call"].contains(eventType),
                   let rawName = payload["name"] as? String {
+            guard CallAnalyticsClock.includesInvocation(at: date, after: cutoff),
+                  let day = date.map(clock.dayKey) ?? fallbackDayKey else { return }
             // 新版 Codex 的自定义工具使用 input 而非 arguments；两类调用均按 call_id 去重。
             // 标准 functions 命名空间不影响 MCP/内置工具识别，保留工具自身名称。
             let name = rawName.hasPrefix("functions.") ? String(rawName.dropFirst("functions.".count)) : rawName
@@ -193,7 +218,7 @@ nonisolated struct CodexCallEventSource {
 
     // MARK: - File discovery
 
-    private func collectJSONLFiles(roots: [String], cutoff: Date?) throws -> [String] {
+    private func collectJSONLFiles(roots: [String]) throws -> [String] {
         var files: [String] = []
         var seen = Set<String>()
         for root in roots {
@@ -213,7 +238,6 @@ nonisolated struct CodexCallEventSource {
                     throw CallAnalyticsReadError.unreadable
                 }
                 if values.isRegularFile != true || values.isSymbolicLink == true { continue }
-                if let cutoff, let modified = values.contentModificationDate, modified < cutoff { continue }
                 guard seen.insert(item.path).inserted else { continue }
                 files.append(item.path)
             }

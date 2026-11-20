@@ -273,6 +273,74 @@ actor CopilotQuotaFetcher {
         }
     }
 
+    /// CPA 已按当前目录项精确下载凭据。这里仅解析内存中的正文，调用同一 GitHub 主机验证登录后读取额度。
+    /// 目录和正文若都省略主机，沿用旧版公共站点规则；显式无效值或不同主机在发送 token 前直接拒绝。
+    func fetchCPAQuota(credential data: Data, file: AuthFile,
+                       checkSession: @Sendable () async throws -> Void) async throws -> ProviderQuotaData {
+        let decoder = JSONDecoder()
+        let credential = try decoder.decode(CopilotAuthFile.self, from: data)
+        let routing = try decoder.decode(AuthFileQuotaMetadata.self, from: data)
+        let identity = try decoder.decode(CPAIdentity.self, from: data)
+        guard file.providerType == .copilot,
+              let host = GitHubHost.saved(file.quotaMetadata.githubHost),
+              GitHubHost.saved(routing.githubHost) == host,
+              !identity.providers.isEmpty,
+              identity.providers.allSatisfy({ AIProvider.fromAuthProvider($0) == .copilot }),
+              !credential.accessToken.isEmpty,
+              credential.accessToken.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
+            throw QuotaFetchError.invalidResponse
+        }
+
+        // 仅核对目录和正文声明的 GitHub 登录名。文件名、邮箱或其他本机账号都不能代替此证据。
+        let logins = [file.account, credential.username, credential.login].compactMap { $0 }
+        guard let login = logins.first.flatMap(Self.cpaLogin),
+              logins.allSatisfy({ Self.cpaLogin($0) == login }) else { throw QuotaFetchError.invalidResponse }
+
+        let quota: CopilotEntitlement
+        do {
+            try await checkSession()
+            let authenticatedLogin = try await requestGitHubLogin(accessToken: credential.accessToken, host: host)
+            // `/user` 在停机前发出也可能在停机后返回。重新验证原会话，再决定是否查询额度。
+            try await checkSession()
+            guard Self.cpaLogin(authenticatedLogin) == login else { throw QuotaFetchError.invalidResponse }
+
+            quota = try await fetchEntitlement(accessToken: credential.accessToken, host: host, preserveHTTPStatus: true)
+            try await checkSession()
+        } catch {
+            // 晚到的失败也属于旧会话。仍有效时只传递 URL 错误码，避免原始错误携带请求细节。
+            try await checkSession()
+            guard let networkError = error as? URLError else { throw error }
+            if networkError.code == .cancelled { throw CancellationError() }
+            throw URLError(networkError.code)
+        }
+        let mapped = convertToQuotaData(entitlement: quota)
+        // HTTP 200 的空对象和整组未知读数不刷新快照，明确返回的“不限额”属于有效数据。
+        guard mapped.models.contains(where: { $0.percentage >= 0 || $0.presentation != nil }) else {
+            throw QuotaFetchError.invalidResponse
+        }
+        return mapped
+    }
+
+    private nonisolated struct CPAIdentity: Decodable {
+        let providers: [String]
+
+        enum CodingKeys: String, CodingKey { case type, provider }
+
+        init(from decoder: Decoder) throws {
+            let fields = try decoder.container(keyedBy: CodingKeys.self)
+            providers = try [CodingKeys.type, .provider].filter(fields.contains).map { try fields.decode(String.self, forKey: $0) }
+        }
+    }
+
+    /// 企业托管用户的登录名也可含下划线；只做 GitHub 登录名的大小写归一。
+    private static func cpaLogin(_ value: String) -> String? {
+        let login = value.lowercased()
+        guard (1...80).contains(login.utf8.count), login.utf8.allSatisfy({
+            (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+        }) else { return nil }
+        return login
+    }
+
     /// Fetches quota for one canonical account key without querying sibling credentials.
     func fetchQuota(accountKey: String) async -> ProviderQuotaData? {
         if let account = await vault.accounts().first(where: {
@@ -370,17 +438,25 @@ actor CopilotQuotaFetcher {
     /// 请求 GitHub 用户画像以解析登录名。严格校验返回的 id 必须大于 0 且排除布尔值，
     /// login 长度限制在 1...80 字符且不包含控制字符，请求头添加 User-Agent: Quotio。
     private func fetchGitHubLogin(accessToken: String, host: GitHubHost) async -> String? {
+        try? await requestGitHubLogin(accessToken: accessToken, host: host)
+    }
+
+    /// 精确副查询需要区分身份不符、鉴权、限流、超时与取消；旧的本机发现仍返回可选登录名。
+    private func requestGitHubLogin(accessToken: String, host: GitHubHost) async throws -> String {
         var request = URLRequest(url: host.apiURL("/user"))
         request.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.addValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.addValue("Quotio", forHTTPHeaderField: "User-Agent")
-        guard let (data, response) = try? await GitHubHTTP.data(for: request, using: session),
-              let http = response as? HTTPURLResponse, 200...299 ~= http.statusCode,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        guard let id = QuotaResponseValue.number(json["id"]), id > 0 else { return nil }
-        guard let login = QuotaResponseValue.string(json["login"]),
+        let (data, response) = try await GitHubHTTP.data(for: request, using: session)
+        guard let http = response as? HTTPURLResponse else { throw QuotaFetchError.invalidResponse }
+        guard 200...299 ~= http.statusCode else { throw QuotaFetchError.httpError(http.statusCode) }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = QuotaResponseValue.number(json["id"]), id > 0,
+              let login = QuotaResponseValue.string(json["login"]),
               login.count <= 80,
-              !login.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+              !login.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw QuotaFetchError.invalidResponse
+        }
         return login
     }
 
@@ -391,7 +467,7 @@ actor CopilotQuotaFetcher {
         return try? JSONDecoder().decode(CopilotAuthFile.self, from: data)
     }
     
-    private func fetchEntitlement(accessToken: String, host: GitHubHost) async throws -> CopilotEntitlement {
+    private func fetchEntitlement(accessToken: String, host: GitHubHost, preserveHTTPStatus: Bool = false) async throws -> CopilotEntitlement {
         let url = host.apiURL("/copilot_internal/user")
         
         var request = URLRequest(url: url)
@@ -406,7 +482,7 @@ actor CopilotQuotaFetcher {
             throw QuotaFetchError.invalidResponse
         }
         
-        if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+        if !preserveHTTPStatus, httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
             throw QuotaFetchError.forbidden
         }
         

@@ -16,7 +16,6 @@ struct LocalProxyServerSection: View {
     /// 新设置页将管理密钥移到隐私与安全；默认值保留旧调用点的完整展示行为。
     var showsManagementKey = true
     @Environment(QuotaViewModel.self) private var viewModel
-    @AppStorage("autoStartProxy") private var autoStartProxy = false
     @AppStorage("autoStartTunnel") private var autoStartTunnel = false
     @AppStorage("autoRestartTunnel") private var autoRestartTunnel = false
     // 局域网开关先保存在视图状态；管理器确认密钥和监听地址写入成功后才更新 UserDefaults。
@@ -25,6 +24,12 @@ struct LocalProxyServerSection: View {
     @State private var portText: String = ""
     @State private var isLoadingConfig = false  // Prevents onChange from firing during initial load
     
+    /// 启动会校验本轮捕获的端口。切换期间继续提交端口或监听配置会使当前启动提前取消。
+    private var isChangingService: Bool {
+        let manager = viewModel.proxyManager
+        return manager.isStarting || manager.isStopping || viewModel.isRestartingProxy
+    }
+
     var body: some View {
         Group {
         Section {
@@ -34,8 +39,14 @@ struct LocalProxyServerSection: View {
                 TextField("settings.port".localized(), text: $portText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 100)
+                    .disabled(isChangingService)
                     .onChange(of: portText) { _, newValue in
                         guard !isLoadingConfig else { return }
+                        guard !isChangingService else {
+                            // 已经排进视图更新的输入也不能跨启动边界提交，恢复当前实际端口。
+                            portText = String(viewModel.proxyManager.port)
+                            return
+                        }
                         if let port = UInt16(newValue), port > 0 {
                             viewModel.proxyManager.port = port
                         }
@@ -59,8 +70,6 @@ struct LocalProxyServerSection: View {
             
             if showsManagementKey { ManagementKeyRow() }
             
-            Toggle("settings.autoStartProxy".localized(), isOn: $autoStartProxy)
-            
             Toggle("settings.autoStartTunnel".localized(), isOn: $autoStartTunnel)
                 .disabled(!viewModel.tunnelManager.installation.isInstalled)
             
@@ -77,8 +86,14 @@ struct LocalProxyServerSection: View {
                 .font(.caption)
         }
             NetworkAccessSection(allowNetworkAccess: $allowNetworkAccess)
+                .disabled(isChangingService)
                 .onChange(of: allowNetworkAccess) { _, newValue in
                     guard !isLoadingConfig else { return }
+                    guard !isChangingService else {
+                        // 监听开关也可能先收到输入事件，提交前以当前代理状态再次校验。
+                        allowNetworkAccess = viewModel.proxyManager.allowNetworkAccess
+                        return
+                    }
                     viewModel.proxyManager.allowNetworkAccess = newValue
                     // 配置不可写时管理器会保留原偏好；把开关回退到真实访问模式。
                     if viewModel.proxyManager.allowNetworkAccess != newValue {

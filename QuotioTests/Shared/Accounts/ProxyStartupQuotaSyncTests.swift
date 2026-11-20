@@ -19,7 +19,7 @@ final class ProxyStartupQuotaSyncTests: XCTestCase {
 
     /// 所有 HTTP 由独立随机主机的 URLProtocol 截获，偏好使用临时 suite。
     /// 预置同一目录，避免目录变更写入用户偏好；只临时改变代理内存状态，并在结束后恢复。
-    private func fixture(cadence: RefreshCadence = .manual, failing: Bool = false,
+    private func fixture(cadence: RefreshCadence = .manual, quotaHTTPStatus: Int? = nil,
                          hold: Int? = nil, gate: LifecycleHTTPResponseGate? = nil,
                          started: XCTestExpectation? = nil) throws -> Fixture {
         let suite = "quotio-startup-quota-" + UUID().uuidString
@@ -49,7 +49,10 @@ final class ProxyStartupQuotaSyncTests: XCTestCase {
             case "/v8/management/credentials": return .reply(directory)
             case "/v8/management/config/access/api-keys": return .reply("[]")
             case "/v8/management/requests/api-call":
-                return .reply(failing ? #"{"status_code":500,"header":{},"body":"upstream unavailable"}"# : quotaResponse)
+                if let quotaHTTPStatus {
+                    return .reply("{\"status_code\":\(quotaHTTPStatus),\"header\":{},\"body\":\"fixture raw error\"}")
+                }
+                return .reply(quotaResponse)
             default: return .fail(.unsupportedURL)
             }
         }
@@ -206,7 +209,7 @@ final class ProxyStartupQuotaSyncTests: XCTestCase {
 
     /// CPA 主额度失败时显示未知和原失败状态；首轮初始化不能把本地其他账号额度当作成功结果。
     func testFailedStartupQuotaPreservesUnknownAndFailureState() async throws {
-        let f = try fixture(failing: true)
+        let f = try fixture(quotaHTTPStatus: 500)
         try await refresh(f)
         XCTAssertNil(f.model.providerQuotas[.claude]?[f.file.quotaLookupKey])
         XCTAssertEqual(f.model.menuBarQuotaItems.first?.percentage, -1)
@@ -214,4 +217,33 @@ final class ProxyStartupQuotaSyncTests: XCTestCase {
         XCTAssertEqual(f.state.requests.filter { $0.url.path.hasSuffix("/api-call") }.count, 2)
         XCTAssertTrue(f.model.refreshingProviders.isEmpty)
     }
+
+    /// 已支持的 Claude 即使限流也只发送 CPA api-call；旧额度、来源和时间维持原值。
+    func testSupportedCPAFailureDoesNotFetchSupplementOrReplaceSnapshot() async throws {
+        let f = try fixture(quotaHTTPStatus: 429)
+        let previous = Date(timeIntervalSince1970: 1_000)
+        var oldQuota = ProviderQuotaData(models: [ModelQuota(name: "old", percentage: 77, resetTime: "")],
+                                         lastUpdated: previous)
+        oldQuota.refreshSource = .cpa
+        f.model.providerQuotas[.claude] = [f.file.quotaLookupKey: oldQuota]
+        f.model.lastQuotaRefreshTime = previous
+        f.model.localQuotaFetchHookForTesting = { _ in
+            XCTFail("已支持的 CPA 额度不得改用精确补查或本机其他凭据")
+            return [:]
+        }
+
+        await f.model.refreshQuota(for: QuotaAccountID(provider: .claude, accountKey: f.file.quotaLookupKey))
+
+        XCTAssertEqual(f.model.providerQuotas[.claude]?[f.file.quotaLookupKey]?.lastUpdated, previous)
+        XCTAssertEqual(f.model.lastQuotaRefreshTime, previous)
+        XCTAssertEqual(f.model.menuBarQuotaItems.first?.percentage, 77)
+        XCTAssertEqual(f.model.providerQuotas[.claude]?[f.file.quotaLookupKey]?.refreshSource, .cpa)
+        let issue = try XCTUnwrap(f.model.monitorAccountIssues[
+            QuotaAccountID(provider: .claude, accountKey: f.file.quotaLookupKey)])
+        XCTAssertTrue(issue.message.contains("429"))
+        XCTAssertFalse(issue.message.contains("fixture raw error"))
+        XCTAssertEqual(f.state.requests.filter { $0.url.path.hasSuffix("/api-call") }.count, 2)
+        XCTAssertFalse(f.state.requests.contains { $0.url.path.hasSuffix("/credentials/download") })
+    }
+
 }

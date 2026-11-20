@@ -39,6 +39,27 @@ final class OtherProviderQuotaAuditTests: XCTestCase {
         XCTAssertNil(GrokQuotaMapper.mapBilling(data(#"{"credit_usage_percent":"NaN"}"#), plan: nil))
     }
 
+    func testGrokCPARetainsHTTPFailureAndKeepsQuotaFromTheOtherSuccessfulEndpoint() async throws {
+        let file = try JSONDecoder().decode(AuthFile.self,
+            from: data(#"{"name":"grok.json","provider":"grok","user_id":"fixture-user","auth_index":"grok-fixture"}"#))
+        let denied = APICallResponse(statusCode: 403, header: nil, body: nil)
+        let deniedFetcher = CPAQuotaFetcher(call: { _ in denied }, download: { _ in
+            XCTFail("目录已包含 Grok 用户 ID")
+            throw QuotaFetchError.invalidResponse
+        })
+        do {
+            _ = try await deniedFetcher.fetch(file: file)
+            XCTFail("两个接口的拒绝不能作为新额度发布")
+        } catch QuotaFetchError.httpError(403) { }
+
+        let partial = CPAQuotaFetcher(call: { request in
+            request.url.hasSuffix("format=credits") ? denied
+                : APICallResponse(statusCode: 200, header: nil, body: #"{"monthlyLimit":10000,"used":2000}"#)
+        }, download: { _ in throw QuotaFetchError.invalidResponse })
+        let quota = try await partial.fetch(file: file)
+        XCTAssertEqual(quota.models.first(where: { $0.name == "grok-monthly-included" })?.percentage, 80)
+    }
+
     private func openRouter(_ json: String) throws -> ProviderQuotaData {
         try XCTUnwrap(OpenRouterQuotaMapper.map(
             credits: OpenRouterEndpointResult(data: nil, statusCode: 503),
@@ -107,6 +128,118 @@ final class OtherProviderQuotaAuditTests: XCTestCase {
         let quota = await KiroQuotaFetcher().convertToQuotaData(response, planType: "Standard", tokenExpiresAt: nil)
         XCTAssertEqual(quota.models.first?.percentage, 100)
         XCTAssertEqual(quota.models.first?.resetTime, "2030-01-01T00:00:00Z")
+    }
+
+    private var kiroCPACatalogRow: String {
+        #"{"name":"kiro-exact.json","provider":"kiro","email":"fixture@example.invalid","user_id":"kiro-user","auth_index":"kiro-account-index"}"#
+    }
+
+    private var kiroCPAProfile: String { "arn:aws:codewhisperer:eu-central-1:000000000000:profile/FIXTURE-PROFILE" }
+
+    private func kiroCPAFixture(credential: String, usageResponse: LifecycleHTTPState.Response) throws
+        -> (file: AuthFile, fetcher: CPAQuotaFetcher, management: LifecycleHTTPState, usage: LifecycleHTTPState) {
+        let row = kiroCPACatalogRow
+        let file = try JSONDecoder().decode(AuthFile.self, from: data(row))
+        let managementHost = "kiro-cpa-\(UUID().uuidString.lowercased()).invalid"
+        let awsHost = "q.eu-central-1.amazonaws.com"
+        let management = LifecycleHTTPState { request, _ in
+            switch request.url?.path {
+            case "/v8/management/credentials": return .reply(#"{"files":[\#(row)]}"#)
+            case "/v8/management/credentials/download": return .reply(credential)
+            default: return .fail(.badURL)
+            }
+        }
+        let usage = LifecycleHTTPState { request, _ in
+            request.url?.path == "/getUsageLimits" ? usageResponse : .fail(.badURL)
+        }
+        LifecycleHTTPProtocol.register(management, host: managementHost)
+        LifecycleHTTPProtocol.register(usage, host: awsHost)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LifecycleHTTPProtocol.self]
+        let baseURL = ManagementAPIClient.managementURL(for: "http://\(managementHost)")
+        let managementClient = ManagementAPIClient(baseURL: baseURL, authKey: "fixture-management", configuration: configuration)
+        let session = URLSession(configuration: configuration)
+        addTeardownBlock {
+            await managementClient.invalidate()
+            session.invalidateAndCancel()
+            LifecycleHTTPProtocol.remove(host: managementHost)
+            LifecycleHTTPProtocol.remove(host: awsHost)
+        }
+        return (file, CPAQuotaFetcher(client: managementClient, kiro: KiroQuotaFetcher(session: session)), management, usage)
+    }
+
+    func testKiroCPASupplementUsesExactlyOneCurrentProfileAndDoesNotUseOIDCRegion() async throws {
+        let profile = kiroCPAProfile
+        let f = try kiroCPAFixture(
+            credential: #"{"type":"kiro","provider":"Google","access_token":"fixture-access","refresh_token":"unused-fixture","expires_at":"2099-01-01T00:00:00Z","profile_arn":"\#(profile)","region":"us-east-1","email":"fixture@example.invalid"}"#,
+            usageResponse: .reply(#"{"userInfo":{"email":"fixture@example.invalid","userId":"kiro-user"},"usageBreakdownList":[{"currentUsage":20,"usageLimit":100}]}"#))
+
+        let quota = try await f.fetcher.fetchSupplemental(file: f.file)
+
+        XCTAssertEqual(quota.models.first?.percentage, 80)
+        XCTAssertEqual(f.management.requests.map(\.url.path), ["/v8/management/credentials/download", "/v8/management/credentials"])
+        let download = try XCTUnwrap(f.management.requests.first?.url)
+        XCTAssertEqual(URLComponents(url: download, resolvingAgainstBaseURL: false)?.queryItems, [URLQueryItem(name: "name", value: f.file.name)])
+        XCTAssertEqual(f.usage.requestCount, 1)
+        let request = try XCTUnwrap(f.usage.requests.first)
+        XCTAssertEqual(request.url.host, "q.eu-central-1.amazonaws.com")
+        XCTAssertEqual(request.method, "GET")
+        XCTAssertEqual(request.authorization, "Bearer fixture-access")
+        XCTAssertEqual(URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "profileArn" }?.value, profile)
+    }
+
+    func testKiroCPASupplementRejectsExpiredCredentialAndUnverifiedProfileBeforeAWS() async throws {
+        for (expiry, profile) in [("2000-01-01T00:00:00Z", kiroCPAProfile),
+                                  ("2099-01-01T00:00:00Z", "arn:aws:codewhisperer:example.invalid:000000000000:profile/fake")] {
+            let f = try kiroCPAFixture(
+                credential: #"{"type":"kiro","access_token":"fixture-access","expires_at":"\#(expiry)","profile_arn":"\#(profile)"}"#,
+                usageResponse: .fail(.badURL))
+            do {
+                _ = try await f.fetcher.fetchSupplemental(file: f.file)
+                XCTFail("过期凭据或未知 profile 区域禁止出站")
+            } catch QuotaFetchError.invalidResponse { }
+            XCTAssertEqual(f.usage.requestCount, 0)
+        }
+    }
+
+    func testKiroCPASupplementRejectsAnotherAWSUserAndDoesNotRetryRejectedToken() async throws {
+        let profile = kiroCPAProfile
+        let credential = #"{"type":"kiro","access_token":"fixture-access","refresh_token":"unused-fixture","expires_at":"2099-01-01T00:00:00Z","profile_arn":"\#(profile)"}"#
+        let responses: [(LifecycleHTTPState.Response, Int?)] = [
+            (.reply(#"{"userInfo":{"email":"fixture@example.invalid","userId":"different-user"},"usageBreakdownList":[{"currentUsage":20,"usageLimit":100}]}"#), nil),
+            (.replyStatus("{}", 401), 401),
+            (.replyStatus("{}", 429), 429),
+        ]
+        for (response, expectedStatus) in responses {
+            let f = try kiroCPAFixture(credential: credential, usageResponse: response)
+            do {
+                _ = try await f.fetcher.fetchSupplemental(file: f.file)
+                XCTFail("AWS 账号不符、鉴权或限流时，保留上次额度")
+            } catch QuotaFetchError.invalidResponse {
+                XCTAssertNil(expectedStatus)
+            } catch QuotaFetchError.httpError(let actual) {
+                XCTAssertEqual(actual, expectedStatus)
+            }
+            XCTAssertEqual(f.usage.requestCount, 1)
+        }
+    }
+
+    func testKiroCPASupplementPreservesTimeoutAndRecognizesRequestCancellation() async throws {
+        let profile = kiroCPAProfile
+        let credential = #"{"type":"kiro","access_token":"fixture-access","expires_at":"2099-01-01T00:00:00Z","profile_arn":"\#(profile)"}"#
+        for code in [URLError.Code.timedOut, .cancelled] {
+            let f = try kiroCPAFixture(credential: credential, usageResponse: .fail(code))
+            do {
+                _ = try await f.fetcher.fetchSupplemental(file: f.file)
+                XCTFail("Kiro 超时或取消不能作为新额度发布")
+            } catch is CancellationError {
+                XCTAssertEqual(code, .cancelled)
+            } catch let error as URLError {
+                XCTAssertEqual(code, .timedOut)
+                XCTAssertEqual(error.code, .timedOut)
+            }
+            XCTAssertEqual(f.usage.requestCount, 1)
+        }
     }
 
     private var traeAuth: TraeAuthData {

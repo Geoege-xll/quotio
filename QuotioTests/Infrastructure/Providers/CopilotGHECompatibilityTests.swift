@@ -21,7 +21,6 @@ final class CopilotGHECompatibilityTests: XCTestCase {
         let host: GitHubHost
         let session: URLSession
         let vault: MonitorCredentialVault
-        let coordinator: MonitorOAuthCoordinator
         let http: LifecycleHTTPState
         var fetcher: CopilotQuotaFetcher {
             CopilotQuotaFetcher(session: session, vault: vault, nativePaths: [], authDirectory: directory.path)
@@ -38,10 +37,6 @@ final class CopilotGHECompatibilityTests: XCTestCase {
             if let result = override?(request, index) { return result }
             let enterprise = request.url!.host!.hasSuffix(".ghe.com")
             switch request.url!.path {
-            case "/login/device/code":
-                let domain = request.url!.host!
-                return .reply("{\"device_code\":\"fixture-device\",\"user_code\":\"ABCD-EFGH\",\"verification_uri\":\"https://\(domain)/login/device\",\"interval\":0,\"expires_in\":900}")
-            case "/login/oauth/access_token": return .reply(#"{"access_token":"fixture-github-token"}"#)
             case "/user": return .reply(#"{"login":"same-user","id":123}"#)
             case "/copilot_internal/user":
                 return .reply("{\"copilot_plan\":\"business\",\"quota_snapshots\":{\"premium_interactions\":{\"percent_remaining\":\(enterprise ? 75 : 55)}}}")
@@ -57,15 +52,12 @@ final class CopilotGHECompatibilityTests: XCTestCase {
         configuration.protocolClasses = [LifecycleHTTPProtocol.self]
         configuration.timeoutIntervalForRequest = 2
         let session = URLSession(configuration: configuration)
-        let coordinator = MonitorOAuthCoordinator(session: session, claudeVault: vault,
-            openClaudeURL: { _ in true }, waitForGitHubPoll: { _ in try Task.checkCancellation() })
         addTeardownBlock {
-            await coordinator.cancel()
             session.invalidateAndCancel()
             for name in hosts { LifecycleHTTPProtocol.remove(host: name) }
             try? FileManager.default.removeItem(at: directory)
         }
-        return Fixture(directory: directory, host: host, session: session, vault: vault, coordinator: coordinator, http: http)
+        return Fixture(directory: directory, host: host, session: session, vault: vault, http: http)
     }
 
     private func authFile(_ fixture: Fixture, name: String, host: Any? = nil) throws -> URL {
@@ -96,8 +88,7 @@ final class CopilotGHECompatibilityTests: XCTestCase {
             filename: "invalid.json", githubHost: "invalid-host")
         XCTAssertNotEqual(file.menuBarAccountKey, "same-user")
         let result = MenuBarAccountCatalog.resolve(MenuBarQuotaItem(provider: AIProvider.copilot.rawValue,
-            accountKey: file.menuBarAccountKey), mode: .localProxy, proxyRunning: false, authFiles: [],
-            directFiles: [file], quotas: [.copilot: ["same-user": ProviderQuotaData(models: [])]])
+            accountKey: file.menuBarAccountKey), authFiles: [], quotas: [.copilot: ["same-user": ProviderQuotaData(models: [])]])
         XCTAssertNil(result, "无效企业凭据不能借用个人账号快照")
     }
 
@@ -156,51 +147,11 @@ final class CopilotGHECompatibilityTests: XCTestCase {
         let path = f.directory.appendingPathComponent("apps.json")
         try JSONSerialization.data(withJSONObject: [f.host.value: ["oauth_token": "fixture-token"]]).write(to: path)
         let credential = try XCTUnwrap(CopilotQuotaFetcher.nativeCredentials(paths: [path.path]).first)
-        let placeholder = MonitorAccount.make(provider: .copilot,
-            accountKey: credential.host.accountKey("GitHub Copilot"), source: .nativeCredential)
         let fetcher = CopilotQuotaFetcher(session: f.session, vault: f.vault, nativePaths: [path.path],
             authDirectory: f.directory.appendingPathComponent("empty").path)
         let quotas = await fetcher.fetchAllCopilotQuotas(authDir: f.directory.appendingPathComponent("empty").path)
         XCTAssertNotNil(quotas[f.host.accountKey("same-user")])
-        let real = MonitorAccount.make(provider: .copilot, accountKey: f.host.accountKey("same-user"), source: .nativeCredential)
-        let other = MonitorAccount.make(provider: .copilot, accountKey: "same-user@other.ghe.com", source: .nativeCredential)
-        XCTAssertEqual(MonitorRefreshCoordinator.removingHiddenPlaceholders([placeholder, other]).count, 2)
-        XCTAssertEqual(MonitorRefreshCoordinator.removingHiddenPlaceholders([placeholder, real]), [real])
-        XCTAssertTrue(MonitorRefreshCoordinator.isPlaceholder(provider: .copilot, accountKey: placeholder.accountKey))
-    }
-
-    func testEnterpriseDeviceFlowPersistsHostAndSeparatesSameNamedPublicAccount() async throws {
-        let f = try fixture()
-        let enterprise = try await f.coordinator.login(provider: .copilot, githubHost: f.host)
-        let personal = try await f.coordinator.login(provider: .copilot)
-        XCTAssertEqual(enterprise.accountKey, "same-user@" + f.host.value)
-        XCTAssertEqual(personal.accountKey, "same-user")
-        XCTAssertNotEqual(enterprise.id, personal.id)
-        let storedValue = await f.vault.credential(for: enterprise.id)
-        let publicValue = await f.vault.credential(for: personal.id)
-        let stored = try XCTUnwrap(storedValue)
-        let oldStyle = try XCTUnwrap(publicValue)
-        XCTAssertEqual(stored.extra["github_host"], f.host.value)
-        XCTAssertTrue(oldStyle.extra.isEmpty)
-        let quotas = await f.fetcher.fetchAllCopilotQuotas(authDir: f.directory.path, includeMonitorCredentials: true)
-        XCTAssertEqual(quotas[enterprise.accountKey]?.models.first?.percentage, 75)
-        XCTAssertEqual(quotas[personal.accountKey]?.models.first?.percentage, 55)
-        XCTAssertTrue(f.http.requests.contains { $0.url.host == "api." + f.host.value && $0.url.path == "/copilot_internal/user" })
-        XCTAssertTrue(f.http.requests.filter { $0.url.path == "/login/oauth/access_token" }.allSatisfy {
-            String(data: $0.body ?? Data(), encoding: .utf8)?.contains("device_code=fixture-device") == true
-        })
-    }
-
-    func testDeviceVerificationPageCannotSwitchToAnotherHost() async throws {
-        let f = try fixture { request, _ in
-            request.url?.path == "/login/device/code"
-                ? .reply(#"{"device_code":"fixture","user_code":"ABCD","verification_uri":"https://github.com/login/device","expires_in":900}"#) : nil
-        }
-        do { _ = try await f.coordinator.login(provider: .copilot, githubHost: f.host); XCTFail("必须拒绝其他主机验证页") }
-        catch { XCTAssertTrue(error is MonitorOAuthError) }
-        XCTAssertEqual(f.http.requestCount, 1)
-        let accounts = await f.vault.accounts()
-        XCTAssertTrue(accounts.isEmpty)
+        XCTAssertNil(quotas[credential.host.accountKey("GitHub Copilot")])
     }
 
     func testHostFollowsAuthFileModelExchangeAndCache() async throws {
@@ -291,8 +242,7 @@ final class CopilotGHECompatibilityTests: XCTestCase {
             XCTAssertNil(aliases[.copilot]?["same-user"])
             XCTAssertNil(aliases[.copilot]?["old-personal"])
         }
-        let monitor = MonitorAccount.make(provider: .copilot, accountKey: direct.menuBarAccountKey, source: .nativeCredential)
-        let aliases = MenuBarAccountCatalog.aliases(mode: .monitor, proxyRunning: false, authFiles: [], directFiles: [direct], monitorAccounts: [monitor])
+        let aliases = MenuBarAccountCatalog.aliases(authFiles: [merged])
         XCTAssertNil(aliases[.copilot]?["old-personal"])
         XCTAssertNil(aliases[.copilot]?["same-user"])
     }
@@ -308,26 +258,177 @@ final class CopilotGHECompatibilityTests: XCTestCase {
         XCTAssertEqual(f.http.requests.first?.url.host, "api.github.com")
     }
 
-    func testCancelledEnterpriseResponseCannotOverwriteNewPublicLogin() async throws {
-        let gate = LifecycleHTTPResponseGate(), arrived = expectation(description: "旧企业 token 请求已挂起")
-        let f = try fixture { request, _ in
-            if request.url?.host?.hasSuffix(".ghe.com") == true, request.url?.path == "/login/oauth/access_token" {
-                arrived.fulfill(); return .deferred(gate)
+    private func cpaClient(catalog: String, credential: String) -> (ManagementAPIClient, LifecycleHTTPState) {
+        let host = "copilot-cpa-\(UUID().uuidString.lowercased()).invalid"
+        let http = LifecycleHTTPState { request, _ in
+            switch request.url?.path {
+            case "/v8/management/credentials": return .reply(catalog)
+            case "/v8/management/credentials/download": return .reply(credential)
+            default: return .fail(.badURL)
             }
-            return nil
         }
-        let old = Task { try await f.coordinator.login(provider: .copilot, githubHost: f.host) }
-        await fulfillment(of: [arrived], timeout: 3)
-        let cutoff = f.coordinator.advanceClaudeSession()
-        await f.coordinator.cancel(throughClaudeRevision: cutoff)
-        let current = try await f.coordinator.login(provider: .copilot)
-        gate.release(.reply(#"{"access_token":"late-enterprise-token"}"#))
-        do { _ = try await old.value; XCTFail("旧企业授权应失效") } catch { }
-        let accounts = await f.vault.accounts()
-        XCTAssertEqual(accounts.map(\.id), [current.id])
-        let value = await f.vault.credential(for: current.id)
-        let credential = try XCTUnwrap(value)
-        XCTAssertEqual(credential.accessToken, "fixture-github-token")
-        XCTAssertTrue(credential.extra.isEmpty)
+        LifecycleHTTPProtocol.register(http, host: host)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LifecycleHTTPProtocol.self]
+        let baseURL = ManagementAPIClient.managementURL(for: "http://\(host)")
+        let client = ManagementAPIClient(baseURL: baseURL, authKey: "fixture-management", configuration: configuration)
+        addTeardownBlock {
+            await client.invalidate()
+            LifecycleHTTPProtocol.remove(host: host)
+        }
+        return (client, http)
+    }
+
+    func testCPASupplementDownloadsOnlyTheSelectedFileAndUsesItsVerifiedHost() async throws {
+        let f = try fixture()
+        let runtime = #"{"name":"explicit+account.json","provider":"github-copilot","account":"same-user","auth_index":"copilot-a","runtime_only":true}"#
+        let disk = #"{"name":"explicit+account.json","provider":"copilot","source":"file","github_host":"\#(f.host.value)"}"#
+        let sibling = #"{"name":"sibling.json","provider":"copilot","account":"same-user","auth_index":"copilot-b"}"#
+        let copies = try JSONDecoder().decode([AuthFile].self, from: Data("[\(runtime),\(disk)]".utf8))
+        let file = try XCTUnwrap(AuthFileIdentity.deduplicated(copies).first)
+        let (client, management) = cpaClient(catalog: #"{"files":[\#(runtime),\#(disk),\#(sibling)]}"#,
+            credential: #"{"type":"copilot","access_token":"fixture-exact","username":"SAME-USER","github_host":"\#(f.host.value)"}"#)
+
+        let quota = try await CPAQuotaFetcher(client: client, copilot: f.fetcher).fetchSupplemental(file: file)
+
+        XCTAssertEqual(quota.models.first?.percentage, 75)
+        XCTAssertEqual(management.requests.map(\.url.path), ["/v8/management/credentials/download", "/v8/management/credentials"])
+        let download = try XCTUnwrap(management.requests.first?.url)
+        XCTAssertEqual(URLComponents(url: download, resolvingAgainstBaseURL: false)?.queryItems, [URLQueryItem(name: "name", value: file.name)])
+        XCTAssertTrue(management.requests.allSatisfy { $0.authorization == "Bearer fixture-management" })
+        XCTAssertEqual(f.http.requests.map(\.url.path), ["/user", "/copilot_internal/user"])
+        XCTAssertTrue(f.http.requests.allSatisfy { $0.url.host == "api." + f.host.value && $0.authorization == "Bearer fixture-exact" })
+    }
+
+    func testCPASupplementRejectsConflictingDirectoryIndexOrCredentialIdentityBeforeGitHub() async throws {
+        let f = try fixture()
+        let catalogRow = #"{"name":"selected.json","provider":"copilot","account":"same-user","auth_index":"current","github_host":"\#(f.host.value)"}"#
+        let file = try JSONDecoder().decode(AuthFile.self, from: Data(catalogRow.utf8))
+        let known = #""type":"copilot","access_token":"fixture-exact","username":"same-user","github_host":"\#(f.host.value)""#
+        let goodCatalog = #"{"files":[\#(catalogRow)]}"#
+        let conflicts = [
+            (goodCatalog, #"{\#(known),"auth_index":"other"}"#),
+            (goodCatalog, #"{\#(known),"name":"another.json"}"#),
+            (goodCatalog, #"{\#(known),"provider":"kiro"}"#),
+            (goodCatalog, #"{\#(known),"login":"another-user"}"#),
+            (goodCatalog, #"{\#(known),"metadata":{"host":"github.com"}}"#),
+            (#"{"files":[\#(catalogRow),{"name":"selected.json","provider":"copilot","auth_index":"other"}]}"#, "{\(known)}"),
+        ]
+        for (catalog, credential) in conflicts {
+            let (client, _) = cpaClient(catalog: catalog, credential: credential)
+            do {
+                _ = try await CPAQuotaFetcher(client: client, copilot: f.fetcher).fetchSupplemental(file: file)
+                XCTFail("文件名、索引、提供商、登录或主机冲突必须拒绝")
+            } catch QuotaFetchError.invalidResponse { }
+            catch { XCTFail("应按凭据冲突拒绝，实际为 \(error)") }
+        }
+        XCTAssertEqual(f.http.requestCount, 0)
+    }
+
+    func testCPASupplementRejectsWrongVerifiedLoginAndDoesNotReadEntitlement() async throws {
+        let f = try fixture { request, _ in
+            request.url?.path == "/user" ? .reply(#"{"login":"actual-other-user","id":2}"#) : nil
+        }
+        let row = #"{"name":"fixture.json","provider":"copilot","account":"same-user","auth_index":"copilot-a"}"#
+        let file = try JSONDecoder().decode(AuthFile.self, from: Data(row.utf8))
+        let (client, _) = cpaClient(catalog: #"{"files":[\#(row)]}"#,
+            credential: #"{"type":"copilot","access_token":"fixture-exact","login":"same-user"}"#)
+        do {
+            _ = try await CPAQuotaFetcher(client: client, copilot: f.fetcher).fetchSupplemental(file: file)
+            XCTFail("有效但属于另一 GitHub 用户的 token 不能读取额度")
+        } catch QuotaFetchError.invalidResponse { }
+        XCTAssertEqual(f.http.requests.map(\.url.path), ["/user"])
+    }
+
+    private actor CPASession {
+        private var generation = 0
+
+        func advance() { generation += 1 }
+        func isCurrent(_ expected: Int) -> Bool { generation == expected }
+    }
+
+    func testCPASupplementDoesNotRequestEntitlementAfterSessionChangesDuringUserLookup() async throws {
+        let profileGate = LifecycleHTTPResponseGate()
+        let profileStarted = expectation(description: "GitHub 用户验证已发出，等待离线返回")
+        let f = try fixture { request, _ in
+            guard request.url?.path == "/user" else { return nil }
+            profileStarted.fulfill()
+            return .deferred(profileGate)
+        }
+        let row = #"{"name":"fixture.json","provider":"copilot","account":"same-user","auth_index":"copilot-a"}"#
+        let file = try JSONDecoder().decode(AuthFile.self, from: Data(row.utf8))
+        let (client, _) = cpaClient(catalog: #"{"files":[\#(row)]}"#,
+            credential: #"{"type":"copilot","access_token":"fixture-exact","login":"same-user"}"#)
+        let session = CPASession()
+        let fetcher = CPAQuotaFetcher(client: client, copilot: f.fetcher, isCurrent: { await session.isCurrent(0) })
+        let refresh = Task { try await fetcher.fetchSupplemental(file: file) }
+
+        await fulfillment(of: [profileStarted], timeout: 3)
+        // 只换会话，刻意保留原手动任务，确认会话检查本身能阻断下一次出站。
+        await session.advance()
+        profileGate.release(.reply(#"{"login":"same-user","id":123}"#))
+
+        do {
+            _ = try await refresh.value
+            XCTFail("旧会话的用户请求返回后应终止本轮补查")
+        } catch is CancellationError { }
+        XCTAssertEqual(f.http.requests.map(\.url.path), ["/user"])
+    }
+
+    func testCPASupplementPreservesHTTPStatusFromGitHubUserAndEntitlement() async throws {
+        let row = #"{"name":"fixture.json","provider":"copilot","account":"same-user","auth_index":"copilot-a"}"#
+        let file = try JSONDecoder().decode(AuthFile.self, from: Data(row.utf8))
+        let (client, _) = cpaClient(catalog: #"{"files":[\#(row)]}"#,
+            credential: #"{"type":"copilot","access_token":"fixture-exact","login":"same-user"}"#)
+        for (path, status) in [("/user", 401), ("/user", 403), ("/user", 429), ("/copilot_internal/user", 403)] {
+            let f = try fixture { request, _ in
+                request.url?.path == path ? .replyStatus(#"{"message":"sensitive-fixture"}"#, status) : nil
+            }
+            do {
+                _ = try await CPAQuotaFetcher(client: client, copilot: f.fetcher).fetchSupplemental(file: file)
+                XCTFail("GitHub 返回的 HTTP 状态应进入 CPA 错误处理")
+            } catch QuotaFetchError.httpError(let actual) {
+                XCTAssertEqual(actual, status)
+            }
+            // 首次身份请求被拒绝时不能发额度请求；额度端报错前则应完成用户验证。
+            let paths = path == "/user" ? ["/user"] : ["/user", path]
+            XCTAssertEqual(f.http.requests.map(\.url.path), paths)
+        }
+    }
+
+    func testCPASupplementPreservesTimeoutAndRecognizesCancellationDuringGitHubUserLookup() async throws {
+        let row = #"{"name":"fixture.json","provider":"copilot","account":"same-user","auth_index":"copilot-a"}"#
+        let file = try JSONDecoder().decode(AuthFile.self, from: Data(row.utf8))
+        let (client, _) = cpaClient(catalog: #"{"files":[\#(row)]}"#,
+            credential: #"{"type":"copilot","access_token":"fixture-exact","login":"same-user"}"#)
+        for code in [URLError.Code.timedOut, .cancelled] {
+            let f = try fixture { request, _ in request.url?.path == "/user" ? .fail(code) : nil }
+            do {
+                _ = try await CPAQuotaFetcher(client: client, copilot: f.fetcher).fetchSupplemental(file: file)
+                XCTFail("GitHub 用户验证的传输失败不能成为新额度")
+            } catch is CancellationError {
+                XCTAssertEqual(code, .cancelled)
+            } catch let error as URLError {
+                XCTAssertEqual(code, .timedOut)
+                XCTAssertEqual(error.code, .timedOut)
+            }
+            XCTAssertEqual(f.http.requests.map(\.url.path), ["/user"])
+        }
+    }
+
+    func testCPASupplementRejectsHTTP200WithOnlyUnknownQuota() async throws {
+        let f = try fixture { request, _ in
+            request.url?.path == "/copilot_internal/user"
+                ? .reply(#"{"quota_snapshots":{"premium_interactions":{"remaining":25}}}"#) : nil
+        }
+        let row = #"{"name":"fixture.json","provider":"copilot","account":"same-user","auth_index":"copilot-a"}"#
+        let file = try JSONDecoder().decode(AuthFile.self, from: Data(row.utf8))
+        let (client, _) = cpaClient(catalog: #"{"files":[\#(row)]}"#,
+            credential: #"{"type":"copilot","access_token":"fixture-exact","username":"same-user"}"#)
+        do {
+            _ = try await CPAQuotaFetcher(client: client, copilot: f.fetcher).fetchSupplemental(file: file)
+            XCTFail("全未知的额度不可刷新已知快照")
+        } catch QuotaFetchError.invalidResponse { }
+        XCTAssertEqual(f.http.requests.map(\.url.path), ["/user", "/copilot_internal/user"])
     }
 }

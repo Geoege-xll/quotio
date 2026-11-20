@@ -22,51 +22,28 @@ private var isRunningUnitTests: Bool {
 final class AppBootstrap {
     static let shared = AppBootstrap()
 
-    let viewModel = QuotaViewModel()
+    let viewModel = QuotaViewModel(accountSnapshotDefaults: .standard)
     let logsViewModel = LogsViewModel()
     /// 历史业务服务由应用唯一装配，菜单、设置、独立窗口和维护入口复用同一实例。
     /// 不新增业务 static shared，窗口重建也不重复创建采样任务或数据库连接。
     let quotaHistory = QuotaHistoryService()
     private var quotaHistoryObservation: NSObjectProtocol?
 
-    private(set) var hasInitialized = false
-    private(set) var needsOnboarding = false
+    private var hasInitialized = false
     var openWindowHandler: (@MainActor () -> Void)?
 
-    private let modeManager = OperatingModeManager.shared
     private let appearanceManager = AppearanceManager.shared
     private let statusBarManager = StatusBarManager.shared
     private let menuBarSettings = MenuBarSettingsManager.shared
 
     private init() {}
 
-    /// Initialize core app services. Safe to call multiple times - only runs once.
-    /// Called from AppDelegate.applicationDidFinishLaunching for headless launch support.
+    /// 由应用委托在进程启动时调用，窗口重建或首次引导都不会重复启动服务。
     func initializeIfNeeded() async {
         guard !hasInitialized else { return }
         hasInitialized = true
 
         appearanceManager.applyAppearance()
-
-        // Check if onboarding is needed - if so, defer full initialization until after onboarding
-        if !modeManager.hasCompletedOnboarding {
-            needsOnboarding = true
-            return
-        }
-
-        await performFullInitialization()
-    }
-
-    /// Called after onboarding completes to finish initialization
-    func completeOnboarding() async {
-        needsOnboarding = false
-        await performFullInitialization()
-    }
-
-    private func performFullInitialization() async {
-        // Scan auth files immediately (fast filesystem scan)
-        // This allows menu bar to show providers before quota API calls complete
-        await viewModel.loadDirectAuthFiles()
 
         // Setup menu bar immediately so user can open it while data loads
         statusBarManager.setViewModel(viewModel, history: quotaHistory)
@@ -101,8 +78,10 @@ final class AppBootstrap {
             }
         }
 
-        // Load data in background (includes proxy auto-start if enabled)
+        // ViewModel 已装入上次确认的目录快照；启动只等待 CPA 管理接口确认新目录。
+        guard !Task.isCancelled else { return }
         await viewModel.initialize()
+        guard !Task.isCancelled else { return }
 
         #if canImport(Sparkle)
         UpdaterService.shared.checkForUpdatesInBackground()
@@ -110,15 +89,14 @@ final class AppBootstrap {
     }
 
     func updateStatusBar() {
-        // Menu bar should show quota data regardless of proxy status
-        // The quota is fetched directly and doesn't need proxy
-        let hasQuotaData = !viewModel.providerQuotas.isEmpty
+        // 菜单栏的固定项来自当前账号目录，停机后沿用同样的已确认身份与额度快照。
+        let items = quotaItems
 
         statusBarManager.updateStatusBar(
-            items: quotaItems,
+            items: items,
             colorMode: menuBarSettings.colorMode,
             quotaDisplayMode: menuBarSettings.quotaDisplayMode,
-            isRunning: hasQuotaData,
+            isRunning: viewModel.canRefreshAccountQuotas || !items.isEmpty,
             showMenuBarIcon: menuBarSettings.showMenuBarIcon,
             showQuota: menuBarSettings.showQuotaInMenuBar
         )
@@ -205,7 +183,6 @@ struct QuotioApp: App {
     @State private var storageMaintenance = AnalyticsMaintenanceCoordinator()
     @State private var menuBarSettingsStorage: MenuBarSettingsManager? = isRunningUnitTests ? nil : .shared
     @State private var statusBarManager = StatusBarManager.shared
-    @State private var modeManagerStorage: OperatingModeManager? = isRunningUnitTests ? nil : .shared
     @State private var appearanceManagerStorage: AppearanceManager? = isRunningUnitTests ? nil : .shared
     @State private var languageManagerStorage: LanguageManager? = isRunningUnitTests ? nil : .shared
     @State private var showOnboarding = false
@@ -213,7 +190,6 @@ struct QuotioApp: App {
 
     private var viewModel: QuotaViewModel { bootstrap.viewModel }
     private var menuBarSettings: MenuBarSettingsManager { menuBarSettingsStorage! }
-    private var modeManager: OperatingModeManager { modeManagerStorage! }
     private var appearanceManager: AppearanceManager { appearanceManagerStorage! }
     private var languageManager: LanguageManager { languageManagerStorage! }
 
@@ -236,14 +212,7 @@ struct QuotioApp: App {
                     .environment(\.locale, languageManager.locale)
                     .background(WindowChromeConfigurator())
                     .task {
-                        // Initialize via bootstrap (idempotent - safe to call multiple times)
-                        // This handles the case where window opens before AppDelegate finishes
-                        await bootstrap.initializeIfNeeded()
-
-                        // Show onboarding if needed
-                        if bootstrap.needsOnboarding {
-                            showOnboarding = true
-                        }
+                        showOnboarding = !OperatingModeManager.shared.hasCompletedOnboarding
                     }
                     .onChange(of: viewModel.proxyManager.proxyStatus.running) {
                         bootstrap.updateStatusBar()
@@ -288,9 +257,6 @@ struct QuotioApp: App {
                         bootstrap.updateStatusBar()
                         statusBarManager.rebuildMenuInPlace()
                     }
-                    .onChange(of: modeManager.currentMode) {
-                        bootstrap.updateStatusBar()
-                    }
                     .onChange(of: viewModel.providerQuotas.count) {
                         bootstrap.updateStatusBar()
                         statusBarManager.rebuildMenuInPlace()
@@ -300,11 +266,7 @@ struct QuotioApp: App {
                         statusBarManager.rebuildMenuInPlace()
                     }
                     .sheet(isPresented: $showOnboarding) {
-                        OnboardingFlow {
-                            Task {
-                                await bootstrap.completeOnboarding()
-                            }
-                        }
+                        OnboardingFlow()
                     }
             }
         }
@@ -341,6 +303,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private nonisolated(unsafe) var windowDidBecomeKeyObserver: NSObjectProtocol?
     private nonisolated(unsafe) var windowDidBecomeMainObserver: NSObjectProtocol?
     private nonisolated(unsafe) var appDidResignActiveObserver: NSObjectProtocol?
+    private var launchTask: Task<Void, Never>?
+    private enum TerminationState {
+        case idle, cleaning, ready
+    }
+    private var terminationState = TerminationState.idle
     private var pendingForegroundReassert = false
     private weak var trackedDashboardWindow: NSWindow?
     private var lastDashboardActivationDate: Date?
@@ -348,11 +315,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isRunningUnitTests else { return }
-
-        // Move orphan cleanup off main thread to avoid blocking app launch
-        DispatchQueue.global(qos: .utility).async {
-            TunnelManager.cleanupOrphans()
-        }
 
         UserDefaults.standard.register(defaults: [
             "showInDock": true,
@@ -374,14 +336,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // CRITICAL: Initialize app services immediately on launch.
-        // This ensures proxy auto-start works even when launched at login
-        // without opening a window (e.g., when showInDock=false).
-        // The bootstrap.initializeIfNeeded() is idempotent and safe to call
-        // multiple times - the window's .task will also call it but it's a no-op
-        // if already initialized.
-        Task { @MainActor in
+        // 应用委托持有启动任务。关闭窗口不会取消初始化，退出时才撤销后续启动工作。
+        launchTask = Task { @MainActor in
             await AppBootstrap.shared.initializeIfNeeded()
+            guard !Task.isCancelled else { return }
 
             // Start background polling for CLIProxyAPI updates (every 5 minutes)
             // Uses Atom feed with ETag caching for efficiency
@@ -556,28 +514,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             && window.identifier?.rawValue != "quotio.quotaHistory"
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        // Stop background polling
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isRunningUnitTests else { return .terminateNow }
+        switch terminationState {
+        case .ready: return .terminateNow
+        case .cleaning: return .terminateCancel
+        case .idle: terminationState = .cleaning
+        }
+
+        launchTask?.cancel()
         AtomFeedUpdateService.shared.stopPolling()
 
-        CLIProxyManager.terminateProxyOnShutdown()
-        
-        // Use semaphore to ensure tunnel cleanup completes before app terminates
-        // with a timeout to prevent hanging termination
-        let semaphore = DispatchSemaphore(value: 0)
-        let cleanupTimeout: DispatchTime = .now() + .milliseconds(1500)
-        
+        // AppKit 的延迟退出会同步进入嵌套事件循环。若菜单从主队列发起退出，
+        // MainActor 收尾可能一直得不到执行。先返回当前退出请求，保留事件循环，
+        // 并行等待两份有界清理完成后，再从主运行循环提交唯一一次退出。
         Task { @MainActor in
-            await TunnelManager.shared.stopTunnel()
-            semaphore.signal()
+            async let stopTunnel: Void = TunnelManager.shared.shutdownForApplicationExit()
+            await CLIProxyManager.shared.shutdownForApplicationExit()
+            await stopTunnel
+            terminationState = .ready
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated {
+                    sender.terminate(nil)
+                }
+            }
         }
-        
-        let result = semaphore.wait(timeout: cleanupTimeout)
-        if result == .timedOut {
-            // Fallback: force kill orphan processes if stopTunnel timed out
-            TunnelManager.cleanupOrphans()
-            NSLog("[AppDelegate] Tunnel cleanup timed out, forced orphan cleanup")
-        }
+        return .terminateCancel
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -685,7 +647,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct ContentView: View {
     @Environment(QuotaViewModel.self) private var viewModel
     @Environment(\.colorScheme) private var colorScheme
-    @State private var modeManager = OperatingModeManager.shared
     // 这里只注入应用持有的统计状态，侧栏或语言切换不能重新构造引擎。
     let clientUsage: ClientUsageViewModel
     let callAnalytics: CallAnalyticsViewModel
@@ -707,61 +668,18 @@ struct ContentView: View {
 
                 List(selection: $vm.currentPage) {
                     Section {
-                        // Always visible
-                        SidebarLabel(title: "nav.dashboard".localized(), page: .dashboard)
-                            .tag(NavigationPage.dashboard)
-
-                        // 两类分析共用一个入口：网关 CPA 用量与本地客户端综合分析（Token与调用分析二合一）。
-                        SidebarLabel(title: "nav.analytics".localized(), page: .analytics)
-                            .tag(NavigationPage.analytics)
-
-                        SidebarLabel(
-                            title: "nav.accounts".localized(),
-                            page: .providers
-                        )
-                        .tag(NavigationPage.providers)
-
-                        if modeManager.isLocalProxyMode {
-                            SidebarLabel(title: "nav.agents".localized(), page: .agents)
-                                .tag(NavigationPage.agents)
-
-                            SidebarLabel(title: "nav.agentManagement".localized(), page: .agentManagement)
-                                .tag(NavigationPage.agentManagement)
-
-                            SidebarLabel(title: "nav.apiKeys".localized(), page: .apiKeys)
-                                .tag(NavigationPage.apiKeys)
-
-                            // 低频诊断入口集中到设置，避免与日常服务管理混排。
-                        } else {
-                            SidebarLabel(title: "nav.agentManagement".localized(), page: .agentManagement)
-                                .tag(NavigationPage.agentManagement)
+                        ForEach(NavigationPage.sidebarPages) { page in
+                            SidebarLabel(title: page.titleKey.localized(), page: page)
+                                .tag(page)
                         }
-
-                        SidebarLabel(title: "nav.settings".localized(), page: .settings)
-                            .tag(NavigationPage.settings)
-
-                        SidebarLabel(title: "nav.about".localized(), page: .about)
-                            .tag(NavigationPage.about)
                     }
                 }
                 .scrollContentBackground(.hidden)
 
-                // Control section at bottom - current mode badge + status
-                VStack(spacing: 6) {
-                    CurrentModeBadge()
-
-                    // Status row - different per mode
-                    Group {
-                        if modeManager.isLocalProxyMode {
-                            ProxyStatusRow(viewModel: viewModel)
-                        } else {
-                            QuotaRefreshStatusRow(viewModel: viewModel)
-                        }
-                    }
-                    .padding(.horizontal, 4)
-                }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
+                // 侧栏只显示状态。服务操作统一由路由中心和菜单栏提供。
+                ProxyStatusRow(viewModel: viewModel)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
             .background(
                 SidebarVisualEffectView()
@@ -769,42 +687,6 @@ struct ContentView: View {
                     .ignoresSafeArea()
             )
             .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
-            .toolbar {
-                ToolbarItem {
-                    if modeManager.isLocalProxyMode {
-                        // 本地代理模式：启停控制。保持 Button 结构与尺寸固定，启动中内部切换为菊花，防止按钮变窄或跳动
-                        Button {
-                            Task { await viewModel.toggleProxy() }
-                        } label: {
-                            ZStack {
-                                if viewModel.proxyManager.isStarting {
-                                    SmallProgressView(size: 14)
-                                } else {
-                                    Image(systemName: viewModel.proxyManager.proxyStatus.running ? "stop.fill" : "play.fill")
-                                }
-                            }
-                            .frame(width: 16, height: 16)
-                        }
-                        .disabled(viewModel.proxyManager.isStarting)
-                        .help(viewModel.proxyManager.isStarting ? "status.starting".localized() : (viewModel.proxyManager.proxyStatus.running ? "action.stopProxy".localized() : "action.startProxy".localized()))
-                    } else if !viewModel.currentPage.providesDataRefreshAction {
-                        Button {
-                            Task { await viewModel.manualRefresh() }
-                        } label: {
-                            ZStack {
-                                if viewModel.isLoadingQuotas {
-                                    SmallProgressView(size: 14)
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
-                                }
-                            }
-                            .frame(width: 16, height: 16)
-                        }
-                        .help("action.refreshQuota".localized())
-                        .disabled(viewModel.isLoadingQuotas)
-                    }
-                }
-            }
         } detail: {
             Group {
                 switch viewModel.currentPage {
@@ -843,13 +725,13 @@ struct ContentView: View {
 
 // MARK: - Sidebar Status Rows
 
-/// Proxy status row for Local Proxy Mode
+/// 侧栏的服务只读状态随同一个代理管理器更新。
 struct ProxyStatusRow: View {
     let viewModel: QuotaViewModel
     
     var body: some View {
         HStack {
-            if viewModel.proxyManager.isStarting {
+            if viewModel.isRestartingProxy || viewModel.proxyManager.isStarting {
                 SmallProgressView(size: 8)
             } else {
                 Circle()
@@ -857,7 +739,10 @@ struct ProxyStatusRow: View {
                     .frame(width: 8, height: 8)
             }
             
-            if viewModel.proxyManager.isStarting {
+            if viewModel.isRestartingProxy {
+                Text("runtime.restarting".localized())
+                    .font(.caption)
+            } else if viewModel.proxyManager.isStarting {
                 Text("status.starting".localized())
                     .font(.caption)
             } else {
@@ -870,37 +755,6 @@ struct ProxyStatusRow: View {
             Text(":" + String(viewModel.proxyManager.port))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        }
-    }
-}
-
-/// Quota refresh status row for Quota-Only Mode
-struct QuotaRefreshStatusRow: View {
-    let viewModel: QuotaViewModel
-    
-    var body: some View {
-        HStack {
-            if viewModel.isLoadingQuotas {
-                SmallProgressView(size: 8)
-                Text("status.refreshing".localized())
-                    .font(.caption)
-            } else {
-                Image(systemName: "clock")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                
-                if let lastRefresh = viewModel.lastQuotaRefreshTime {
-                    Text("status.updatedAgo \(lastRefresh, style: .relative)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("status.notRefreshed".localized())
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            
-            Spacer()
         }
     }
 }

@@ -414,6 +414,9 @@ enum CustomProviderAPIProtocol: String, Codable, CaseIterable, Identifiable, Sen
 
 /// A user-defined custom provider configuration
 struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
+    /// 官方添加表单与 CPA 路由共用规范基址，防止两个入口产生不同的版本路径。
+    static let officialOpenAIBaseURL = "https://api.openai.com/v1"
+
     let id: UUID
     var name: String
     var type: CustomProviderType
@@ -447,7 +450,7 @@ struct CustomProvider: Codable, Identifiable, Hashable, Sendable {
     }
 
     /// 官方 Messages／Responses 基址统一为 /v1；第三方部署前缀与自定义 URL 保持原值。
-    var cpaBaseURL: String { isOfficialOpenAIEndpoint ? "https://api.openai.com/v1" : baseURL }
+    var cpaBaseURL: String { isOfficialOpenAIEndpoint ? Self.officialOpenAIBaseURL : baseURL }
 
     init(
         id: UUID = UUID(),

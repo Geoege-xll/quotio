@@ -76,6 +76,120 @@ final class IDEQuotaRefreshTests: XCTestCase {
             XCTAssertFalse(provider.supportsManualAuth, "\(provider.rawValue) cannot be added manually")
         }
     }
+
+    func testCursorSwitchedLoginIsRejectedBeforeNetworkAndMatchingLoginCanRefresh() async {
+        let host = "api2.cursor.sh"
+        let state = LifecycleHTTPState { _, _ in
+            .reply(#"{"individualUsage":{"plan":{"enabled":true,"used":20,"limit":100}}}"#)
+        }
+        LifecycleHTTPProtocol.register(state, host: host)
+        defer { LifecycleHTTPProtocol.remove(host: host) }
+
+        let currentAccount = "new-login@example.invalid"
+        let current = CursorAuthData(accessToken: "cursor-fixture", refreshToken: nil, email: currentAccount,
+                                     membershipType: "pro", subscriptionStatus: nil, signUpType: nil)
+        let fetcher = CursorQuotaFetcher(configuration: offlineConfiguration(), readAuth: { current })
+        let noReadFetcher = CursorQuotaFetcher(configuration: offlineConfiguration(), readAuth: {
+            XCTFail("安装探测后会话失效，不能读取本机凭据")
+            return nil
+        })
+        let stoppedBeforeRead = IDEQuotaPermissionFixture(allowedChecks: 1)
+        let blockedRead = await noReadFetcher.fetchAsProviderQuota(matchingAccountKeys: [currentAccount],
+            isCurrent: { await stoppedBeforeRead.isCurrent() })
+        XCTAssertTrue(blockedRead.isEmpty)
+
+        let stoppedBeforeRequest = IDEQuotaPermissionFixture(allowedChecks: 2)
+        let blockedSend = await fetcher.fetchAsProviderQuota(matchingAccountKeys: [currentAccount],
+            isCurrent: { await stoppedBeforeRequest.isCurrent() })
+        XCTAssertTrue(blockedSend.isEmpty)
+
+        let rejected = await fetcher.fetchAsProviderQuota(matchingAccountKeys: ["imported-login@example.invalid"])
+        XCTAssertTrue(rejected.isEmpty)
+        XCTAssertEqual(state.requestCount, 0, "IDE 切换到另一账号后，应在网络层之前阻止请求")
+
+        let fresh = await fetcher.fetchAsProviderQuota(matchingAccountKeys: [currentAccount])
+        XCTAssertEqual(fresh[currentAccount]?.models.first?.percentage, 80)
+        XCTAssertEqual(state.requests.map(\.authorization), ["Bearer cursor-fixture"])
+    }
+
+    func testCursorFailedOnlineRefreshKeepsOldQuotaAndExplicitImportCanShowLocalPlan() async {
+        let host = "api2.cursor.sh"
+        let state = LifecycleHTTPState { _, count in
+            switch count {
+            case 1, 4: return .replyStatus("fixture unauthorized", 401)
+            case 2: return .fail(.timedOut)
+            default: return .reply(#"{"individualUsage":{"plan":{"enabled":true}}}"#)
+            }
+        }
+        LifecycleHTTPProtocol.register(state, host: host)
+        defer { LifecycleHTTPProtocol.remove(host: host) }
+
+        let key = "imported-login@example.invalid"
+        let previous = Date(timeIntervalSince1970: 1_000)
+        let existing = [key: quota(65, lastUpdated: previous)]
+        let auth = CursorAuthData(accessToken: "cursor-fixture", refreshToken: nil, email: key,
+                                  membershipType: "pro", subscriptionStatus: nil, signUpType: nil)
+        let fetcher = CursorQuotaFetcher(configuration: offlineConfiguration(), readAuth: { auth })
+        for _ in 0..<3 {
+            let refreshed = await fetcher.fetchAsProviderQuota(matchingAccountKeys: [key])
+            XCTAssertTrue(refreshed.isEmpty)
+            let merged = QuotaViewModel.mergeImportedIDEQuotas(fetched: refreshed, into: existing)
+            XCTAssertEqual(merged[key]?.lastUpdated, previous)
+            XCTAssertEqual(merged[key]?.models.first?.percentage, 65)
+        }
+
+        let imported = await fetcher.fetchAsProviderQuota()
+        XCTAssertEqual(imported[key]?.planType, "Pro", "用户明确导入时原本地套餐仍可显示")
+        XCTAssertEqual(state.requestCount, 4)
+    }
+
+    func testTraeRefreshRejectsOtherIdentityAndAnonymousPlaceholderBeforeNetwork() async {
+        let host = UUID().uuidString.lowercased() + ".invalid"
+        let state = LifecycleHTTPState { _, count in
+            if count == 2 { return .reply(#"{"user_entitlement_pack_list":[{"status":1}]}"#) }
+            return .reply(#"{"user_entitlement_pack_list":[{"status":1,"entitlement_base_info":{"quota":{"premium_model_fast_request_limit":100}},"usage":{"premium_model_fast_amount":20}}]}"#)
+        }
+        LifecycleHTTPProtocol.register(state, host: host)
+        defer { LifecycleHTTPProtocol.remove(host: host) }
+
+        let apiHost = "https://" + host
+        let newAccount = TraeAuthData(accessToken: "new-token-fixture", refreshToken: nil, email: nil,
+                                      userId: "new-id", apiHost: apiHost, username: "new-name")
+        let anonymous = TraeAuthData(accessToken: "anonymous-fixture", refreshToken: nil, email: " ",
+                                     userId: nil, apiHost: apiHost, username: nil)
+        let fetcher = TraeQuotaFetcher(configuration: offlineConfiguration(), readAuth: { newAccount })
+        let anonymousFetcher = TraeQuotaFetcher(configuration: offlineConfiguration(), readAuth: { anonymous })
+        let wrong = await fetcher.fetchAsProviderQuota(matchingAccountKeys: ["old-name", "new-id"])
+        let placeholder = await anonymousFetcher.fetchAsProviderQuota(matchingAccountKeys: ["Trae User"])
+        XCTAssertTrue(wrong.isEmpty, "请求必须按与投影一致的用户名键匹配，不能降级选另一别名")
+        XCTAssertTrue(placeholder.isEmpty)
+        XCTAssertEqual(state.requestCount, 0)
+
+        let fresh = await fetcher.fetchAsProviderQuota(matchingAccountKeys: ["new-name"])
+        XCTAssertEqual(fresh["new-name"]?.models.first?.percentage, 80)
+        XCTAssertEqual(state.requests.map(\.authorization), ["Cloud-IDE-JWT new-token-fixture"])
+        let missingQuota = await fetcher.fetchAsProviderQuota(matchingAccountKeys: ["new-name"])
+        XCTAssertTrue(missingQuota.isEmpty, "没有实际额度时不能返回纯占位供已导入账号更新")
+    }
+
+    private func offlineConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LifecycleHTTPProtocol.self]
+        return configuration
+    }
+}
+
+/// 每次复核推进一格，确定性模拟授权在进入取数器后失效，无需实际启停本机代理。
+private actor IDEQuotaPermissionFixture {
+    private let allowedChecks: Int
+    private var checks = 0
+
+    init(allowedChecks: Int) { self.allowedChecks = allowedChecks }
+
+    func isCurrent() -> Bool {
+        checks += 1
+        return checks <= allowedChecks
+    }
 }
 
 /// A gate a test can suspend the injected IDE fetch on, so the interleaved main-actor

@@ -23,6 +23,33 @@ nonisolated final class CallAnalyticsArchiveStore {
         return try readSnapshot()
     }
 
+    /// 墙钟边界仍用于来源归类；持久代次只用于阻挡跨清理的旧扫描，不参与事件时间判断。
+    nonisolated struct ResetBoundary: Equatable {
+        let clearedAt: Date
+        let generation: Int64
+    }
+
+    func lastReset() throws -> ResetBoundary? {
+        let columns = try database.query("SELECT name FROM pragma_table_info('call_analytics_reset')") {
+            sqlite3_column_text($0, 0).map { String(cString: $0) } ?? ""
+        }
+        // 从未清理的库继续走原扫描语义；旧版只有时间列，保留其边界并以 0 区分新代次。
+        guard !columns.isEmpty else { return nil }
+        let hasGeneration = columns.contains("generation")
+        let sql = hasGeneration ? "SELECT cleared_at, generation FROM call_analytics_reset WHERE id=1"
+            : "SELECT cleared_at, 0 FROM call_analytics_reset WHERE id=1"
+        guard let boundary = try database.query(sql, [], map: { statement in
+            let storageType = sqlite3_column_type(statement, 0)
+            guard (storageType == SQLITE_FLOAT || storageType == SQLITE_INTEGER),
+                  sqlite3_column_type(statement, 1) == SQLITE_INTEGER else { throw CallAnalyticsReadError.archive }
+            let time = sqlite3_column_double(statement, 0)
+            let generation = sqlite3_column_int64(statement, 1)
+            guard time.isFinite, !hasGeneration || generation > 0 else { throw CallAnalyticsReadError.archive }
+            return ResetBoundary(clearedAt: Date(timeIntervalSince1970: time), generation: generation)
+        }).first else { throw CallAnalyticsReadError.archive }
+        return boundary
+    }
+
     /// 指纹只说明该来源最后一次完整扫描成功；部分失败或扫描中发生变化时不得复用。
     func successfulFingerprint(for source: CallSourceKind) throws -> String? {
         try prepare()
@@ -49,9 +76,12 @@ nonisolated final class CallAnalyticsArchiveStore {
     /// 输入仍是来源的完整日摘要，必须按高水位合并，不能作为新增调用直接累加。
     /// 汇总、最新状态和成功指纹在同一短事务提交；取消或失败会同时回滚。
     func merge(_ fresh: CallAnalyticsSnapshot, scannedSources: Set<CallSourceKind> = [],
-               successfulFingerprints: [CallSourceKind: String] = [:]) throws -> CallAnalyticsSnapshot {
+               successfulFingerprints: [CallSourceKind: String] = [:], observedReset: ResetBoundary? = nil) throws -> CallAnalyticsSnapshot {
         try prepare()
         try database.transaction {
+            // 写锁内复核代次；即使两次清理的墙钟时间相同，跨清理的扫描也不能写回。
+            // 一并核对归类使用的边界，避免接受只带时间的旧表上不同水位生成的结果。
+            guard try lastReset() == observedReset else { throw CallAnalyticsReadError.resetDuringScan }
             try mergeEntries(fresh.entries)
             try mergeInvocations(fresh.agentInvocations)
             try saveMetadata(fresh)

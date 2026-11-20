@@ -10,24 +10,11 @@ struct OAuthSheet: View {
     let provider: AIProvider
     let onDismiss: () -> Void
     @State private var selectedKiroMethod: AuthCommand = .kiroImport
-    @State private var manualOAuthCode = ""
     @State private var manualCallbackInput = ""
     @State private var showManualCallback = false
-    @State private var githubHostInput = ""
-    /// 读取原 VM 注入的同一模式实例，授权表单与实际执行路径保持一致，不另持全局模式引用。
-    private var modeManager: OperatingModeManager { viewModel.modeManager }
-
-    /// 域名是本轮表单输入，不存成全局“默认主机”；成功后与该凭据一起保存，避免影响其他账号。
-    private var showsGitHubHost: Bool { provider == .copilot && modeManager.isMonitorMode }
-    private var githubHost: GitHubHost? { GitHubHost(githubHostInput) }
-    private var invalidGitHubHost: Bool {
-        showsGitHubHost && !githubHostInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && githubHost == nil
-    }
 
     private func startAuthorization() async {
-        guard !invalidGitHubHost else { return }
-        await viewModel.startOAuth(for: provider, authMethod: provider == .kiro ? selectedKiroMethod : nil,
-            githubHost: showsGitHubHost ? githubHost : nil)
+        await viewModel.startOAuth(for: provider, authMethod: provider == .kiro ? selectedKiroMethod : nil)
     }
 
     /// 反馈属于业务会话而不是弹窗局部 Task；同一提供商重试也不会接收旧提交的迟到结果。
@@ -58,8 +45,7 @@ struct OAuthSheet: View {
     }
 
     private var kiroAuthMethods: [AuthCommand] {
-        if modeManager.isMonitorMode { return [.kiroAWSLogin] }
-        return [.kiroImport, .kiroGoogleLogin, .kiroAWSAuthCode, .kiroAWSLogin]
+        [.kiroImport, .kiroGoogleLogin, .kiroAWSAuthCode, .kiroAWSLogin]
     }
 
     var body: some View {
@@ -105,15 +91,14 @@ struct OAuthSheet: View {
                     .frame(maxWidth: 320)
                 }
 
-                if !modeManager.isMonitorMode, provider.requiresCPA8OAuthPlugin {
+                if provider.requiresCPA8OAuthPlugin {
                     // 不冒充内置登录支持，保留用户已注册插件时的入口及已有账号的管理功能。
                     Text("oauth.cpa8PluginRequired".localized())
                         .font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: 320, alignment: .leading)
                 }
 
-                if !modeManager.isMonitorMode,
-                   viewModel.proxyManager.isLegacyAuthWarningNeeded(for: provider) {
+                if viewModel.proxyManager.isLegacyAuthWarningNeeded(for: provider) {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
@@ -127,36 +112,12 @@ struct OAuthSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
 
-                if showsGitHubHost {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("oauth.githubHost.label".localized()).font(.subheadline.weight(.medium))
-                        QuotioCapsuleTextField("oauth.githubHost.placeholder".localized(), text: $githubHostInput, systemImage: "globe")
-                            .autocorrectionDisabled()
-                            .disabled(isPolling || isSuccess)
-                        Text((invalidGitHubHost ? "oauth.githubHost.invalid" : "oauth.githubHost.hint").localized())
-                            .font(.caption)
-                            .foregroundStyle(invalidGitHubHost ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
-                    }.frame(maxWidth: 360, alignment: .leading)
-                }
-
                 if let state = viewModel.oauthState, state.provider == provider {
                     OAuthStatusView(status: state.status, error: state.error, state: state.state, userCode: state.userCode, authURL: state.authURL, provider: provider)
                         .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
 
-                if modeManager.isMonitorMode, provider == .claude, viewModel.oauthState?.status == .polling {
-                    HStack(spacing: 8) {
-                        QuotioCapsuleTextField("oauth.authorizationCode".localized(), text: $manualOAuthCode, systemImage: "key")
-                        Button("oauth.complete".localized()) {
-                            Task { await viewModel.completeMonitorOAuthCode(manualOAuthCode, provider: provider) }
-                        }
-                        .buttonStyle(.quotioPrimaryCapsule)
-                        .disabled(manualOAuthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                    .frame(maxWidth: 360)
-                }
-
-                if !modeManager.isMonitorMode, currentSession?.supportsManualCallback == true {
+                if currentSession?.supportsManualCallback == true {
                     VStack(spacing: 8) {
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -219,7 +180,6 @@ struct OAuthSheet: View {
                             Label("oauth.retry".localized(), systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.quotioPrimaryCapsule)
-                        .disabled(invalidGitHubHost)
                     } else if !isSuccess {
                         Button {
                             Task {
@@ -233,7 +193,7 @@ struct OAuthSheet: View {
                             }
                         }
                         .buttonStyle(.quotioPrimaryCapsule)
-                        .disabled(isPolling || invalidGitHubHost)
+                        .disabled(isPolling)
                     }
                 }
             }

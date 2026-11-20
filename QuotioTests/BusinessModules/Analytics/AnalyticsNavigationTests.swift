@@ -38,10 +38,25 @@ final class AnalyticsNavigationTests: XCTestCase {
         XCTAssertEqual(AnalyticsNavigationState(defaults: preferences).tab, .usage)
     }
 
-    func testBothOperatingModesExposeOneAnalyticsEntry() {
-        for mode in OperatingMode.allCases {
-            XCTAssertEqual(mode.visiblePages.filter { $0 == .analytics }.count, 1)
-            XCTAssertFalse(mode.visiblePages.contains { $0.rawValue == "Usage Statistics" || $0.rawValue == "Call Analytics" })
-        }
+    func testSidebarExposesOneAnalyticsEntry() {
+        XCTAssertEqual(NavigationPage.sidebarPages.filter { $0 == .analytics }.count, 1)
+        XCTAssertFalse(NavigationPage.sidebarPages.contains { $0.rawValue == "Usage Statistics" || $0.rawValue == "Call Analytics" })
     }
+
+    func testDetailDestinationCarriesCompleteFiltersForEveryDisplayMode() throws {
+        let state = AnalyticsNavigationState(defaults: try defaults())
+        state.cpaSelection = .init(range: .custom, start: Date(timeIntervalSince1970: 100), end: Date(timeIntervalSince1970: 200),
+                                  provider: "p", model: "m", source: "s", apiKey: "k", outcome: .failed)
+        let selection = state.cpaSelection
+        for metric in CPAUsageChartMetric.allCases {
+            state.cpaDashboardModel.metric = metric
+            let destination = metric.detailDestination(for: state.cpaSelection)
+            XCTAssertEqual(destination, metric == .cost ? .pricing(selection) : .records(selection))
+            XCTAssertEqual(state.cpaSelection, selection)
+        }
+        state.cpaSelection.range = .days7
+        XCTAssertEqual(state.cpaDashboardModel.metric, .requests)
+        XCTAssertEqual(state.cpaSelection.apiKey, "k")
+    }
+
 }

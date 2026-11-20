@@ -92,6 +92,16 @@ final class QuotaHistoryService {
     /// 定向回归及维护协调可等待已有写入，不创建另一个写入任务或暴露可变句柄。
     func waitForWrites() async { await writeTask?.value }
 
+    /// 仅应旧历史窗口的显式请求读取目录，沿用维护世代检查，防止清库后回写旧账号列表。
+    func legacyAccounts() async throws -> [QuotaHistoryAccount] {
+        guard !isSuspended else { throw QuotaHistoryError.busy }
+        let expected = generation
+        let accounts = try await store.accounts(mode: OperatingMode.monitor.rawValue)
+        try Task.checkCancellation()
+        guard expected == generation, !isSuspended else { throw CancellationError() }
+        return accounts
+    }
+
     func metrics(account: QuotaHistoryAccount) async throws -> [QuotaHistoryPoint] {
         guard !isSuspended else { throw QuotaHistoryError.busy }
         let expected = generation

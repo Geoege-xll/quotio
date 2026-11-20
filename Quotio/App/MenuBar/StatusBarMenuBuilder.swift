@@ -13,7 +13,7 @@
 import AppKit
 import SwiftUI
 
-/// 菜单栏装配入口：继续由原 builder 持有账号模型、筛选控制器、检测缓存与菜单构建流程。
+/// 菜单栏装配入口：原 builder 持有筛选控制器与菜单构建流程，身份由 ViewModel 的确认目录提供。
 /// 组件仍由这些原方法创建；展开期间以原视图观察同一 VM，不复制账号状态或替换跟踪中的 NSMenuItem。
 // MARK: - Status Bar Menu Builder
 
@@ -26,13 +26,6 @@ final class StatusBarMenuBuilder {
     private var modeManager: OperatingModeManager { viewModel.modeManager }
     private let menuWidth: CGFloat = 360
     private var providerFilterController: StatusBarProviderFilterController?
-    private let agentDetectionService = AgentDetectionService()
-    
-    // Cached agent statuses for filtering
-    private var cachedAgentStatuses: [CLIAgent: Bool] = [:]
-    private var lastAgentCacheTime: Date?
-    private let agentCacheValidity: TimeInterval = 300 // 5 minutes
-    
     // Selected provider from UserDefaults (kept for compatibility)
     @AppStorage("menuBarSelectedProvider") private var selectedProviderRaw: String = ""
     
@@ -51,14 +44,14 @@ final class StatusBarMenuBuilder {
         menu.addItem(buildHeaderItem())
         menu.addItem(NSMenuItem.separator())
 
-        // 2. Network info (Proxy + Tunnel) - Local Proxy Mode only
-        if modeManager.isLocalProxyMode {
-            menu.addItem(buildNetworkInfoItem())
-            menu.addItem(NSMenuItem.separator())
-        }
+        // 即使服务停止也保留操作行，用户可以从菜单重试启动。
+        menu.addItem(buildNetworkInfoItem())
+        menu.addItem(NSMenuItem.separator())
 
         // 3. Provider picker and account groups
-        let providers = providersWithData
+        // 菜单结构按目录建一次。服务停止只更新快照内容及权限，不从本机 CLI 或额度反推账号。
+        let accountGroups = Dictionary(grouping: viewModel.menuBarAccountEntries, by: \.provider)
+        let providers = accountGroups.keys.sorted { $0.displayName < $1.displayName }
         if !providers.isEmpty {
             let controller = StatusBarProviderFilterController(
                 selectedProvider: selectedProvider(from: providers),
@@ -76,20 +69,17 @@ final class StatusBarMenuBuilder {
                 let header = viewItem(for: MenuProviderSectionHeader(provider: provider))
                 controller.register(header, scope: .allProvidersOnly)
                 menu.addItem(header)
-                let accounts = accountsForProvider(provider)
-                if accounts.isEmpty {
-                    let empty = buildEmptyStateItem()
-                    controller.register(empty, scope: .provider(provider))
-                    menu.addItem(empty)
-                } else {
-                    for account in accounts {
-                        let item = buildAccountCardItem(
-                            accountKey: account.accountKey, email: account.email,
-                            provider: provider
-                        )
-                        controller.register(item, scope: .provider(provider))
-                        menu.addItem(item)
-                    }
+                let accounts = accountGroups[provider, default: []].map {
+                    (accountKey: $0.accountKey, email: $0.displayName)
+                }
+                let ordered = Self.orderedAccounts(accounts, provider: provider) {
+                    viewModel.hasCurrentCPAAccountDirectory && viewModel.isAntigravityAccountActive(email: $0)
+                }
+                for account in ordered {
+                    let item = buildAccountCardItem(accountKey: account.accountKey, email: account.email,
+                                                    provider: provider)
+                    controller.register(item, scope: .provider(provider))
+                    menu.addItem(item)
                 }
                 if index < providers.count - 1 {
                     let separator = NSMenuItem.separator()
@@ -119,102 +109,6 @@ final class StatusBarMenuBuilder {
     
     // MARK: - Data Helpers
     
-    private var providersWithData: [AIProvider] {
-        var providers = Set<AIProvider>()
-        
-        // From direct auth files (scanned from filesystem - available immediately)
-        for file in viewModel.directAuthFiles {
-            providers.insert(file.provider)
-        }
-        
-        // From quota data (available after API calls complete)
-        for (provider, accountQuotas) in viewModel.providerQuotas {
-            if !accountQuotas.isEmpty {
-                providers.insert(provider)
-            }
-        }
-
-        if modeManager.isMonitorMode {
-            providers.formUnion(Self.monitorProviders(viewModel.monitorAccounts))
-        }
-        
-        return Self.filterProviders(
-            providers,
-            isMonitorMode: modeManager.isMonitorMode,
-            isCLIInstalled: isCLIInstalled
-        )
-    }
-
-    nonisolated static func monitorProviders(_ accounts: [MonitorAccount]) -> Set<AIProvider> {
-        Set(accounts.lazy.filter { !$0.isDisabled }.map(\.provider))
-    }
-
-    nonisolated static func filterProviders(
-        _ providers: Set<AIProvider>,
-        isMonitorMode: Bool,
-        isCLIInstalled: (CLIAgent) -> Bool
-    ) -> [AIProvider] {
-        let sorted = providers.sorted { $0.displayName < $1.displayName }
-        guard !isMonitorMode else { return sorted }
-        return sorted.filter { provider in
-            guard let agent = provider.cliAgent else { return true }
-            return isCLIInstalled(agent)
-        }
-    }
-    
-    private func isCLIInstalled(_ agent: CLIAgent) -> Bool {
-        // Check cache first
-        if let lastCache = lastAgentCacheTime,
-           Date().timeIntervalSince(lastCache) < agentCacheValidity,
-           let cached = cachedAgentStatuses[agent] {
-            return cached
-        }
-        
-        // Check if we have cached data from QuotaViewModel
-        if let statuses = viewModel.agentSetupViewModel.agentStatuses as [AgentStatus]?,
-           !statuses.isEmpty,
-           let status = statuses.first(where: { $0.agent == agent }) {
-            cachedAgentStatuses[agent] = status.installed
-            lastAgentCacheTime = Date()
-            return status.installed
-        }
-        
-        // Fallback: synchronous binary check
-        let isInstalled = checkBinaryExists(names: agent.binaryNames)
-        cachedAgentStatuses[agent] = isInstalled
-        lastAgentCacheTime = Date()
-        return isInstalled
-    }
-    
-    private func checkBinaryExists(names: [String]) -> Bool {
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser.path
-        
-        let commonPaths = [
-            "/usr/local/bin",
-            "/opt/homebrew/bin",
-            "/usr/bin",
-            "\(home)/.local/bin",
-            "\(home)/.cargo/bin",
-            "\(home)/.bun/bin",
-            "\(home)/.deno/bin",
-            "\(home)/.npm-global/bin",
-            "\(home)/.volta/bin",
-            "\(home)/.asdf/shims",
-            "\(home)/.local/share/mise/shims"
-        ]
-        
-        for name in names {
-            for basePath in commonPaths {
-                let fullPath = "\(basePath)/\(name)"
-                if fileManager.isExecutableFile(atPath: fullPath) {
-                    return true
-                }
-            }
-        }
-        return false
-    }
-    
     private func selectedProvider(from providers: [AIProvider]) -> AIProvider? {
         guard !selectedProviderRaw.isEmpty,
               let provider = AIProvider(rawValue: selectedProviderRaw),
@@ -224,29 +118,13 @@ final class StatusBarMenuBuilder {
         return provider
     }
 
-    private func accountsForProvider(
-        _ provider: AIProvider
-    ) -> [(accountKey: String, email: String, data: ProviderQuotaData)] {
-        guard let quotas = viewModel.providerQuotas[provider] else { return [] }
-        return Self.orderedAccounts(quotas, provider: provider) {
-            viewModel.isAntigravityAccountActive(email: $0)
-        }
-    }
-
-    /// Orders the menu-bar account rows for `provider`: alphabetical by email, with the
-    /// account currently in use floated to the top.
-    ///
-    /// `isActiveInIDE` is only consulted for Antigravity, the single provider that exposes
-    /// an "in use" signal, so the ordering is driven by exactly the same predicate that
-    /// `buildAccountCardItem` uses to render the active badge on the same row.
+    /// 菜单身份按名称排序，同名以规范键稳定区分。Antigravity 仍将已在 IDE 使用的账号置顶。
     nonisolated static func orderedAccounts(
-        _ quotas: [String: ProviderQuotaData],
+        _ accounts: [(accountKey: String, email: String)],
         provider: AIProvider,
         isActiveInIDE: (String) -> Bool
-    ) -> [(accountKey: String, email: String, data: ProviderQuotaData)] {
-        let sorted = quotas
-            .map { (accountKey: $0.key, email: $0.value.accountDisplayName ?? $0.key, data: $0.value) }
-            .sorted { $0.email < $1.email }
+    ) -> [(accountKey: String, email: String)] {
+        let sorted = accounts.sorted { $0.email == $1.email ? $0.accountKey < $1.accountKey : $0.email < $1.email }
 
         guard provider == .antigravity else { return sorted }
         return AccountSorting.prioritizingActive(sorted) { isActiveInIDE($0.email) }
@@ -256,7 +134,8 @@ final class StatusBarMenuBuilder {
     
     private func buildHeaderItem() -> NSMenuItem {
         // 读取发生在真实 SwiftUI body，刷新开始／完成能更新原标题项。
-        viewItem(for: MenuLiveContent { MenuHeaderView(isLoading: self.viewModel.isLoadingQuotas) },
+        viewItem(for: MenuLiveContent { MenuHeaderView(isLoading: self.viewModel.canRefreshAccountQuotas
+            && self.viewModel.isLoadingQuotas) },
                  resizesToFitContent: true)
     }
 
@@ -267,12 +146,16 @@ final class StatusBarMenuBuilder {
         let networkView = MenuNetworkInfoView(
             // 原生菜单只创建一次承载视图；状态必须在 SwiftUI body 中读取，
             // 才能订阅 Observable 的变化，而不是一直显示打开菜单时的布尔快照。
-            proxyState: {
-                MenuProxyState(port: proxyManager.port, isRunning: proxyManager.proxyStatus.running,
-                               isStarting: proxyManager.isStarting, isStopping: proxyManager.isStopping)
+            proxyState: { [viewModel] in
+                MenuProxyState(
+                    port: proxyManager.port, isRunning: proxyManager.proxyStatus.running,
+                    isInstalled: proxyManager.isBinaryInstalled, isInstalling: proxyManager.isDownloading,
+                    isStarting: proxyManager.isStarting, isStopping: proxyManager.isStopping,
+                    isRestarting: viewModel.isRestartingProxy, error: proxyManager.lastError
+                )
             },
-            onProxyToggle: { [weak viewModel] in
-                Task { await viewModel?.toggleProxy() }
+            onProxyRestart: { [weak viewModel] in
+                Task { await viewModel?.restartProxy() }
             },
             onCopyProxyURL: {
                 let url = "http://127.0.0.1:\(self.viewModel.proxyManager.port)"
@@ -289,7 +172,22 @@ final class StatusBarMenuBuilder {
                 TunnelManager.shared.copyURLToClipboard()
             }
         )
-        return viewItem(for: networkView, resizesToFitContent: true)
+        // 目录复核失败原位显示在连接状态旁；避免为错误额外插入正在跟踪的原生菜单项。
+        return viewItem(for: MenuLiveContent {
+            VStack(spacing: 0) {
+                networkView
+                if let error = self.viewModel.lastCPAAccountDirectoryError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                        .help(error)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 4)
+                }
+            }
+        }, resizesToFitContent: true)
     }
 
     // MARK: - Account Cards and Details
@@ -304,15 +202,16 @@ final class StatusBarMenuBuilder {
             // 只按同一提供商的精确账号键取最新快照；不使用同邮箱或另一账号的旧值填充。
             // 账号已移除时展示空状态，结构留到下次打开再调整，避免菜单跳位和旧数据复活。
             if self.modeManager.revision == sourceRevision,
-               let current = self.viewModel.providerQuotas[provider]?[accountKey] {
-                let currentEmail = current.accountDisplayName ?? email
+               let entry = self.currentAccount(provider: provider, accountKey: accountKey) {
+                let canManage = self.viewModel.hasCurrentCPAAccountDirectory
                 MenuAccountCardView(
-                    accountKey: accountKey, email: currentEmail, data: current, provider: provider,
+                    accountKey: accountKey, email: entry.displayName,
+                    data: self.viewModel.providerQuotas[provider]?[accountKey], provider: provider,
                     subscriptionInfo: self.viewModel.subscriptionInfos[provider]?[accountKey],
-                    isActiveInIDE: provider == .antigravity && self.viewModel.isAntigravityAccountActive(email: currentEmail),
-                    // 回调始终保留；活动徽章由当前视图决定，IDE 切换后仍可切回另一账号。
-                    onUseAccount: provider == .antigravity ? { [weak viewModel = self.viewModel] in
-                        Self.showSwitchConfirmation(email: currentEmail, viewModel: viewModel)
+                    isActiveInIDE: canManage && provider == .antigravity
+                        && self.viewModel.isAntigravityAccountActive(email: entry.displayName),
+                    onUseAccount: canManage && provider == .antigravity ? { [weak viewModel = self.viewModel] in
+                        Self.showSwitchConfirmation(email: entry.displayName, viewModel: viewModel)
                     } : nil,
                     settings: self.viewModel.menuBarSettings
                 )
@@ -327,6 +226,10 @@ final class StatusBarMenuBuilder {
         return item
     }
 
+    private func currentAccount(provider: AIProvider, accountKey: String) -> MenuBarAccountCatalog.Entry? {
+        viewModel.menuBarAccountEntries.first { $0.provider == provider && $0.accountKey == accountKey }
+    }
+
     /// 所有提供商采用同一明细入口；金额／次数／状态及未知额度沿用原 ModelQuota 语义。
     /// 一个动态承载项容纳额度桶变化，避免刷新时增删 AppKit 正在跟踪的子菜单项。
     private func buildAccountDetailSubmenu(accountKey: String, email: String, provider: AIProvider) -> NSMenu {
@@ -336,10 +239,11 @@ final class StatusBarMenuBuilder {
         let sourceRevision = modeManager.revision
         let submenu = makeMenu()
         let details = MenuLiveContent {
-            let current = self.modeManager.revision == sourceRevision
-                ? self.viewModel.providerQuotas[provider]?[accountKey] : nil
+            let entry = self.modeManager.revision == sourceRevision
+                ? self.currentAccount(provider: provider, accountKey: accountKey) : nil
+            let current = entry == nil ? nil : self.viewModel.providerQuotas[provider]?[accountKey]
             MenuAccountDetailView(
-                email: current?.accountDisplayName ?? email,
+                email: entry?.displayName ?? email,
                 data: current, provider: provider,
                 settings: self.viewModel.menuBarSettings,
                 account: self.history == nil || self.modeManager.revision != sourceRevision ? nil
@@ -354,6 +258,7 @@ final class StatusBarMenuBuilder {
             let analyticsMenu = makeMenu()
             analyticsMenu.addItem(viewItem(for: MenuLiveContent {
                 if self.modeManager.revision == sourceRevision,
+                   self.currentAccount(provider: provider, accountKey: accountKey) != nil,
                    let analytics = self.viewModel.providerQuotas[provider]?[accountKey]?.analytics, !analytics.isEmpty {
                     AnalyticsDetailSection(analytics: analytics)
                 } else {
@@ -380,7 +285,7 @@ final class StatusBarMenuBuilder {
     // MARK: - Switch Account Confirmation
     
     private static func showSwitchConfirmation(email: String, viewModel: QuotaViewModel?) {
-        guard let viewModel = viewModel else { return }
+        guard let viewModel, viewModel.hasCurrentCPAAccountDirectory else { return }
         
         let isIDERunning = viewModel.antigravitySwitcher.isIDERunning()
         
@@ -400,6 +305,7 @@ final class StatusBarMenuBuilder {
         
         if response == .alertFirstButtonReturn {
             Task { @MainActor in
+                guard viewModel.hasCurrentCPAAccountDirectory else { return }
                 await viewModel.switchAntigravityAccount(email: email)
                 StatusBarManager.shared.rebuildMenuInPlace()
             }
@@ -417,7 +323,15 @@ final class StatusBarMenuBuilder {
     
     private func buildActionItems() -> [NSMenuItem] {
         let actionsView = MenuActionsView()
-        return [viewItem(for: actionsView)]
+        let actions = viewItem(for: actionsView)
+        guard history != nil else { return [actions] }
+
+        // 菜单打开时不读库；旧账号选择只在用户打开原历史窗口后加载。
+        let legacy = NSMenuItem(title: "quota.history.legacy".localized(),
+            action: #selector(MenuActionHandler.openLegacyQuotaHistory), keyEquivalent: "")
+        legacy.target = MenuActionHandler.shared
+        legacy.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
+        return [legacy, .separator(), actions]
     }
     
     // MARK: - Helpers

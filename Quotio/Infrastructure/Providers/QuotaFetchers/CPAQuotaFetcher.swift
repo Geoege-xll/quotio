@@ -2,23 +2,137 @@ import Foundation
 
 /// 代理运行时始终以 CPA 当前加载的 authIndex 查询同一凭据，避免固定目录、文件名前缀、
 /// 本机 CLI 登录状态或同邮箱的另一套餐导致账号串用。$TOKEN$ 由 CPA 替换并刷新。
-/// 依赖注入仅用于离线响应测试，生产请求复用现有 ManagementAPIClient。
+/// 主查询与精确副查询复用同一个 ManagementAPIClient，副查询只使用指定目录项对应的凭据。
 nonisolated struct CPAQuotaFetcher: Sendable {
     let call: @Sendable (APICallRequest) async throws -> APICallResponse
     let download: @Sendable (String) async throws -> Data
+    private let list: (@Sendable () async throws -> [AuthFile])?
+    private let copilot: CopilotQuotaFetcher?
+    private let kiro: KiroQuotaFetcher?
+    private let checkSession: @Sendable () async throws -> Void
 
-    init(client: ManagementAPIClient) {
-        call = { try await client.apiCall($0) }
-        download = { try await client.downloadAuthFile(name: $0) }
+    init(client: ManagementAPIClient, copilot: CopilotQuotaFetcher? = nil, kiro: KiroQuotaFetcher? = nil,
+         isCurrent: @escaping @Sendable () async -> Bool = { true }) {
+        // 手动刷新可能仍在等待网络。除了 Task 取消，还要在每个阶段复核原代理会话，
+        // 避免旧响应在停机或会话切换之后继续发起带凭据的请求。
+        let checkSession: @Sendable () async throws -> Void = {
+            try Task.checkCancellation()
+            guard await isCurrent() else { throw CancellationError() }
+            try Task.checkCancellation()
+        }
+        self.checkSession = checkSession
+        call = {
+            try await checkSession()
+            return try await client.apiCall($0)
+        }
+        download = {
+            try await checkSession()
+            return try await client.downloadAuthFile(name: $0)
+        }
+        list = {
+            try await checkSession()
+            return try await client.fetchAuthFiles()
+        }
+        self.copilot = copilot
+        self.kiro = kiro
     }
 
     init(call: @escaping @Sendable (APICallRequest) async throws -> APICallResponse,
          download: @escaping @Sendable (String) async throws -> Data) {
         self.call = call; self.download = download
+        list = nil
+        copilot = nil
+        kiro = nil
+        checkSession = { try Task.checkCancellation() }
     }
 
     static func supports(_ provider: AIProvider) -> Bool {
         [.antigravity, .codex, .claude, .grok].contains(provider)
+    }
+
+    static func supportsSupplemental(_ provider: AIProvider) -> Bool {
+        provider == .copilot || provider == .kiro
+    }
+
+    /// 只有明确无 CPA 主查询的提供商才可走此入口；主查询的请求错误不参与此判断。
+    /// 下载端点只接受文件名，下载后必须从同一个管理会话复核该名称唯一且仍指向原索引。
+    func fetchSupplemental(file: AuthFile) async throws -> ProviderQuotaData {
+        guard let provider = file.providerType, Self.supportsSupplemental(provider),
+              let list, !file.disabled, !file.unavailable, file.runtimeOnly != true,
+              let index = QuotaResponseValue.string(file.authIndex),
+              file.name.lowercased().hasSuffix(".json"),
+              !file.name.contains("/"), !file.name.contains("\\"),
+              file.name.rangeOfCharacter(from: .controlCharacters) == nil else { throw QuotaFetchError.invalidResponse }
+        let fetch: @Sendable (Data, AuthFile) async throws -> ProviderQuotaData
+        switch provider {
+        case .copilot:
+            guard let copilot, GitHubHost.saved(file.quotaMetadata.githubHost) != nil else {
+                throw QuotaFetchError.invalidResponse
+            }
+            fetch = { try await copilot.fetchCPAQuota(credential: $0, file: $1, checkSession: checkSession) }
+        case .kiro:
+            guard let kiro else { throw QuotaFetchError.invalidResponse }
+            fetch = { try await kiro.fetchCPAQuota(credential: $0, file: $1, checkSession: checkSession) }
+        default:
+            throw QuotaFetchError.invalidResponse
+        }
+
+        try Task.checkCancellation()
+        let data = try await download(file.name)
+        try await checkSession()
+        // 凭据正文通常不回显文件名或索引；若有回显，任何冲突都应在出站之前拒绝。
+        let identity = try JSONDecoder().decode(DownloadedIdentity.self, from: data)
+        guard (identity.name?.utf8.elementsEqual(file.name.utf8) ?? true),
+              (identity.authIndex == nil || identity.authIndex == index),
+              (identity.camelCaseAuthIndex == nil || identity.camelCaseAuthIndex == index) else {
+            throw QuotaFetchError.invalidResponse
+        }
+        // CPA 可同时返回同一文件的磁盘与运行描述。仅当原始记录均能归到同一索引、
+        // 提供商和已有身份时才复用现有目录合并；不能由合并顺序决定用哪个凭据。
+        let records = try await list().filter { $0.name == file.name }
+        try await checkSession()
+        guard records.allSatisfy({ record in
+            let recordIndex = QuotaResponseValue.string(record.authIndex)
+            return record.name.utf8.elementsEqual(file.name.utf8) && record.providerType == provider
+                && (recordIndex == nil || recordIndex == index)
+                && (record.account == nil || record.account == file.account)
+                && (record.email == nil || record.email == file.email)
+                && (record.quotaUserID == nil || record.quotaUserID == file.quotaUserID)
+        }) else { throw QuotaFetchError.invalidResponse }
+        let matches = AuthFileIdentity.deduplicated(records)
+        guard matches.count == 1, let current = matches.first,
+              current.id == file.id, current.providerType == provider,
+              QuotaResponseValue.string(current.authIndex) == index,
+              !current.disabled, !current.unavailable, current.runtimeOnly != true,
+              current.account == file.account, current.email == file.email, current.quotaUserID == file.quotaUserID,
+              current.quotaMetadata.githubHost == file.quotaMetadata.githubHost else {
+            throw QuotaFetchError.invalidResponse
+        }
+        return try await fetch(data, current)
+    }
+
+    private nonisolated struct DownloadedIdentity: Decodable {
+        let name: String?
+        let authIndex: String?
+        let camelCaseAuthIndex: String?
+
+        enum CodingKeys: String, CodingKey {
+            case name, authIndex = "auth_index", camelCaseAuthIndex = "authIndex"
+        }
+
+        init(from decoder: Decoder) throws {
+            let fields = try decoder.container(keyedBy: CodingKeys.self)
+            name = fields.contains(.name) ? try fields.decode(String.self, forKey: .name) : nil
+            authIndex = try Self.index(in: fields, field: .authIndex)
+            camelCaseAuthIndex = try Self.index(in: fields, field: .camelCaseAuthIndex)
+        }
+
+        private static func index(in fields: KeyedDecodingContainer<CodingKeys>, field: CodingKeys) throws -> String? {
+            guard fields.contains(field) else { return nil }
+            if let number = try? fields.decode(Int64.self, forKey: field) { return String(number) }
+            if let number = try? fields.decode(UInt64.self, forKey: field) { return String(number) }
+            return try fields.decode(String.self, forKey: field)
+        }
     }
 
     func fetch(file: AuthFile) async throws -> ProviderQuotaData {
@@ -38,7 +152,7 @@ nonisolated struct CPAQuotaFetcher: Sendable {
         if needsDownloadedMetadata, let raw = try? await download(file.name) {
             metadata.fillMissing(from: CPAQuotaMetadata(data: raw))
         }
-        try Task.checkCancellation()
+        try await checkSession()
         var headers = ["Authorization": "Bearer $TOKEN$", "Content-Type": "application/json"]
 
         switch provider {
@@ -53,20 +167,21 @@ nonisolated struct CPAQuotaFetcher: Sendable {
             async let weekly = requestResult(index: index, url: "https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers: headers)
             async let monthly = requestResult(index: index, url: "https://cli-chat-proxy.grok.com/v1/billing", headers: headers)
             let (weeklyResult, monthlyResult) = await (weekly, monthly)
-            try Task.checkCancellation()
+            try await checkSession()
             let weeklyBody = try? weeklyResult.get()
             let monthlyBody = try? monthlyResult.get()
             if let quota = GrokQuotaMapper.mapBillingResponses(weekly: weeklyBody, monthly: monthlyBody, plan: metadata.plan) {
                 return quota
             }
-            // 一个接口拒绝、另一个接口成功时优先保留成功结果；只有都未成功才将账号标记为拒绝。
+            // 一个接口拒绝、另一个接口成功时优先保留成功结果；都失败时保留真实 HTTP 状态，
+            // 让调用方展示鉴权失败并保留上次额度，不把拒绝包装成带新时间戳的空额度。
             if weeklyBody == nil, monthlyBody == nil {
                 for result in [weeklyResult, monthlyResult] {
                     if case .failure(let error) = result,
                        let quotaError = error as? QuotaFetchError,
                        case .httpError(let status) = quotaError,
                        status == 401 || status == 403 {
-                        return ProviderQuotaData(isForbidden: true)
+                        throw quotaError
                     }
                 }
             }
@@ -95,7 +210,7 @@ nonisolated struct CPAQuotaFetcher: Sendable {
                let analytics = try? CodexResetCreditInventoryFetcher.analytics(data: inventory) {
                 quota.analytics = CodexResetCreditInventoryFetcher.merge(analytics, into: quota.analytics)
             }
-            try Task.checkCancellation()
+            try await checkSession()
             return quota
         case .claude:
             headers["anthropic-beta"] = "oauth-2025-04-20"
@@ -107,7 +222,7 @@ nonisolated struct CPAQuotaFetcher: Sendable {
             } else {
                 quota.planType = quota.planType ?? metadata.plan
             }
-            try Task.checkCancellation()
+            try await checkSession()
             return quota
         case .antigravity:
             headers["User-Agent"] = AntigravityQuotaEndpoints.userAgent
@@ -117,7 +232,7 @@ nonisolated struct CPAQuotaFetcher: Sendable {
             if let knownProject = metadata.projectID { project = knownProject }
             else {
                 let discoveredProject = await subscription?.cloudaicompanionProject
-                try Task.checkCancellation()
+                try await checkSession()
                 guard let discoveredProject else { throw QuotaFetchError.invalidResponse }
                 project = discoveredProject
             }
@@ -129,7 +244,7 @@ nonisolated struct CPAQuotaFetcher: Sendable {
             }
             let models = try await reader.fetch(projectID: project)
             let subscriptionInfo = await subscription
-            try Task.checkCancellation()
+            try await checkSession()
             return ProviderQuotaData(
                 models: models,
                 planType: subscriptionInfo.flatMap(CPAQuotaProfileMapper.antigravityPlan) ?? metadata.plan,
@@ -167,6 +282,7 @@ nonisolated struct CPAQuotaFetcher: Sendable {
         try Task.checkCancellation()
         let response = try await call(APICallRequest(authIndex: index, method: payload == nil ? "GET" : "POST",
                                                      url: url, header: headers, data: payload))
+        try await checkSession()
         guard (200...299).contains(response.statusCode) else { throw QuotaFetchError.httpError(response.statusCode) }
         guard let body = response.body else { throw QuotaFetchError.invalidResponse }
         return Data(body.utf8)

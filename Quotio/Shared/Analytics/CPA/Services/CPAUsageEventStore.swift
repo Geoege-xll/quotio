@@ -600,7 +600,7 @@ nonisolated final class CPAUsageEventStore {
     /// 一次 actor 调用完成同条件总览、趋势、52周热力图与当前分布维度；只返回有界图形数据。
     func dashboard(_ query: CPAUsageQuery, dimension: CPAUsageDimension,
                    metric: CPAUsageChartMetric, limit: Int, includesHistory: Bool = false,
-                   calendar: Calendar = .current) throws -> CPAUsageDashboardReport {
+                   calendar: Calendar = .current, now: Date = Date()) throws -> CPAUsageDashboardReport {
         let summary = try self.query(query, includeEvents: false)
         sqlite3_progress_handler(database, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
         defer { sqlite3_progress_handler(database, 0, nil, nil) }
@@ -650,16 +650,30 @@ nonisolated final class CPAUsageEventStore {
         }
         // 模型筛选本身并不隐含提供商条件，上游分析也按模型名称合并所有提供商。
         let provider = "''"
-        let group = column
-        let order = metric == .tokens ? "SUM(total_tokens)" : "COUNT(*)"
+        let group = "e." + column
+        let order: String
+        switch metric {
+        case .tokens: order = "SUM(e.total_tokens)"
+        case .requests: order = "COUNT(*)"
+        case .cost: order = "estimated_cost"
+        }
         let boundedLimit = min(1_000, max(8, limit))
-        let statement = try prepare("SELECT " + column + "," + provider + ",MAX(key_label),COUNT(*),COALESCE(SUM(total_tokens),0) FROM cpa_events"
-            + filter.sql + " GROUP BY " + group + " ORDER BY " + order + " DESC," + group + " LIMIT ?")
+        let priced = metric == .cost
+        // 窗口函数在 LIMIT 前合计全部维度；榜单的前 N 项不能当成精确窗口总费用。
+        let priceColumns = priced
+            ? ",\(Self.pricedCount),\(Self.estimatedCost) AS estimated_cost, SUM(\(Self.pricedCount)) OVER (), SUM(\(Self.estimatedCost)) OVER ()"
+            : ""
+        let eventSource = "(SELECT * FROM cpa_events\(filter.sql)) e" + (priced ? Self.priceJoin : "")
+        let grouping = group + (priced ? " COLLATE NOCASE" : "")
+        let statement = try prepare("SELECT \(group),\(provider),MAX(e.key_label),COUNT(*),COALESCE(SUM(e.total_tokens),0)"
+            + priceColumns + " FROM " + eventSource + " GROUP BY " + grouping
+            + " ORDER BY " + order + " DESC," + group + " LIMIT ?")
         defer { sqlite3_finalize(statement) }
         // 合并日归档时先返回维度聚合行再排序截断，不能漏掉在新事件排行之外的历史大户。
         // 这里仍只读取分类汇总，不解码完整请求历史；最终返回给 UI 的数量维持原上限。
         try bind(filter.values + [.integer(includesHistory ? -1 : boundedLimit + 1)], to: statement)
         var rows: [CPAUsageCategory] = []
+        var estimatedCost = CPAUsageCostEstimate()
         while true {
             let result = sqlite3_step(statement)
             if result == SQLITE_DONE { break }
@@ -671,42 +685,59 @@ nonisolated final class CPAUsageEventStore {
             else if dimension == .source { title = "#" + raw.prefix(12) }
             else if dimension == .apiKey { title = (text(statement, column: 2) ?? "Key") + " · #" + raw.prefix(8) }
             else { title = raw }
-            rows.append(CPAUsageCategory(key: key, title: title, provider: text(statement, column: 1) ?? "",
-                requests: Int(sqlite3_column_int64(statement, 3)), tokens: Int(sqlite3_column_int64(statement, 4))))
+            var row = CPAUsageCategory(key: key, title: title, provider: text(statement, column: 1) ?? "",
+                requests: Int(sqlite3_column_int64(statement, 3)), tokens: Int(sqlite3_column_int64(statement, 4)))
+            if priced {
+                row.cost = costEstimate(statement, count: 5, amount: 6, requests: row.requests)
+                if rows.isEmpty {
+                    estimatedCost = costEstimate(statement, count: 7, amount: 8, requests: summary.metrics.requests)
+                }
+            }
+            rows.append(row)
         }
         // 52 周热力图按当前非时间筛选条件（提供商、模型、来源、API Key、状态）聚合，
         // 时间窗口固定覆盖最近 52 周，不随今日 / 近24小时等摘要时间窗收缩。
-        let heatmapStart = UsageHeatmapPresentation.windowStart(now: Date(), anchorEnd: query.end, calendar: calendar)
-        let heatmapStartTimestamp = heatmapStart.timeIntervalSince1970
+        let heatmapToday = calendar.startOfDay(for: now)
+        let heatmapStart = UsageHeatmapPresentation.windowStart(now: now, calendar: calendar)
+        let heatmapEnd = calendar.date(byAdding: .day, value: 1, to: heatmapToday) ?? now
         let nonTime = nonTimeClauses(from: query)
-        let heatmapClauses = ["(ledger_day >= ? OR (ledger_day IS NULL AND ts >= ?))"] + nonTime.clauses
-        let heatmapValues: [Value] = [.number(heatmapStartTimestamp), .number(heatmapStartTimestamp)] + nonTime.values
+        // 新事件按实际时间筛入自然日窗口，不从精确筛选（可能仅几个小时）截取日格。
+        let heatmapClauses = ["ts >= ?", "ts < ?"] + nonTime.clauses
+        let heatmapValues: [Value] = [.number(heatmapStart.timeIntervalSince1970),
+                                      .number(heatmapEnd.timeIntervalSince1970)] + nonTime.values
+        let heatmapPriceColumns = priced ? ",\(Self.pricedCount),\(Self.estimatedCost)" : ""
+        let heatmapFilter = heatmapClauses.joined(separator: " AND ")
+        let heatmapSource = "(SELECT * FROM cpa_events WHERE \(heatmapFilter)) e" + (priced ? Self.priceJoin : "")
         let heatmapSQL = """
-            SELECT COALESCE(ledger_day, CAST(strftime('%s', date(ts,'unixepoch','localtime'),'utc') AS REAL)) AS day_ts,
-                   provider, model,
-                   COUNT(*), COALESCE(SUM(outcome!='success'),0),
-                   COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-                   COALESCE(SUM(cached_tokens),0), COALESCE(SUM(reasoning_tokens),0),
-                   COALESCE(SUM(total_tokens),0), COALESCE(SUM(latency),0), COUNT(latency)
-            FROM cpa_events WHERE
-            """ + " " + heatmapClauses.joined(separator: " AND ") + """
-             GROUP BY 1, provider COLLATE BINARY, model COLLATE BINARY
-             ORDER BY day_ts, provider, model
+            SELECT CAST(strftime('%s', date(e.ts,'unixepoch','localtime'),'utc') AS REAL) AS day_ts,
+                   e.provider, e.model,
+                   COUNT(*), COALESCE(SUM(e.outcome!='success'),0),
+                   COALESCE(SUM(e.input_tokens),0), COALESCE(SUM(e.output_tokens),0),
+                   COALESCE(SUM(e.cached_tokens),0), COALESCE(SUM(e.reasoning_tokens),0),
+                   COALESCE(SUM(e.total_tokens),0), COALESCE(SUM(e.latency),0), COUNT(e.latency)\(heatmapPriceColumns)
+            FROM \(heatmapSource)
+            GROUP BY 1, e.provider COLLATE BINARY, e.model COLLATE BINARY
+            ORDER BY day_ts, e.provider, e.model
             """
         let heatmapStatement = try prepare(heatmapSQL)
         defer { sqlite3_finalize(heatmapStatement) }
         try bind(heatmapValues, to: heatmapStatement)
         var heatmapBuckets: [UsageBucket] = []
+        var heatmapCosts: [String: CPAUsageCostEstimate] = [:]
         while true {
             try Task.checkCancellation()
             let result = sqlite3_step(heatmapStatement)
             if result == SQLITE_DONE { break }
             guard result == SQLITE_ROW else { throw StoreError.queryFailed }
-            heatmapBuckets.append(self.bucket(heatmapStatement, startColumn: 0))
+            let bucket = self.bucket(heatmapStatement, startColumn: 0)
+            heatmapBuckets.append(bucket)
+            if priced { heatmapCosts[bucket.id] = costEstimate(heatmapStatement, count: 12, amount: 13, requests: bucket.requests) }
         }
         return CPAUsageDashboardReport(summary: summary, trend: points, hourly: hourly,
             categories: includesHistory ? rows : Array(rows.prefix(boundedLimit)),
-            hasMoreCategories: rows.count > boundedLimit, heatmapBuckets: heatmapBuckets)
+            hasMoreCategories: rows.count > boundedLimit, heatmapBuckets: heatmapBuckets,
+            estimatedCost: estimatedCost, heatmapCosts: heatmapCosts, heatmapToday: heatmapToday,
+            selectedStart: query.start, selectedEnd: query.end)
     }
 
     /// 仅在旧存储迁移时逐桶扣除已导入明细，得到永久历史基线；结果写入独立的数值表。
@@ -764,6 +795,23 @@ nonisolated final class CPAUsageEventStore {
         return history
     }
 
+    private static let priceJoin = " LEFT JOIN cpa_model_prices p ON e.model=p.model COLLATE NOCASE"
+    private static let priceExpressions: (count: String, cost: String) = {
+        let read = "COALESCE(e.cache_read,0)"
+        let write = "COALESCE(e.cache_write,0)"
+        let eligible = "p.model IS NOT NULL AND (e.cached_tokens=0 OR (e.cache_read IS NOT NULL AND e.cache_write IS NOT NULL)) AND (" + read + "=0 OR p.cache_read IS NOT NULL) AND (" + write + "=0 OR p.cache_write IS NOT NULL)"
+        let cost = "(MAX(0,e.input_tokens-" + read + "-" + write + ")*p.input+e.output_tokens*p.output+" + read + "*COALESCE(p.cache_read,0)+" + write + "*COALESCE(p.cache_write,0))/1000000.0"
+        return ("SUM(CASE WHEN \(eligible) THEN 1 ELSE 0 END)",
+                "SUM(CASE WHEN \(eligible) THEN \(cost) ELSE NULL END)")
+    }()
+    private static var pricedCount: String { priceExpressions.count }
+    private static var estimatedCost: String { priceExpressions.cost }
+
+    private func costEstimate(_ row: OpaquePointer, count: Int32, amount: Int32, requests: Int) -> CPAUsageCostEstimate {
+        CPAUsageCostEstimate(amount: sqlite3_column_type(row, amount) == SQLITE_NULL ? nil : sqlite3_column_double(row, amount),
+                             isPartial: sqlite3_column_int64(row, count) < Int64(requests))
+    }
+
     /// 采用上游基础公式：非缓存输入、输出、缓存读、缓存写分别计价，推理不再次累加。
     /// 缺缓存拆分或对应单价的请求不计入已估算覆盖率，价格缺失不等于零费用。
     func pricing(_ query: CPAUsageQuery) throws -> CPAUsagePricingReport {
@@ -771,18 +819,12 @@ nonisolated final class CPAUsageEventStore {
         sqlite3_progress_handler(database, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
         defer { sqlite3_progress_handler(database, 0, nil, nil) }
         let filter = filters(query, timeOnly: false)
-        let read = "COALESCE(e.cache_read,0)"
-        let write = "COALESCE(e.cache_write,0)"
-        let eligible = "p.model IS NOT NULL AND (e.cached_tokens=0 OR (e.cache_read IS NOT NULL AND e.cache_write IS NOT NULL)) AND (" + read + "=0 OR p.cache_read IS NOT NULL) AND (" + write + "=0 OR p.cache_write IS NOT NULL)"
-        let cost = "(MAX(0,e.input_tokens-" + read + "-" + write + ")*p.input+e.output_tokens*p.output+" + read + "*COALESCE(p.cache_read,0)+" + write + "*COALESCE(p.cache_write,0))/1000000.0"
         // 筛选先在事件子查询执行，避免 model 字段与价格目录发生列名歧义。
         let statement = try prepare("""
             SELECT e.model,COUNT(*),COALESCE(SUM(e.total_tokens),0),
-                SUM(CASE WHEN \(eligible) THEN 1 ELSE 0 END),
-                SUM(CASE WHEN \(eligible) THEN \(cost) ELSE NULL END),
+                \(Self.pricedCount), \(Self.estimatedCost),
                 p.input,p.output,p.cache_read,p.cache_write
-            FROM (SELECT * FROM cpa_events\(filter.sql)) e
-            LEFT JOIN cpa_model_prices p ON e.model=p.model COLLATE NOCASE
+            FROM (SELECT * FROM cpa_events\(filter.sql)) e\(Self.priceJoin)
             GROUP BY e.model ORDER BY SUM(e.total_tokens) DESC,e.model
             """)
         defer { sqlite3_finalize(statement) }

@@ -176,27 +176,87 @@ final class CPAAutoRefreshTests: XCTestCase {
         XCTAssertFalse(f.model.isMutatingAPIKeys)
     }
 
-    func testLateInitialLocalRefreshCannotReplaceRunningCPATimer() async throws {
-        let f = try fixture(), gate = CPAPollingInitializationGate()
-        let initialStarted = expectation(description: "启动本地读取仍未完成")
-        f.model.proxyManager.setRuntimeStateForTesting(running: false, sessionID: UUID())
-        let initialization = Task {
-            await f.model.initializeFullModeForTesting(refreshQuotas: {
-                initialStarted.fulfill()
-                await gate.wait()
-            }, shouldAutoStartProxy: { false })
+    func testMissingOrFailedCPAStartupKeepsTimerOffAndPreservesPriorQuota() async throws {
+        for isInstalled in [false, true] {
+            let f = try fixture()
+            let originalTime = Date(timeIntervalSince1970: 1_000)
+            f.model.providerQuotas[.claude] = [f.file.quotaLookupKey:
+                ProviderQuotaData(models: [ModelQuota(name: "snapshot", percentage: 77, resetTime: "")],
+                                  lastUpdated: originalTime)]
+            f.model.lastQuotaRefreshTime = originalTime
+            f.model.proxyManager.setRuntimeStateForTesting(running: false, sessionID: UUID())
+            var starts = 0
+            await f.model.initializeLocalProxyForTesting(isInstalled: isInstalled, startProxy: { starts += 1 })
+            f.model.restartAutoRefresh()
+            await f.model.manualRefresh()
+            await f.model.refreshQuota(for: .claude)
+            await f.model.refreshQuota(for: QuotaAccountID(provider: .claude, accountKey: f.file.quotaLookupKey))
+            XCTAssertEqual(starts, isInstalled ? 1 : 0)
+            XCTAssertFalse(f.model.isQuotaAutoRefreshScheduledForTesting)
+            XCTAssertFalse(f.model.hasCurrentCPAAccountDirectory)
+            XCTAssertEqual(f.state.requestCount, 0)
+            XCTAssertEqual(f.model.lastQuotaRefreshTime, originalTime)
+            assertQuota(77, f)
         }
-        await fulfillment(of: [initialStarted], timeout: 3)
-        // 只模拟用户已启动代理的内存来源；不调用 startProxy，也不触碰用户正在运行的服务。
-        f.model.proxyManager.setRuntimeStateForTesting(running: true, sessionID: UUID())
-        start(f)
-        await waitForSleep(1, f)
-        gate.release()
-        await initialization.value
-        XCTAssertEqual(f.clock.cancelledWaits, 0, "迟到初始化不得取消已建立的 CPA 轮询")
-        f.clock.advance(by: .seconds(600))
-        await waitForSleep(2, f)
-        assertQuota(55, f)
+    }
+
+    func testInstalledProxyStartsBeforeAnyQuotaRead() async throws {
+        let f = try fixture()
+        f.model.proxyManager.setRuntimeStateForTesting(running: false, sessionID: UUID())
+        var starts = 0
+        await f.model.initializeLocalProxyForTesting(isInstalled: true, startProxy: {
+            starts += 1
+            f.model.proxyManager.setRuntimeStateForTesting(running: true, sessionID: UUID())
+        })
+        XCTAssertEqual(starts, 1)
+        XCTAssertTrue(f.model.proxyManager.proxyStatus.running)
+        XCTAssertEqual(f.state.requestCount, 0)
+    }
+
+    func testSuccessfulEmptyDirectoryDoesNotCreateLocalAccount() async throws {
+        let gate = LifecycleHTTPResponseGate(), started = expectation(description: "首个目录已请求")
+        let f = try fixture(credentialGate: gate, credentialStarted: started)
+        let previous = Date(timeIntervalSince1970: 1_000)
+        f.model.providerQuotas[.claude] = [f.file.quotaLookupKey:
+            ProviderQuotaData(models: [ModelQuota(name: "old", percentage: 77, resetTime: "")], lastUpdated: previous)]
+        f.model.lastQuotaRefreshTime = previous
+        f.model.localQuotaFetchHookForTesting = { _ in
+            XCTFail("成功空目录不能触发本机读取或造账号")
+            return [:]
+        }
+        let refresh = Task { await f.model.refreshQuota(for: .claude) }
+        await fulfillment(of: [started], timeout: 3)
+        gate.release(.reply(#"{"files":[]}"#))
+        await refresh.value
+        XCTAssertTrue(f.model.hasCurrentCPAAccountDirectory)
+        XCTAssertTrue(f.model.authFiles.isEmpty)
+        XCTAssertNil(f.model.providerQuotas[.claude])
+        XCTAssertEqual(f.model.lastQuotaRefreshTime, previous)
+        XCTAssertEqual(f.state.requestCount, 1)
+    }
+
+    func testFailedDirectoryPreservesOldQuotaAndDisablesAccountManagement() async throws {
+        let gate = LifecycleHTTPResponseGate(), started = expectation(description: "首个目录已请求")
+        let f = try fixture(credentialGate: gate, credentialStarted: started)
+        let previous = Date(timeIntervalSince1970: 1_000)
+        f.model.providerQuotas[.claude] = [f.file.quotaLookupKey:
+            ProviderQuotaData(models: [ModelQuota(name: "old", percentage: 77, resetTime: "")], lastUpdated: previous)]
+        f.model.lastQuotaRefreshTime = previous
+        f.model.localQuotaFetchHookForTesting = { _ in
+            XCTFail("认证失败不能触发本机补查")
+            return [:]
+        }
+        let refresh = Task { await f.model.manualRefresh() }
+        await fulfillment(of: [started], timeout: 3)
+        gate.release(.replyStatus("{}", 403))
+        await refresh.value
+        XCTAssertFalse(f.model.hasCurrentCPAAccountDirectory)
+        XCTAssertNil(f.model.providerQuotas[.claude]?[f.file.quotaLookupKey]?.refreshSource)
+        XCTAssertEqual(f.model.providerQuotas[.claude]?[f.file.quotaLookupKey]?.lastUpdated, previous)
+        XCTAssertEqual(f.model.lastQuotaRefreshTime, previous)
+        XCTAssertEqual(f.state.requestCount, 1)
+        XCTAssertNotNil(f.model.errorMessage)
+        assertQuota(77, f)
     }
 
     func testCancellationDuringSleepDoesNotReadOrStartAnotherCycle() async throws {
@@ -375,11 +435,4 @@ private final class CPAPollingResponses: @unchecked Sendable {
         let data = try! JSONSerialization.data(withJSONObject: ["status_code": 200, "header": [:], "body": body])
         return String(decoding: data, as: UTF8.self)
     }
-}
-
-@MainActor
-private final class CPAPollingInitializationGate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    func wait() async { await withCheckedContinuation { continuation = $0 } }
-    func release() { continuation?.resume(); continuation = nil }
 }

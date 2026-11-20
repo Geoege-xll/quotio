@@ -30,11 +30,9 @@ final class AuthFileIdentityTests: XCTestCase {
             lastUpdated: Date(timeIntervalSince1970: updated), accountDisplayName: "work@example.com")
     }
 
-    private func accounts(_ files: [AuthFile], direct: [DirectAuthFile] = [],
-                          quotas: [String: ProviderQuotaData] = [:]) -> [AccountRowData] {
-        AccountPageData.groupedAccounts(mode: .localProxy, proxyRunning: true, authFiles: files,
-            directAuthFiles: direct, monitorAccounts: [], quotas: [.claude: quotas], customProviders: [],
-            warpTokens: [], monitorStatus: { _ in (nil, nil) })[.claude] ?? []
+    private func accounts(_ files: [AuthFile]) -> [AccountRowData] {
+        AccountPageData.groupedAccounts(hasCurrentCPAAccountDirectory: true, authFiles: files,
+            importedIDEAccountKeys: [:], customProviders: [], warpTokens: [])[.claude] ?? []
     }
 
     func testDiskAndRuntimeRecordForSameFileBecomeOneCredential() throws {
@@ -108,7 +106,7 @@ final class AuthFileIdentityTests: XCTestCase {
         let migrated = AuthFileIdentity.rekey([AIProvider.claude: raw], aliases: aliases) { $0.lastUpdated > $1.lastUpdated }
         XCTAssertEqual(migrated[.claude]?.count, 1)
         XCTAssertEqual(migrated[.claude]?[runtime.quotaLookupKey]?.models[0].percentage, 70)
-        let rows = accounts([disk, runtime], direct: [direct()], quotas: raw)
+        let rows = accounts([disk, runtime])
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows[0].quotaAccountKeys, [runtime.quotaLookupKey])
         XCTAssertEqual(rows[0].source, .proxy)
@@ -126,7 +124,7 @@ final class AuthFileIdentityTests: XCTestCase {
         XCTAssertEqual(mapped[.claude]?.count, 1)
         XCTAssertEqual(mapped[.claude]?[runtime.quotaLookupKey]?.models[0].percentage, 40,
             "已有 CPA 精确结果优先，不能被更新较晚但来自旧身份键的快照覆盖")
-        XCTAssertEqual(accounts([disk, runtime], direct: [direct()], quotas: raw).count, 1)
+        XCTAssertEqual(accounts([disk, runtime]).count, 1)
     }
 
     func testNewestLegacySnapshotIsSelectedWithoutSummingQuota() throws {
@@ -145,9 +143,10 @@ final class AuthFileIdentityTests: XCTestCase {
         let aliases = AuthFileIdentity.quotaAliases(mode: .localProxy, proxyRunning: true,
             authFiles: [a, b], directFiles: [])
         XCTAssertNil(aliases[.claude]?["work@example.com"])
-        let rows = accounts([a, b], quotas: ["work@example.com": quota(50, updated: 10)])
-        XCTAssertEqual(rows.filter { $0.source == .proxy }.count, 2)
-        XCTAssertEqual(rows.filter { $0.source == .quotaCache }.count, 1)
+        let rows = accounts([a, b])
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.source == .proxy })
+        XCTAssertFalse(rows.flatMap(\.quotaAccountKeys).contains("work@example.com"))
     }
 
     func testLocalEmailCollisionBlocksAliasEvenIfOnlyOneFileHasLoadedInCPA() throws {

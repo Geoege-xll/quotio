@@ -8,8 +8,8 @@ import Observation
 
 /// 账号页、仪表盘、客户端配置与菜单栏共用的现有状态协调器，因此完整归入 Shared/Accounts。
 /// 应用继续持有同一实例；展示、模型、菜单、凭据、授权、IDE、账号变更、取数、刷新、启动及预热执行分文件维护。
-/// 全部存储属性、Observation 标注、刷新世代、初始化及任务句柄继续由本类持有，
-/// 保留原刷新、取消和会话生命周期，避免重复采集、重复账号目录或跨页面状态失配。
+/// 目录状态及原任务句柄继续由本类独占。读取、启停和账号变更共用同一会话校验，
+/// 避免重复采集或跨页面使用不同的目录。
 @MainActor
 @Observable
 final class QuotaViewModel {
@@ -22,6 +22,7 @@ final class QuotaViewModel {
             // 客户端替换同步废弃旧读写所有权；旧请求随后返回时既不能提交，也不能释放新请求的互斥。
             // 不创建或取消额外 Task，实际网络失效仍由原生命周期负责。
             apiKeyRequestID = UUID()
+            cpaDirectory.confirmedSession = nil
             isMutatingAPIKeys = false
             // 同步撤销模型 VM 已排入配置 actor 的旧许可。不能只在 await 返回后检查 client，
             // 否则 stopProxy／模式切换可能先结束会话，旧目录随后仍在磁盘生效。
@@ -60,8 +61,6 @@ final class QuotaViewModel {
     @ObservationIgnored let directAuthService: DirectAuthFileService
     /// 账号变更扩展复用原注入的协调器；只开放 let 引用，世代、持久化和在途刷新仍由原实例管理。
     @ObservationIgnored let monitorCoordinator: MonitorRefreshCoordinator
-    /// 默认仍引用原 shared 授权 actor；只读注入用于离线会话回归，pending 和任务仍由原协调器持有。
-    @ObservationIgnored let monitorOAuth: MonitorOAuthCoordinator
     /// 默认仍持有原共享通知管理器；隔离回归可注入同类型实例，不公开通知状态或私有 setter。
     @ObservationIgnored private let notificationManager: NotificationManager
     /// 菜单、传输和授权扩展读取同一个模式世代；只开放只读引用，模式状态仍由原 manager 管理。
@@ -70,28 +69,29 @@ final class QuotaViewModel {
     /// 每个异步刷新在第一次挂起前取得上下文，结果提交前检查账号与运行模式两个世代。
     /// 账号变动使整批旧结果作废，下一次刷新仍可正常读取用户重新添加的同名账号。
     /// 授权、IDE 额度及账号变更扩展复用此原上下文；世代读取和提交校验继续集中于主类。
-    struct RefreshContext {
+    nonisolated struct RefreshContext: Sendable {
         let revision: UInt64
         let modeRevision: UInt64
         let sessionID: UUID
+        let proxyRunning: Bool
         var mutationAccountID: String? = nil
     }
     /// IDE 与账号变更扩展在原调用时点取得统一上下文，继续由本类读取同一组账号、模式和代理会话世代。
     func refreshContext() -> RefreshContext {
         RefreshContext(revision: monitorCoordinator.revision.current, modeRevision: modeManager.revision,
-                       sessionID: proxyManager.runtimeSessionID)
+                       sessionID: proxyManager.runtimeSessionID, proxyRunning: proxyManager.proxyStatus.running)
     }
     /// 分文件方法在挂起后复用原提交检查；不缓存判断结果，也不为扩展另建一套会话有效性规则。
     func canCommit(_ context: RefreshContext) -> Bool {
         context.revision == monitorCoordinator.revision.current
             && canUseRefreshSource(context)
     }
-    /// 等待刷新槽位时账号可能正常编辑，但读取来源不能跨模式或代理启停。
-    /// 预约成功后先释放保护，再校验此来源；防止旧本地任务借用新监控上下文写回。
-    /// 刷新扩展仍在原调用位置复核来源；检查继续由主类读取取消、模式世代和代理会话，不缓存结果。
+    /// 等待刷新槽位时账号可能正常编辑，但读取来源不能跨代理就绪边界。
+    /// CPA 在实际就绪前已经生成会话 ID，因此同一 ID 仍须核对运行状态，拒绝迟到的停机直读。
     func canUseRefreshSource(_ context: RefreshContext) -> Bool {
         !Task.isCancelled && context.modeRevision == modeManager.revision
             && context.sessionID == proxyManager.runtimeSessionID
+            && context.proxyRunning == proxyManager.proxyStatus.running
     }
     /// 授权扩展与账号编辑共用此原入口；完整保留世代推进顺序，不新增第二套变更协调器。
     @discardableResult func beginAccountMutation(accountID: String? = nil) -> RefreshContext {
@@ -141,7 +141,144 @@ final class QuotaViewModel {
             if currentPage == .quota { currentPage = .providers }
         }
     }
-    var authFiles: [AuthFile] = []
+    /// 同一份目录管理展示副本、当前会话许可和请求顺序。世代及恢复标记仅供同步事务判断；
+    /// 界面继续观察文件、许可和错误，后台开始读取时无需重新渲染页面。
+    @MainActor @Observable
+    fileprivate final class CPAAccountDirectoryState {
+        var files: [AuthFile] = []
+        var confirmedSession: (sessionID: UUID, modeRevision: UInt64)?
+        var failure: String?
+        @ObservationIgnored var readGeneration: UInt64 = 0
+        @ObservationIgnored var publishedGeneration: UInt64 = 0
+        @ObservationIgnored var isRestoringSnapshot = false
+        let snapshotDefaults: UserDefaults?
+
+        init(snapshotDefaults: UserDefaults?) {
+            self.snapshotDefaults = snapshotDefaults
+        }
+    }
+
+    private let cpaDirectory: CPAAccountDirectoryState
+
+    /// 停机、启动失败或目录请求失败时，现有页面继续通过此入口读取上一份确认的快照。
+    var authFiles: [AuthFile] {
+        get { cpaDirectory.files }
+        set { cpaDirectory.files = newValue }
+    }
+
+    var lastCPAAccountDirectoryError: String? { cpaDirectory.failure }
+
+    /// 额度入口可在就绪后尝试重新读取目录。账号管理操作必须等待本会话的成功目录。
+    var canRefreshAccountQuotas: Bool { proxyManager.proxyStatus.running && apiClient != nil }
+    var hasCurrentCPAAccountDirectory: Bool {
+        canRefreshAccountQuotas && cpaDirectory.confirmedSession?.sessionID == proxyManager.runtimeSessionID
+            && cpaDirectory.confirmedSession?.modeRevision == modeManager.revision
+    }
+
+    /// 同一会话可以同时发起手动刷新和后台读取。只允许较新的目录完成结果发布；
+    /// 删除推进的账号世代阻止删除前已经在途的结果恢复旧账号。
+    func readCPAAuthDirectory(
+        read: () async throws -> [AuthFile],
+        isCurrentSource: () -> Bool
+    ) async throws -> [AuthFile]? {
+        let context = refreshContext()
+        cpaDirectory.readGeneration &+= 1
+        let generation = cpaDirectory.readGeneration
+        do {
+            let files = try await read()
+            guard canCommit(context), isCurrentSource(), generation > cpaDirectory.publishedGeneration else { return nil }
+            cpaDirectory.publishedGeneration = generation
+            if let previous = lastCPAAccountDirectoryError, errorMessage == previous { errorMessage = nil }
+            cpaDirectory.failure = nil
+            let previousNames = Set(authFiles.map(\.name))
+            authFiles = AuthFileIdentity.deduplicated(files)
+            cpaDirectory.confirmedSession = (context.sessionID, context.modeRevision)
+            reconcileAccountQuotaIdentities()
+            retainKnownAccountQuotas()
+            persistAccountSnapshot()
+            if previousNames != Set(authFiles.map(\.name)) {
+                cpaDirectory.snapshotDefaults?.set(Date().timeIntervalSince1970, forKey: Self.authFilesChangedKey)
+            }
+            syncMenuBarSelection()
+            return authFiles
+        } catch {
+            guard canCommit(context), isCurrentSource(), generation > cpaDirectory.publishedGeneration,
+                  let message = Self.accountQuotaFailureMessage(error) else { return nil }
+            // 快照与更新时间继续显示，管理按钮闭锁，直到同一会话取得下一份有效目录。
+            cpaDirectory.publishedGeneration = generation
+            cpaDirectory.confirmedSession = nil
+            cpaDirectory.failure = message
+            errorMessage = message
+            notifyQuotaDataChanged()
+            throw error
+        }
+    }
+
+    /// Cursor／Trae 原镜像只保存显式扫描导入的账号。轮询只能更新已经存在的键。
+    var importedIDEAccountKeys: [AIProvider: Set<String>] {
+        Self.ideProvidersToSave.reduce(into: [:]) { result, provider in
+            if let quotas = providerQuotas[provider] { result[provider] = Set(quotas.keys) }
+        }
+    }
+
+    var configuredQuotaProviders: [CustomProvider] {
+        #if DEBUG
+        if let customProvidersForTesting { return customProvidersForTesting }
+        #endif
+        return CustomProviderService.shared.providers
+    }
+
+    /// 启用的用户配置和已确认的 CPA 条目与页面使用相同身份目录。同步过滤可避免空目录或删除后出现残留账号。
+    private func retainKnownAccountQuotas() {
+        let allowed = Set(MenuBarAccountCatalog.items(authFiles: authFiles, importedIDEAccountKeys: importedIDEAccountKeys,
+            customProviders: configuredQuotaProviders, warpTokens: WarpService.shared.tokens).compactMap { item in
+                item.aiProvider.map { QuotaAccountID(provider: $0, accountKey: item.accountKey) }
+            })
+        providerQuotas = providerQuotas.reduce(into: [:]) { filtered, entry in
+            let values = entry.value.filter { allowed.contains(QuotaAccountID(provider: entry.key, accountKey: $0.key)) }
+            if !values.isEmpty { filtered[entry.key] = values }
+        }
+        subscriptionInfos = subscriptionInfos.reduce(into: [:]) { filtered, entry in
+            let values = entry.value.filter { allowed.contains(QuotaAccountID(provider: entry.key, accountKey: $0.key)) }
+            if !values.isEmpty { filtered[entry.key] = values }
+        }
+        monitorAccountIssues = monitorAccountIssues.filter { allowed.contains($0.key) }
+    }
+
+    /// 在同步提交段持久化。IDE 继续使用原镜像；其他额度仅按现存目录／连接身份保存。
+    func persistAccountSnapshot() {
+        guard let defaults = cpaDirectory.snapshotDefaults else { return }
+        let allowed = Set(MenuBarAccountCatalog.items(authFiles: authFiles, customProviders: configuredQuotaProviders,
+                                                     warpTokens: WarpService.shared.tokens).compactMap { item in
+            item.aiProvider.map { QuotaAccountID(provider: $0, accountKey: item.accountKey) }
+        })
+        let quotas = providerQuotas.reduce(into: [AIProvider: [String: ProviderQuotaData]]()) { filtered, entry in
+            let values = entry.value.filter { allowed.contains(QuotaAccountID(provider: entry.key, accountKey: $0.key)) }
+            if !values.isEmpty { filtered[entry.key] = values }
+        }
+        let snapshot = CPAAccountQuotaSnapshot(authFiles: authFiles, quotas: quotas, lastQuotaRefreshTime: lastQuotaRefreshTime)
+        if let data = try? JSONEncoder().encode(snapshot) {
+            defaults.set(data, forKey: CPAAccountQuotaSnapshot.preferenceKey)
+        }
+    }
+
+    private func restoreAccountSnapshot() {
+        guard let data = cpaDirectory.snapshotDefaults?.data(forKey: CPAAccountQuotaSnapshot.preferenceKey),
+              let snapshot = try? JSONDecoder().decode(CPAAccountQuotaSnapshot.self, from: data) else { return }
+        cpaDirectory.isRestoringSnapshot = true
+        defer { cpaDirectory.isRestoringSnapshot = false }
+        authFiles = snapshot.authFiles
+        providerQuotas.merge(snapshot.quotas) { current, _ in current }
+        subscriptionInfos = snapshot.quotas.mapValues { $0.compactMapValues(\.subscriptionInfo) }
+        lastQuotaRefreshTime = snapshot.lastQuotaRefreshTime
+        retainKnownAccountQuotas()
+    }
+
+    /// 只有实际成功的读取可以推进可见更新时间。失败及目录读取只保留历史时间。
+    func recordAccountQuotaSuccess(at updatedAt: Date) {
+        lastQuotaRefreshTime = max(lastQuotaRefreshTime ?? updatedAt, updatedAt)
+        persistAccountSnapshot()
+    }
     /// 仪表盘与统计页共享同一个队列消费者，历史快照随应用生命周期恢复。
     let usageMonitor = UsageStatisticsStore()
     var apiKeys: [String] = []
@@ -164,9 +301,8 @@ final class QuotaViewModel {
     /// Notification name for quota data updates (used for menu bar refresh)
     static let quotaDataDidChangeNotification = Notification.Name("QuotaViewModel.quotaDataDidChange")
     
-    /// Direct auth files for quota-only mode
+    /// 导入与既有兼容操作用的本地认证类型，不参与 CPA 账号展示或额度查询。
     var directAuthFiles: [DirectAuthFile] = []
-    var monitorAccounts: [MonitorAccount] = []
     var monitorIssues: [AIProvider: MonitorRefreshIssue] = [:]
     var monitorAccountIssues: [QuotaAccountID: MonitorRefreshIssue] = [:]
 
@@ -197,7 +333,7 @@ final class QuotaViewModel {
     }
 
     func invalidateModelsAfterCPAAccountChange(source: RefreshContext) -> AccountModelCatalogRefresh? {
-        guard canUseRefreshSource(source), !modeManager.isMonitorMode else { return nil }
+        guard canUseRefreshSource(source) else { return nil }
         var endpoints = [proxyManager.baseURL]
         if let tunnel = TunnelManager.shared.tunnelState.publicURL { endpoints.append(tunnel) }
         let configuration = _agentSetupViewModel?.invalidateModelsForAccountChange(serviceBaseURLs: endpoints)
@@ -209,13 +345,13 @@ final class QuotaViewModel {
     }
 
     func refreshModelsAfterCPAAccountChange(_ refresh: AccountModelCatalogRefresh?) async {
-        guard let refresh, canUseRefreshSource(refresh.source), !modeManager.isMonitorMode else { return }
+        guard let refresh, canUseRefreshSource(refresh.source) else { return }
         if let configuration = refresh.configuration {
             await _agentSetupViewModel?.reloadModelsAfterAccountChange(configuration)
         }
-        guard canUseRefreshSource(refresh.source), !modeManager.isMonitorMode else { return }
+        guard canUseRefreshSource(refresh.source) else { return }
         if refresh.refreshVisibleCatalog { await refreshDashboardModels() }
-        guard canUseRefreshSource(refresh.source), !modeManager.isMonitorMode else { return }
+        guard canUseRefreshSource(refresh.source) else { return }
         var endpoints = [proxyManager.baseURL]
         if let tunnel = TunnelManager.shared.tunnelState.publicURL { endpoints.append(tunnel) }
         // 使用原懒加载所有者；只有磁盘已接管的 Claude 配置才取目录，不增加持久 Task。
@@ -245,6 +381,7 @@ final class QuotaViewModel {
         // 字典中的账号数不变也可能更新额度；任何数据写回都通知原生菜单栏。
         // SwiftUI 配额页和 NSStatusItem 从同一份新快照刷新，不依赖窗口是否打开。
         didSet {
+            guard !cpaDirectory.isRestoringSnapshot else { return }
             notifyQuotaDataChanged()
             // 同步发布来源及新旧值快照，采样服务由 App 注入和订阅，不在本 VM 新增存储／任务。
             // 不能在稍后的菜单通知中读取当时的新模式来解释旧观测。
@@ -267,7 +404,9 @@ final class QuotaViewModel {
     @ObservationIgnored private var warmupTask: Task<Void, Never>?
     /// 生命周期扩展复用原只读启动协调器；主类仍唯一创建和持有，停止仍取消同一轮初始化。
     @ObservationIgnored let proxyStartFlow = ProxyStartFlow()
+    @ObservationIgnored private var proxyStartupDataTask: Task<Void, Never>?
     @ObservationIgnored private var proxyRecoveryTask: Task<Void, Never>?
+    private(set) var isRestartingProxy = false
     @ObservationIgnored private var lastLogTimestamp: Int?
     @ObservationIgnored private var isWarmupRunning = false
     @ObservationIgnored private var warmupRunningAccounts: Set<WarmupAccountKey> = []
@@ -362,8 +501,8 @@ final class QuotaViewModel {
          refreshSettings: RefreshSettingsManager = .shared,
          warmupSettings: WarmupSettingsManager = .shared,
          notificationManager: NotificationManager = .shared,
-         monitorOAuth: MonitorOAuthCoordinator = .shared) {
-        self.monitorOAuth = monitorOAuth
+         accountSnapshotDefaults: UserDefaults? = nil) {
+        self.cpaDirectory = CPAAccountDirectoryState(snapshotDefaults: accountSnapshotDefaults)
         self.notificationManager = notificationManager
         self.warmupSettings = warmupSettings
         self.modeManager = modeManager
@@ -374,10 +513,11 @@ final class QuotaViewModel {
         self.proxyManager = CLIProxyManager.shared
         // 原生页面渲染回归只需离线快照。显式关闭后台服务后，不恢复真实用量、
         // 不读取用户 IDE 缓存、不注册刷新／预热回调；正常应用默认完整启动原有服务。
+        if startsBackgroundServices { loadPersistedIDEQuotas() }
+        restoreAccountSnapshot()
         guard startsBackgroundServices else { return }
         observeUsageLifecycle()
         Task { await usageMonitor.restore() }
-        loadPersistedIDEQuotas()
         setupRefreshCadenceCallback()
         setupWarmupCallback()
         restartWarmupScheduler()
@@ -438,116 +578,40 @@ final class QuotaViewModel {
     }
     
     func restartAutoRefresh() {
-        if modeManager.isMonitorMode {
-            startQuotaOnlyAutoRefresh()
-        } else if proxyManager.proxyStatus.running {
+        if canRefreshAccountQuotas {
             startAutoRefresh()
         } else {
-            startQuotaAutoRefreshWithoutProxy()
+            // 停机和安装缺失都只展示上次成功快照，不创建备用额度任务。
+            stopQuotaAutoRefresh()
         }
     }
-    
-    // MARK: - Mode-Aware Initialization
+
+    // MARK: - 启动初始化
 
     func initialize() async {
-        invalidateAgentModelSource()
-        if modeManager.isMonitorMode {
-            await initializeQuotaOnlyMode()
-        } else {
-            await initializeFullMode()
-        }
+        await initializeLocalProxy(isInstalled: proxyManager.isBinaryInstalled,
+                                   startProxy: { await self.startProxy() })
     }
 
-    /// Initialize for Quota-Only Mode (no proxy)
-    private func initializeQuotaOnlyMode() async {
-        let context = refreshContext()
-        if let existingClient = _apiClient {
-            await existingClient.invalidate()
-            _apiClient = nil
-        }
-        let bootstrap = await monitorCoordinator.bootstrap()
-        guard canCommit(context) else { return }
-        monitorAccounts = bootstrap.accounts
-        monitorIssues = bootstrap.issues
-        monitorAccountIssues = bootstrap.accountIssues
-        providerQuotas = bootstrap.quotas
-
-        // Keep legacy files available only as a compatibility source.
-        await loadDirectAuthFiles()
-        guard canCommit(context) else { return }
-        
-        // Fetch quotas directly
-        await refreshQuotasDirectly()
-        guard canCommit(context) else { return }
-        
-        // Start auto-refresh for quota-only mode
-        startQuotaOnlyAutoRefresh()
-    }
-    
-    // MARK: - 监控账号额度清理
-
-    /// 显式 IDE 扫描与原刷新收尾共用此清理入口；私有占位账号清理辅助继续留在本类。
-    func removeDisabledMonitorQuotas() {
-        for account in monitorAccounts where account.isDisabled {
-            removeQuotaEntry(provider: account.provider, accountKey: account.accountKey)
-        }
-        removeHiddenPlaceholderQuotas()
+    private func initializeLocalProxy(isInstalled: Bool, startProxy: () async -> Void) async {
+        guard isInstalled else { return }
+        await startProxy()
     }
 
-    /// `MonitorRefreshCoordinator.discoverAccounts` hides generic placeholder
-    /// accounts (e.g. "Claude Code") once a more specific credential exists for
-    /// the same provider, but the underlying quota fetch still runs for them.
-    /// Without this, their tiles keep showing on the Quota screen even though
-    /// there's no corresponding account row to disable.
-    private func removeHiddenPlaceholderQuotas() {
-        for provider in MonitorRefreshCoordinator.placeholderAccountKeys.keys {
-            guard providerQuotas[provider] != nil else { continue }
-            let visibleKeys = Set(monitorAccounts.filter { $0.provider == provider }.map { $0.accountKey.lowercased() })
-            providerQuotas[provider] = providerQuotas[provider]?.filter { key, _ in
-                !MonitorRefreshCoordinator.isPlaceholder(provider: provider, accountKey: key)
-                    || visibleKeys.contains(key.lowercased())
-            }
-        }
+    #if DEBUG
+    /// 只隔离原内核启动调用，停机时没有额度读取闭包或定时任务。
+    func initializeLocalProxyForTesting(isInstalled: Bool, startProxy: () async -> Void) async {
+        await initializeLocalProxy(isInstalled: isInstalled, startProxy: startProxy)
     }
+    #endif
 
-    /// Start auto-refresh for quota-only mode
-    /// 监控模式的刷新循环继续留在主类，复用同一 refreshTask；睡眠、取消检查、令牌刷新与额度读取顺序不变。
-    private func startQuotaOnlyAutoRefresh() {
-        stopQuotaAutoRefresh()
-        
-        guard let intervalNs = refreshSettings.refreshCadence.intervalNanoseconds else {
-            // Manual mode - no auto-refresh
-            return
-        }
-        
-        refreshTask = Task {
-            while !Task.isCancelled {
-                do { try await Task.sleep(nanoseconds: intervalNs) } catch { break }
-                guard !Task.isCancelled else { break }
-                _ = await kiroFetcher.refreshAllTokensIfNeeded()
-                await refreshQuotasDirectly()
-            }
-        }
-    }
-    
-    /// Start auto-refresh for quota when proxy is not running (Full Mode)
-    /// 完整模式初始化通过此原入口启用停服直读；refreshTask 的创建、取消和持有继续留在主类。
-    func startQuotaAutoRefreshWithoutProxy() {
-        stopQuotaAutoRefresh()
-        
-        guard let intervalNs = refreshSettings.refreshCadence.intervalNanoseconds else {
-            return
-        }
-        
-        refreshTask = Task {
-            while !Task.isCancelled {
-                do { try await Task.sleep(nanoseconds: intervalNs) } catch { break }
-                guard !Task.isCancelled else { break }
-                if !proxyManager.proxyStatus.running {
-                    _ = await kiroFetcher.refreshAllTokensIfNeeded()
-                    await refreshQuotasUnified()
-                }
-            }
+    /// 延续原启动后的账号初始化序列，任务由代理会话拥有。
+    /// 停止会取消旧任务，新管理客户端就绪后才能读取新会话的目录和额度。
+    func scheduleProxyStartupData(sessionID: UUID) {
+        proxyStartupDataTask?.cancel()
+        proxyStartupDataTask = Task { [weak self] in
+            guard let self, !Task.isCancelled, proxyManager.runtimeSessionID == sessionID else { return }
+            await completeProxyStartupData(sessionID: sessionID)
         }
     }
 
@@ -568,7 +632,7 @@ final class QuotaViewModel {
     func restartWarmupScheduler() {
         warmupTask?.cancel()
         
-        guard !warmupSettings.enabledAccountIds.isEmpty else { return }
+        guard canRefreshAccountQuotas, !warmupSettings.enabledAccountIds.isEmpty else { return }
         
         let now = Date()
         warmupNextRun = [:]
@@ -670,8 +734,8 @@ final class QuotaViewModel {
             return
         }
         defer { warmupRunningAccounts.remove(account) }
-        guard proxyManager.proxyStatus.running else {
-            // Warmup skipped when proxy is not running; no log.
+        guard hasCurrentCPAAccountDirectory else {
+            // 快照里的索引只用于显示，不能用于本会话的预热请求。
             return
         }
         
@@ -685,14 +749,19 @@ final class QuotaViewModel {
             return
         }
         
+        let source = refreshContext()
+        func isCurrentWarmup() -> Bool {
+            canCommitQuotaRefresh(source, client: apiClient)
+                && warmupAuthInfo(provider: provider, accountKey: accountKey)?.authIndex == authInfo.authIndex
+        }
         let availableModels = await fetchWarmupModels(
             provider: provider,
             accountKey: accountKey,
             authFileName: authInfo.authFileName,
             apiClient: apiClient
         )
-        guard !availableModels.isEmpty else {
-            // Warmup skipped when no models are available; no log.
+        guard isCurrentWarmup(), !availableModels.isEmpty else {
+            // 会话或账号已变化时不能使用旧索引进行预热。
             return
         }
         await warmupAccount(
@@ -700,7 +769,8 @@ final class QuotaViewModel {
             accountKey: accountKey,
             availableModels: availableModels,
             authIndex: authInfo.authIndex,
-            apiClient: apiClient
+            apiClient: apiClient,
+            isCurrent: isCurrentWarmup
         )
     }
 
@@ -821,18 +891,36 @@ final class QuotaViewModel {
         errorMessage = nil
         do {
             try await proxyManager.downloadAndInstallBinary()
+            try Task.checkCancellation()
+            await startProxy()
+        } catch is CancellationError {
+            // 应用或安装调用取消时，不交给后续流程再启动代理。
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    /// 停止事务保留在状态宿主：依次取消启动／恢复／轮询、结束授权与代理、恢复直读调度，再清空并异步失效旧客户端。
+    /// 路由中心和菜单栏共用一个重启事务。底层 start 等待当前进程真实退出，
+    /// 并以运行会话校验等待期间出现的停止或退出请求。
+    func restartProxy() async {
+        guard !isRestartingProxy, !proxyStartFlow.isRunning, !proxyManager.isStarting else { return }
+        isRestartingProxy = true
+        defer { isRestartingProxy = false }
+        if proxyManager.proxyStatus.running {
+            stopProxy()
+        }
+        await startProxy()
+    }
+
+    /// 停止事务在状态宿主依次取消启动／恢复／轮询、结束授权与代理，并保留原目录和额度快照。
     func stopProxy() {
         // 这是停止事务的同步线性化起点，先撤销排队的目录提交，再改变运行会话或执行停止副作用。
         // _apiClient.didSet 仍为直接替换客户端的路径提供同一兜底，不能把撤销延迟到 stop 的末尾。
         invalidateAgentModelSource()
         // 释放的是这一轮初始化，不能让慢请求、重试或预热阻止下一次启动。
         proxyStartFlow.cancel()
+        proxyStartupDataTask?.cancel()
+        proxyStartupDataTask = nil
         proxyRecoveryTask?.cancel()
         proxyRecoveryTask = nil
         stopQuotaAutoRefresh()
@@ -846,13 +934,10 @@ final class QuotaViewModel {
         // 停止代理同步结束本地 OAuth 生命周期，后续迟到的授权响应不能重新打开旧弹窗。
         cpaOAuthSession.cancel()
         proxyManager.stop()
-        // 保留同一文件最后的额度，但切回本地目录键；不能把上一次 CPA 缓存再列成新账号。
-        reconcileAccountQuotaIdentities()
-        // 代理停止只结束 CPA 轮询，额度服务仍应按原频率走直读刷新。
-        // 统一调度也保留监控模式和“手动刷新”频率的行为。
-        restartAutoRefresh()
+        // 停止后保留原 CPA 规范键及上次成功时间；不重键到本机文件，也不派生替代刷新。
         restartWarmupScheduler()
-        
+        notifyQuotaDataChanged()
+
         // Invalidate URLSession to close all connections
         // Capture client reference before setting to nil to avoid race condition
         let clientToInvalidate = _apiClient
@@ -891,13 +976,13 @@ final class QuotaViewModel {
         refreshQuotas: @escaping @MainActor () async -> Void
     ) {
         stopQuotaAutoRefresh()
-        guard !modeManager.isMonitorMode, proxyManager.proxyStatus.running,
+        guard canRefreshAccountQuotas,
               let intervalNs = refreshSettings.refreshCadence.intervalNanoseconds else {
             return
         }
         let modeRevision = modeManager.revision
         func isCurrentMode() -> Bool {
-            !Task.isCancelled && modeManager.revision == modeRevision && !modeManager.isMonitorMode
+            !Task.isCancelled && modeManager.revision == modeRevision
         }
 
         refreshTask = Task {
@@ -1018,20 +1103,6 @@ final class QuotaViewModel {
     var isQuotaAutoRefreshScheduledForTesting: Bool { refreshTask != nil }
 
     #endif
-
-    #if DEBUG
-    @ObservationIgnored var monitorDiscoveryHookForTesting: (@MainActor ([AIProvider: [String: ProviderQuotaData]]) async -> [MonitorAccount])?
-    #endif
-
-    /// 只有刷新后的账号观察晚于失败发生时间，才清除该账号的错误状态。
-    /// 保留未返回新额度的失败提示，防止缓存的旧百分比被误认为本轮刷新成功。
-    /// 监控取数扩展复用原错误恢复判定；实现仍留在主类，不开放私有存储或另建失败状态。
-    func clearRecoveredMonitorAccountIssues() {
-        monitorAccountIssues = monitorAccountIssues.filter { account, issue in
-            guard let quota = providerQuotas[account.provider]?[account.accountKey] else { return true }
-            return quota.lastUpdated <= issue.occurredAt
-        }
-    }
 
     #if DEBUG
     /// Test seam: replaces the IDE database read so a test can suspend *inside* the fetch

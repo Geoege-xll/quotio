@@ -8,9 +8,7 @@ import UniformTypeIdentifiers
 
 struct DashboardScreen: View {
     @Environment(QuotaViewModel.self) private var viewModel
-    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("hideGettingStarted") private var hideGettingStarted: Bool = false
-    @State private var modeManager = OperatingModeManager.shared
 
     @State private var selectedProvider: AIProvider?
     @State private var isImporterPresented = false
@@ -21,7 +19,6 @@ struct DashboardScreen: View {
 
     private var showGettingStarted: Bool {
         guard !hideGettingStarted else { return false }
-        guard modeManager.isLocalProxyMode else { return false }
         return !isSetupComplete
     }
 
@@ -33,268 +30,55 @@ struct DashboardScreen: View {
     }
 
 
-    // MARK: - Precomputed Properties (performance optimization)
-
-    /// Unique provider count from direct auth files
-    private var directProvidersCount: Int {
-        Set(viewModel.monitorAccounts.map { $0.provider }).count
-    }
-
-    /// “最低额度”只取真实百分比额度的最低值，不平均独立额度池，也不将未知当成满额。
-    private var lowestQuotaPercentage: Double? {
-        QuotaPercentagePresentation.lowestRemaining(
-            in: viewModel.providerQuotas.values.flatMap { $0.values }.flatMap(\.models)
-        )
-    }
-
-    private var lowestQuotaColor: Color {
-        guard let remaining = lowestQuotaPercentage else { return .secondary }
-        return remaining > 50 ? QuotioTheme.Colors.success : (remaining > 20 ? QuotioTheme.Colors.warning : QuotioTheme.Colors.danger)
-    }
-
-    /// Grouped accounts by provider (cached computation)
-    private var groupedMonitorAccounts: [AIProvider: [MonitorAccount]] {
-        Dictionary(grouping: viewModel.monitorAccounts) { $0.provider }
-    }
-
     var body: some View {
-        ScrollViewReader { scrollProxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    if modeManager.isLocalProxyMode {
-                        fullModeContent(scrollProxy: scrollProxy)
-                    } else {
-                        // Quota-Only Mode: Show quota dashboard
-                        quotaOnlyModeContent
-                    }
-                }
-                // 本地 CPA 页只将顶部外留白由 24pt 减为 12pt，给下方执行记录
-                // 腾出首屏空间；左右和底部边距、额度监控模式均沿用原有尺寸。
-                .padding(.horizontal, 24)
-                .padding(.top, modeManager.isLocalProxyMode ? 12 : 24)
-                .padding(.bottom, 24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .quotioPage()
-            .navigationTitle("nav.dashboard".localized())
-            .toolbar {
-                if !modeManager.isLocalProxyMode {
-                    ToolbarItem(placement: .primaryAction) {
-                        // 路由中心（本地 CPA 模式）已有自动响应式数据流与局部刷新，仅在额度监控模式下保留导航栏手动刷新。
-                        DashboardRefreshButton()
-                    }
+        ScrollView {
+            // 停机和缺少内核时都保留运行卡，安装、重试和诊断入口始终可达。
+            VStack(alignment: .leading, spacing: 12) {
+                ProxyRuntimeCard()
+                RoutingCenterView()
+
+                if showGettingStarted {
+                    gettingStartedSection
                 }
             }
-            .sheet(item: $selectedProvider) { provider in
-                OAuthSheet(provider: provider) {
-                    selectedProvider = nil
-                    viewModel.cancelOAuth()
-                    Task {
-                        if modeManager.isMonitorMode {
-                            await viewModel.manualRefresh()
-                        } else {
-                            await viewModel.refreshData()
-                        }
-                    }
+            .padding(.horizontal, 24)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .quotioPage()
+        .navigationTitle("nav.dashboard".localized())
+        .sheet(item: $selectedProvider) { provider in
+            OAuthSheet(provider: provider) {
+                selectedProvider = nil
+                viewModel.cancelOAuth()
+                Task { await viewModel.refreshData() }
+            }
+            .environment(viewModel)
+        }
+        .sheet(item: $configurationPresentation) { presentation in
+            AgentConfigSheet(viewModel: viewModel.agentSetupViewModel, agent: presentation.agent, configurationSessionID: presentation.id)
+                .id(presentation.id)
+                .onDisappear {
+                    viewModel.agentSetupViewModel.dismissConfiguration(sessionID: presentation.id)
+                    Task { await viewModel.agentSetupViewModel.refreshAgentStatuses() }
                 }
-                .environment(viewModel)
-            }
-            .sheet(item: $configurationPresentation) { presentation in
-                AgentConfigSheet(viewModel: viewModel.agentSetupViewModel, agent: presentation.agent, configurationSessionID: presentation.id)
-                    .id(presentation.id)
-                    .onDisappear {
-                        viewModel.agentSetupViewModel.dismissConfiguration(sessionID: presentation.id)
-                        Task { await viewModel.agentSetupViewModel.refreshAgentStatuses() }
-                    }
-            }
-            .fileImporter(
-                isPresented: $isImporterPresented,
-                allowedContentTypes: [.json],
-                allowsMultipleSelection: false
-            ) { result in
-                if case .success(let urls) = result, let url = urls.first {
-                    Task {
-                        await viewModel.importVertexServiceAccount(url: url)
-                        await viewModel.refreshData()
-                    }
-                }
-            }
-            .task {
-                if modeManager.isLocalProxyMode {
-                    await viewModel.agentSetupViewModel.refreshAgentStatuses()
+        }
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                Task {
+                    await viewModel.importVertexServiceAccount(url: url)
+                    await viewModel.refreshData()
                 }
             }
         }
-    }
-
-    // MARK: - Full Mode Content
-
-    private func fullModeContent(scrollProxy: ScrollViewProxy) -> some View {
-        // 紧凑间距只作用于本地 CPA 的卡片组，不修改全局卡片主题和其他页面。
-        VStack(alignment: .leading, spacing: 12) {
-            // 运行卡在停止和未安装时也保留，避免启动入口随状态切换而跳位。
-            ProxyRuntimeCard()
-
-            // 路由中心沿用三张卡片布局；共享今日执行投影，避免账号归因和计数各自推断。
-            RoutingCenterView()
-
-            if showGettingStarted {
-                gettingStartedSection
-            }
+        .task {
+            await viewModel.agentSetupViewModel.refreshAgentStatuses()
         }
-    }
-
-    // MARK: - Quota-Only Mode Content
-
-    private var quotaOnlyModeContent: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            // Quota Overview KPIs
-            quotaOnlyKPISection
-
-            // Quick Quota Status
-            quotaStatusSection
-
-            // Tracked Accounts
-            trackedAccountsSection
-        }
-    }
-
-    private var quotaOnlyKPISection: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
-            KPICard(
-                title: "dashboard.trackedAccounts".localized(),
-                value: "\(viewModel.monitorAccounts.count)",
-                subtitle: "dashboard.accounts".localized(),
-                icon: "person.2.fill",
-                color: .blue
-            )
-
-            KPICard(
-                title: "dashboard.providers".localized(),
-                value: "\(directProvidersCount)",
-                subtitle: "dashboard.connected".localized(),
-                icon: "cpu",
-                color: .green
-            )
-
-            // Show lowest quota percentage (precomputed)
-            KPICard(
-                title: "dashboard.lowestQuota".localized(),
-                value: QuotaPercentagePresentation.text(lowestQuotaPercentage ?? -1),
-                subtitle: "dashboard.remaining".localized(),
-                icon: "chart.bar.fill",
-                color: lowestQuotaColor
-            )
-
-            if let lastRefresh = viewModel.lastQuotaRefreshTime {
-                KPICard(
-                    title: "dashboard.lastRefresh".localized(),
-                    value: lastRefresh.formatted(date: .omitted, time: .shortened),
-                    subtitle: "dashboard.updated".localized(),
-                    icon: "clock.fill",
-                    color: .purple
-                )
-            }
-        }
-    }
-
-    private var quotaStatusSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("dashboard.quotaOverview".localized(), systemImage: "chart.bar.fill")
-                    .font(.headline)
-
-                Spacer()
-
-                if viewModel.isLoadingQuotas {
-                    SmallProgressView()
-                }
-            }
-
-            if viewModel.providerQuotas.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "chart.bar.xaxis")
-                        .font(.largeTitle)
-                        .foregroundStyle(.tertiary)
-
-                    Text("dashboard.noQuotaData".localized())
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    Button {
-                        Task { await viewModel.manualRefresh() }
-                    } label: {
-                        Label("action.refresh".localized(), systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(viewModel.isLoadingQuotas)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    // Sort providers for stable iteration order (ForEach performance fix)
-                    ForEach(viewModel.providerQuotas.keys.sorted { $0.displayName < $1.displayName }) { provider in
-                        if let accounts = viewModel.providerQuotas[provider], !accounts.isEmpty {
-                            QuotaProviderRow(provider: provider, accounts: accounts)
-                        }
-                    }
-                }
-            }
-        }
-        .quotioCard()
-    }
-
-    private var trackedAccountsSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("dashboard.trackedAccounts".localized(), systemImage: "person.2.badge.key")
-                .font(.headline)
-
-            if viewModel.monitorAccounts.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "person.crop.circle.badge.questionmark")
-                        .font(.largeTitle)
-                        .foregroundStyle(.tertiary)
-
-                    Text("dashboard.noAccountsTracked".localized())
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    Text("dashboard.addAccountsHint".localized())
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(AIProvider.allCases.filter { groupedMonitorAccounts[$0] != nil }) { provider in
-                        if let accounts = groupedMonitorAccounts[provider] {
-                            HStack(spacing: 12) {
-                                ProviderIcon(provider: provider, size: 20)
-
-                                Text(provider.displayName)
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-
-                                Spacer()
-
-                                Text("\(accounts.count)")
-                                    .font(.caption)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 2)
-                                    .background(provider.color.opacity(0.15))
-                                    .foregroundStyle(provider.color)
-                                    .clipShape(Capsule())
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
-            }
-        }
-        .quotioCard()
     }
 
     // MARK: - Getting Started Section
@@ -404,44 +188,6 @@ struct DashboardScreen: View {
 
 }
 
-/// 手动操作与后台轮询解耦，避免导航按钮每轮采集都在可用和禁用外观间闪动。
-/// 模式及代理状态只在点击时读取；刷新中的局部状态不会使整个仪表盘重新求值。
-private struct DashboardRefreshButton: View {
-    @Environment(QuotaViewModel.self) private var viewModel
-    @State private var isRefreshing = false
-
-    var body: some View {
-        Button {
-            guard !isRefreshing else { return }
-            isRefreshing = true
-            Task {
-                defer { isRefreshing = false }
-                let modeManager = OperatingModeManager.shared
-                if modeManager.isMonitorMode {
-                    await viewModel.manualRefresh()
-                } else if modeManager.isLocalProxyMode && viewModel.proxyManager.proxyStatus.running {
-                    await viewModel.refreshDashboard()
-                } else {
-                    await viewModel.refreshQuotasUnified()
-                }
-            }
-        } label: {
-            // 与其他导航栏刷新按钮保持一致：刷新期间由整个图标位置切换为菊花，
-            // 固定尺寸避免按钮在刷新开始和结束时发生宽度跳动。
-            if isRefreshing || viewModel.isRefreshingDashboard {
-                SmallProgressView()
-                    .frame(width: 16, height: 16)
-            } else {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 16, height: 16)
-            }
-        }
-        .disabled(isRefreshing || viewModel.isRefreshingDashboard)
-        .help("action.refresh".localized())
-        .accessibilityLabel("action.refresh".localized())
-    }
-}
-
 // MARK: - Getting Started Step
 
 struct GettingStartedStep: Identifiable {
@@ -506,54 +252,6 @@ struct GettingStartedStepRow: View {
     }
 }
 
-// MARK: - KPI Card
-
-struct KPICard: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let title: String
-    let value: String
-    let subtitle: String
-    let icon: String
-    let color: Color
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(color)
-                .frame(width: 32, height: 32)
-                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-
-                Text(value)
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundStyle(color)
-                    .monospacedDigit()
-                    .lineLimit(1)
-
-                if !subtitle.isEmpty && subtitle != "—" {
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .quotioCard(cornerRadius: QuotioTheme.Radius.md, padding: 12)
-        .accessibilityElement(children: .combine)
-    }
-}
-
 // MARK: - Flow Layout
 
 struct FlowLayout: Layout {
@@ -593,59 +291,5 @@ struct FlowLayout: Layout {
         }
 
         return (CGSize(width: maxWidth, height: currentY + lineHeight), positions)
-    }
-}
-
-// MARK: - Quota Provider Row (for Quota-Only Mode Dashboard)
-
-struct QuotaProviderRow: View {
-    let provider: AIProvider
-    let accounts: [String: ProviderQuotaData]
-
-    private var lowestQuota: Double? {
-        // 余额、状态行与未知百分比均不参与汇总，纯余额账号显示占位而不是 -1%。
-        QuotaPercentagePresentation.lowestRemaining(in: accounts.values.flatMap(\.models))
-    }
-
-    private var quotaColor: Color {
-        guard let lowestQuota else { return .secondary }
-        if lowestQuota > 50 { return .green }
-        if lowestQuota > 20 { return .orange }
-        return .red
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ProviderIcon(provider: provider, size: 24)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(provider.displayName)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                Text("\(accounts.count) " + "quota.accounts".localized())
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            // Lowest quota indicator
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(quotaColor)
-                    .frame(width: 8, height: 8)
-
-                Text(QuotaPercentagePresentation.text(lowestQuota ?? -1))
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(quotaColor)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(quotaColor.opacity(0.1))
-            .clipShape(Capsule())
-        }
-        .padding(.vertical, 6)
     }
 }

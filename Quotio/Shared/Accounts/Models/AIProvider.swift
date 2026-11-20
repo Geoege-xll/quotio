@@ -196,15 +196,7 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
         }
     }
 
-    /// Whether this provider supports quota tracking in quota-only mode
-    var supportsQuotaOnlyMode: Bool {
-        switch self {
-        case .claude, .codex, .cursor, .factoryDroid, .antigravity, .copilot, .devin, .grok, .openRouter, .amp, .trae, .glm, .deepseek, .moonshot, .minimax, .warp, .kiro, .clinePass:
-            return true
-        case .qwen, .iflow, .vertex:
-            return false
-        }
-    }
+
     
     /// Whether this provider uses browser cookies for auth
     var usesBrowserAuth: Bool {
@@ -257,12 +249,6 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendab
         default:
             return true
         }
-    }
-
-    /// 手动添加能力必须按运行模式判断：CPA 已支持的插件不等于 Monitor 实现了同名登录。
-    /// 此处只控制新增入口，不限制已有账号的展示、额度读取、导入或删除。
-    func supportsManualAuth(in mode: OperatingMode) -> Bool {
-        supportsManualAuth && !(mode == .monitor && (self == .grok || self == .devin))
     }
 
     /// API 目录和本地 JSON 使用同一份类型归一规则，避免停服后 xAI 账号从列表消失。

@@ -13,80 +13,49 @@ final class AccountPageFusionTests: XCTestCase {
         return try JSONDecoder().decode(AuthFile.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
-    private func directFile(_ name: String, provider: AIProvider = .claude,
-                            email: String = "same@example.com") -> DirectAuthFile {
-        DirectAuthFile(id: name, provider: provider, email: email, login: nil, expired: nil,
-            accountType: nil, filePath: "/isolated/\(name)", source: .cliProxyApi, filename: name)
-    }
-
-    private func quota(_ percent: Double = 40, name: String? = nil) -> ProviderQuotaData {
-        ProviderQuotaData(models: [ModelQuota(name: "fixture", percentage: percent, resetTime: "")],
-            accountDisplayName: name)
-    }
-
-    private func groups(mode: OperatingMode = .monitor, running: Bool = false,
-                        proxy: [AuthFile] = [], direct: [DirectAuthFile] = [], monitor: [MonitorAccount] = [],
-                        quotas: [AIProvider: [String: ProviderQuotaData]] = [:],
+    private func groups(current: Bool = false, cpa: [AuthFile] = [],
+                        imported: [AIProvider: Set<String>] = [:],
                         custom: [CustomProvider] = [], warp: [WarpService.WarpToken] = []) -> [AIProvider: [AccountRowData]] {
-        AccountPageData.groupedAccounts(mode: mode, proxyRunning: running, authFiles: proxy,
-            directAuthFiles: direct, monitorAccounts: monitor, quotas: quotas, customProviders: custom,
-            warpTokens: warp, monitorStatus: { _ in ("outdated", "离线缓存过期") })
+        AccountPageData.groupedAccounts(hasCurrentCPAAccountDirectory: current, authFiles: cpa,
+            importedIDEAccountKeys: imported, customProviders: custom, warpTokens: warp)
     }
 
-    func testProxyAccountAndQuotaShareOneCardAndExactRefreshKey() throws {
+    func testCPAAccountAndQuotaShareOneCardAndExactRefreshKey() throws {
         let file = try proxyFile("claude-work.json")
-        let rows = try XCTUnwrap(groups(mode: .localProxy, running: true, proxy: [file],
-            quotas: [.claude: [file.quotaLookupKey: quota()]])[.claude])
+        let rows = try XCTUnwrap(groups(current: true, cpa: [file])[.claude])
         XCTAssertEqual(rows.count, 1, "同一连接与额度只生成一张卡片")
         XCTAssertEqual(rows[0].id, file.id)
         XCTAssertEqual(rows[0].quotaAccountID.accountKey, file.quotaLookupKey)
         XCTAssertEqual(rows[0].quotaAccountKeys, [file.quotaLookupKey])
         XCTAssertTrue(rows[0].canDelete)
         XCTAssertTrue(rows[0].canDownloadAuthFile)
-        XCTAssertTrue(rows[0].source.supportsDisable)
+        XCTAssertTrue(rows[0].canManageCPA)
     }
 
-    func testSameEmailProxyCredentialsRemainSeparate() throws {
+    func testSameEmailCPACredentialsRemainSeparate() throws {
         let a = try proxyFile("team-a.json", index: "a")
         let b = try proxyFile("team-b.json", index: "b")
-        let rows = try XCTUnwrap(groups(mode: .localProxy, running: true, proxy: [a, b],
-            quotas: [.claude: [a.quotaLookupKey: quota(20), b.quotaLookupKey: quota(80)]])[.claude])
+        let rows = try XCTUnwrap(groups(current: true, cpa: [a, b])[.claude])
         XCTAssertEqual(rows.count, 2)
         XCTAssertEqual(Set(rows.map(\.menuBarAccountKey)), [a.quotaLookupKey, b.quotaLookupKey])
     }
 
-    func testAutomaticQuotaSourceDoesNotDuplicateRunningGrokConnection() throws {
+    func testGrokUsesCPAIdentityEvenBeforeQuotaArrives() throws {
         let file = try proxyFile("grok.json", provider: "grok")
-        let rows = try XCTUnwrap(groups(mode: .localProxy, running: true, proxy: [file],
-            quotas: [.grok: [file.quotaLookupKey: quota()]])[.grok])
+        let rows = try XCTUnwrap(groups(current: true, cpa: [file])[.grok])
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows[0].source, .proxy)
         XCTAssertEqual(rows[0].quotaAccountKeys, [file.quotaLookupKey])
         XCTAssertTrue(rows[0].canDelete)
     }
 
-    func testCodexSameEmailPlusAndTeamKeepFilenameIdentity() throws {
-        let a = directFile("codex-same-plus.json", provider: .codex)
-        let b = directFile("codex-same-team.json", provider: .codex)
-        let rows = try XCTUnwrap(groups(mode: .localProxy, direct: [a, b],
-            quotas: [.codex: [a.menuBarAccountKey: quota(20), b.menuBarAccountKey: quota(80)]])[.codex])
+    func testCodexSameEmailPlusAndTeamKeepCPAIdentityAfterStop() throws {
+        let a = try proxyFile("codex-same-plus.json", provider: "codex", index: "plus-a")
+        let b = try proxyFile("codex-same-team.json", provider: "codex", index: "team-b")
+        let rows = try XCTUnwrap(groups(cpa: [a, b])[.codex])
         XCTAssertEqual(rows.count, 2)
         XCTAssertNotEqual(rows[0].quotaAccountID, rows[1].quotaAccountID)
         XCTAssertEqual(Set(rows.map(\.menuBarAccountKey)), [a.menuBarAccountKey, b.menuBarAccountKey])
-    }
-
-    func testSameEmailDirectFilesDoNotBorrowOneAmbiguousQuota() throws {
-        let a = directFile("team-a.json")
-        let b = directFile("team-b.json")
-        let rows = try XCTUnwrap(groups(mode: .localProxy, direct: [a, b],
-            quotas: [.claude: [a.menuBarAccountKey: quota()]])[.claude])
-        let connections = rows.filter { $0.source == .direct }
-        let caches = rows.filter { $0.source == .quotaCache }
-        XCTAssertEqual(connections.count, 2, "两份认证文件的管理操作都必须保留")
-        XCTAssertTrue(connections.allSatisfy { $0.quotaAccountKeys.isEmpty }, "无法判定归属时不复制额度")
-        XCTAssertEqual(caches.count, 1)
-        XCTAssertEqual(caches[0].quotaAccountKeys, [a.menuBarAccountKey])
-        XCTAssertFalse(caches[0].canDelete)
     }
 
     func testMultiKeyQuotaTitleHonorsPrivacyWithoutChangingUserPreferences() throws {
@@ -106,92 +75,43 @@ final class AccountPageFusionTests: XCTestCase {
         XCTAssertTrue(preferences.bool(forKey: "hideSensitiveInfo"))
     }
 
-    func testStoppedProxyDoesNotLeakPreviousAuthErrorOrDeleteCapability() throws {
-        let old = try proxyFile("claude.json", status: "error")
-        let direct = directFile("claude.json")
-        let rows = try XCTUnwrap(groups(mode: .localProxy, proxy: [old], direct: [direct],
-            quotas: [.claude: [direct.menuBarAccountKey: quota()]])[.claude])
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].source, .direct)
-        XCTAssertNil(rows[0].status)
-        XCTAssertFalse(rows[0].canDelete)
-        XCTAssertFalse(rows[0].source.supportsDisable)
-        XCTAssertTrue(rows[0].canDownloadAuthFile, "保留原直读认证文件导出入口")
+    func testLastConfirmedDirectoryKeepsErrorAndIdentityButLosesManagementPermissions() throws {
+        let file = try proxyFile("claude.json", status: "error")
+        let row = try XCTUnwrap(groups(cpa: [file])[.claude]?.first)
+        XCTAssertEqual(row.source, .proxy)
+        XCTAssertEqual(row.status, "error", "冻结目录保留代理最后确认的真实错误")
+        XCTAssertEqual(row.quotaAccountKeys, [file.quotaLookupKey])
+        XCTAssertFalse(row.canManageCPA)
+        XCTAssertFalse(row.canDelete)
+        XCTAssertFalse(row.canDownloadAuthFile)
+        XCTAssertFalse(row.canEditRoutingWeight)
+        XCTAssertFalse(row.canResetCooldown)
     }
 
-    func testMonitorAccountUsesMonitorIDAndRetainsErrorAndDisableState() throws {
-        let account = MonitorAccount.make(provider: .claude, accountKey: "native-account",
-            displayName: "same@example.com", source: .quotioKeychain, canDelete: true, isDisabled: true)
-        let rows = try XCTUnwrap(groups(running: true, proxy: [try proxyFile("old.json")],
-            direct: [directFile("old.json")], monitor: [account],
-            quotas: [.claude: [account.accountKey: quota()]])[.claude])
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].id, account.id)
-        XCTAssertEqual(rows[0].source, .monitor(.quotioKeychain))
-        XCTAssertEqual(rows[0].status, "outdated")
-        XCTAssertEqual(rows[0].statusMessage, "离线缓存过期")
-        XCTAssertTrue(rows[0].isDisabled)
-        XCTAssertTrue(rows[0].canDelete)
-        XCTAssertTrue(rows[0].source.supportsDisable)
+    func testNoConfirmedDirectoryAndNoExplicitConnectionsProducesNoAccounts() {
+        XCTAssertTrue(groups().isEmpty, "停机时不扫描本机认证文件或从未匹配的额度生成身份")
     }
 
-    func testMonitorAPIKeyEditingCapabilitiesArePreserved() throws {
-        for provider in [AIProvider.factoryDroid, .openRouter, .amp] {
-            let account = MonitorAccount.make(provider: provider, accountKey: "fixture-key",
-                source: .quotioKeychain, canDelete: true)
-            let row = try XCTUnwrap(groups(monitor: [account])[provider]?.first)
-            XCTAssertTrue(row.canEdit)
-            XCTAssertTrue(row.canDelete)
-            XCTAssertFalse(row.canDownloadAuthFile)
-        }
-        let native = MonitorAccount.make(provider: .claude, accountKey: "native", source: .nativeCredential)
-        XCTAssertFalse(try XCTUnwrap(groups(monitor: [native])[.claude]?.first).canEdit)
-    }
-
-    func testUnmatchedQuotaCacheRemainsVisibleWithoutCredentialPermissions() throws {
-        let rows = try XCTUnwrap(groups(quotas: [.claude: ["cache-only": quota(name: "缓存账号")]])[.claude])
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].displayName, "缓存账号")
-        XCTAssertEqual(rows[0].source, .quotaCache)
-        XCTAssertNil(rows[0].status, "缓存不能暗示认证仍然有效")
-        XCTAssertFalse(rows[0].canDelete)
-        XCTAssertFalse(rows[0].canEdit)
-        XCTAssertFalse(rows[0].canDownloadAuthFile)
-        XCTAssertFalse(rows[0].source.supportsDisable)
-        XCTAssertEqual(rows[0].quotaAccountID.accountKey, "cache-only")
-    }
-
-    func testConnectedAccountWithoutQuotaIsNotDropped() throws {
-        let file = try proxyFile("waiting.json")
-        let row = try XCTUnwrap(groups(mode: .localProxy, running: true, proxy: [file])[.claude]?.first)
-        XCTAssertEqual(row.id, file.id)
-        XCTAssertTrue(row.canDelete)
-    }
-
-    func testImportedIDEAccountDeleteAndMonitorSourceArePreserved() throws {
-        let local = try XCTUnwrap(groups(mode: .localProxy,
-            quotas: [.cursor: ["ide-account": quota()]])[.cursor]?.first)
+    func testExplicitlyImportedIDEAccountsKeepLocalDeleteButCopilotNeedsCPAEntry() throws {
+        let result = groups(imported: [.cursor: ["ide-account"], .trae: ["trae-account"], .copilot: ["gh-cli-only"]])
+        let local = try XCTUnwrap(result[.cursor]?.first)
         XCTAssertEqual(local.source, .autoDetected)
         XCTAssertTrue(local.canDelete, "删除继续只移除 Quotio 导入记录")
-        let monitor = MonitorAccount.make(provider: .cursor, accountKey: "ide-account", source: .localIDE,
-            canDelete: true)
-        let rows = try XCTUnwrap(groups(monitor: [monitor],
-            quotas: [.cursor: ["ide-account": quota()]])[.cursor])
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].source, .monitor(.localIDE))
+        XCTAssertEqual(result[.trae]?.first?.quotaAccountKeys, ["trae-account"])
+        XCTAssertNil(result[.copilot], "GitHub CLI 会话不能成为导入的 IDE 账号")
     }
 
     func testGLMMultipleKeysHaveOneConnectionAndAllQuotaSections() throws {
         let provider = CustomProvider(name: "GLM 多密钥", type: .glmCompatibility,
             apiKeys: [CustomAPIKeyEntry(apiKey: "fixture-a"), CustomAPIKeyEntry(apiKey: "fixture-b")])
         let keys = provider.apiKeys.map { GLMQuotaFetcher.quotaAccountKey(providerID: provider.id, apiKeyID: $0.id) }
-        let rows = try XCTUnwrap(groups(quotas: [.glm: [keys[0]: quota(20), keys[1]: quota(80)]],
-            custom: [provider])[.glm])
-        XCTAssertEqual(rows.count, 1, "多个密钥额度应嵌入同一连接，不额外生成只读缓存卡")
+        let rows = try XCTUnwrap(groups(custom: [provider])[.glm])
+        XCTAssertEqual(rows.count, 1, "多个密钥额度应嵌入同一连接")
         XCTAssertEqual(rows[0].id, provider.id.uuidString, "编辑／删除仍指向原配置")
         XCTAssertEqual(rows[0].quotaAccountKeys, keys)
         XCTAssertTrue(rows[0].canEdit)
         XCTAssertTrue(rows[0].canDelete)
+        XCTAssertEqual(Set(rows[0].menuBarItems), Set(MenuBarAccountCatalog.items(authFiles: [], customProviders: [provider])))
     }
 
     func testMultiKeyPlansRemainPerKeyWhenDifferentOrFirstQuotaIsMissing() {
@@ -238,11 +158,9 @@ final class AccountPageFusionTests: XCTestCase {
         XCTAssertTrue(mmRow.canEdit && mmRow.canDelete)
     }
 
-    func testSidebarHasOneAccountEntryInBothOperatingModes() {
-        for mode in OperatingMode.allCases {
-            XCTAssertEqual(mode.visiblePages.filter { $0 == .providers }.count, 1)
-            XCTAssertFalse(mode.visiblePages.contains(.quota))
-        }
+    func testSidebarHasOneAccountEntry() {
+        XCTAssertEqual(NavigationPage.sidebarPages.filter { $0 == .providers }.count, 1)
+        XCTAssertFalse(NavigationPage.sidebarPages.contains(.quota))
     }
 
     func testOldQuotaNavigationIsNormalizedToUnifiedAccountEntry() {

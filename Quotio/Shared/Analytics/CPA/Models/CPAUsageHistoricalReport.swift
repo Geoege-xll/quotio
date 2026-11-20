@@ -5,6 +5,7 @@ import Foundation
 nonisolated struct CPAUsageHistoricalReport {
     let buckets: [UsageBucket]
     let options: [UsageBucket]
+    let omittedBuckets: [UsageBucket]
     let omittedRequests: Int
     let allRequests: Int
     private let hasExplicitTimeRange: Bool
@@ -12,7 +13,7 @@ nonisolated struct CPAUsageHistoricalReport {
     init(history: [UsageBucket], collectedAt: Date?, query: CPAUsageQuery, calendar: Calendar) {
         var included: [UsageBucket] = []
         var options: [UsageBucket] = []
-        var omitted = 0
+        var omitted: [UsageBucket] = []
         for bucket in history {
             guard let nextDay = calendar.date(byAdding: .day, value: 1, to: bucket.day) else { continue }
             // 采集时间只作为末日上界；不能用它反推某个日桶中请求发生的具体时刻。
@@ -26,11 +27,12 @@ nonisolated struct CPAUsageHistoricalReport {
             let supportsMetadata = (query.source.isEmpty || query.source == "__unknown__")
                 && (query.apiKey.isEmpty || query.apiKey == "__unknown__") && query.outcome == .all
             if coversDay && supportsMetadata { included.append(bucket) }
-            else { omitted += bucket.requests }
+            else { omitted.append(bucket) }
         }
         self.buckets = included
         self.options = options
-        self.omittedRequests = omitted
+        self.omittedBuckets = omitted
+        self.omittedRequests = omitted.reduce(0) { $0 + $1.requests }
         self.allRequests = history.reduce(0) { $0 + $1.requests }
         self.hasExplicitTimeRange = query.start != nil && query.end != nil
     }
@@ -91,13 +93,23 @@ nonisolated struct CPAUsageHistoricalReport {
     /// 热力图独立接收 52 周非时间筛选的历史日桶，避免短时间窗（如今日）隐藏历史活跃格。
     func merging(into original: CPAUsageDashboardReport, query: CPAUsageQuery,
                  dimension: CPAUsageDimension, metric: CPAUsageChartMetric, limit: Int,
-                 heatmapHistoryBuckets: [UsageBucket] = []) -> CPAUsageDashboardReport {
+                 heatmapHistory: CPAUsageHistoricalReport, prices: [CPAModelPrice],
+                 calendar: Calendar) -> CPAUsageDashboardReport {
         var report = original
         report.omittedHistoricalRequests = omittedRequests
         report.summary = mergingSummary(into: original.summary, includeHistoricalMetrics: true)
-        if !heatmapHistoryBuckets.isEmpty {
+        let catalogue = Self.priceCatalogue(prices)
+        if metric == .cost {
+            report.estimatedCost.isPartial = report.estimatedCost.isPartial || omittedRequests > 0
+            report.heatmapPartialDays = Set(heatmapHistory.omittedBuckets.map { calendar.startOfDay(for: $0.day) })
+        }
+        if !heatmapHistory.buckets.isEmpty {
             var mergedHeatmap = Dictionary(uniqueKeysWithValues: report.heatmapBuckets.map { ($0.id, $0) })
-            for bucket in heatmapHistoryBuckets {
+            for bucket in heatmapHistory.buckets {
+                if metric == .cost {
+                    let cost = Self.historicalCost(bucket, price: catalogue[Self.sqliteNoCaseKey(bucket.model)])
+                    report.heatmapCosts[bucket.id, default: CPAUsageCostEstimate()].add(cost)
+                }
                 if var existing = mergedHeatmap[bucket.id] {
                     existing.requests += bucket.requests
                     existing.failures += bucket.failures
@@ -115,6 +127,16 @@ nonisolated struct CPAUsageHistoricalReport {
             }
             report.heatmapBuckets = mergedHeatmap.values.sorted { $0.id < $1.id }
         }
+        // 省略的旧请求并非零费用。已知模型/提供商只影响对应排行；未知来源和密钥
+        // 无法安全归属单一行，因此在这些分组中保守标记覆盖不全。
+        let omittedKeys = metric == .cost
+            ? Set(omittedBuckets.map { Self.sqliteNoCaseKey(Self.categoryName($0, dimension: dimension)) }) : []
+        if !omittedKeys.isEmpty {
+            for index in report.categories.indices where dimension == .source || dimension == .apiKey
+                || omittedKeys.contains(Self.sqliteNoCaseKey(report.categories[index].key == "__unknown__" ? "" : report.categories[index].key)) {
+                report.categories[index].cost.isPartial = true
+            }
+        }
         guard !buckets.isEmpty else { return report }
         report.historicalRequests = report.summary.historicalRequests
         // 未限定完整窗口时，历史只有日期，无法重建上游首末事件跨度，吞吐量应留空。
@@ -128,22 +150,26 @@ nonisolated struct CPAUsageHistoricalReport {
             point.add(CPAUsageTrendPoint(date: bucket.day, requests: bucket.requests, tokens: bucket.totalTokens,
                                         input: bucket.inputTokens, output: bucket.outputTokens, cached: bucket.cachedTokens))
             points[bucket.day] = point
-            let name: String
-            switch dimension {
-            case .model: name = bucket.model
-            case .provider: name = bucket.provider
-            case .source, .apiKey: name = ""
-            }
+            let name = Self.categoryName(bucket, dimension: dimension)
             let key = name.isEmpty ? "__unknown__" : name
-            let old = categories[Self.sqliteNoCaseKey(key)]
-            categories[Self.sqliteNoCaseKey(key)] = CPAUsageCategory(key: old?.key ?? key, title: old?.title ?? name, provider: "",
-                requests: (old?.requests ?? 0) + bucket.requests, tokens: (old?.tokens ?? 0) + bucket.totalTokens)
+            let identity = Self.sqliteNoCaseKey(key)
+            let old = categories[identity]
+            var row = CPAUsageCategory(key: old?.key ?? key, title: old?.title ?? name, provider: "",
+                requests: (old?.requests ?? 0) + bucket.requests, tokens: (old?.tokens ?? 0) + bucket.totalTokens,
+                cost: old?.cost ?? CPAUsageCostEstimate())
+            if metric == .cost {
+                let estimate = Self.historicalCost(bucket, price: catalogue[Self.sqliteNoCaseKey(bucket.model)])
+                report.estimatedCost.add(estimate)
+                row.cost.add(estimate)
+                if omittedKeys.contains(Self.sqliteNoCaseKey(name)) { row.cost.isPartial = true }
+            }
+            categories[identity] = row
         }
         report.trend = points.values.sorted { $0.date < $1.date }
         // 长历史先完成逐日相加再合并连续点，否则旧历史会与已压缩的新事件日期错位。
         report.trend = CPAUsageTrendPoint.coalesced(report.trend)
         let sorted = categories.values.sorted {
-            if $0.value(metric) != $1.value(metric) { return $0.value(metric) > $1.value(metric) }
+            if $0.value(metric) != $1.value(metric) { return ($0.value(metric) ?? -1) > ($1.value(metric) ?? -1) }
             if $0.requests != $1.requests { return $0.requests > $1.requests }
             return $0.key < $1.key
         }
@@ -156,21 +182,28 @@ nonisolated struct CPAUsageHistoricalReport {
     /// 历史只提供日级 Token 分量，价格表仍应列出这些模型并允许配置单价。
     /// 缓存读写无法恢复时，仅估算普通输入和输出，不推测缓存类型、不把整桶计为完整覆盖。
     func merging(into original: CPAUsagePricingReport, prices: [CPAModelPrice]) -> CPAUsagePricingReport {
-        let catalogue = Dictionary(prices.map { (Self.sqliteNoCaseKey($0.model), $0) }, uniquingKeysWith: { first, _ in first })
-        var rows = Dictionary(original.rows.map { (Self.sqliteNoCaseKey($0.model), $0) }, uniquingKeysWith: { first, _ in first })
+        let catalogue = Self.priceCatalogue(prices)
+        // SQL 可能提供大小写不同的明细行；旧桶按目录键合并时不能丢弃任何一行费用。
+        var rows = Dictionary(original.rows.map { (Self.sqliteNoCaseKey($0.model), $0) }, uniquingKeysWith: { first, next in
+            let values = [first.estimatedCost, next.estimatedCost].compactMap { $0 }
+            return CPAUsagePriceRow(model: first.model, requests: first.requests + next.requests,
+                tokens: first.tokens + next.tokens, pricedRequests: first.pricedRequests + next.pricedRequests,
+                estimatedCost: values.isEmpty ? nil : values.reduce(0, +), price: first.price ?? next.price,
+                hasPartialEstimate: first.hasPartialEstimate || next.hasPartialEstimate)
+        })
         for bucket in buckets {
             let key = Self.sqliteNoCaseKey(bucket.model)
             let old = rows[key]
             let price = old?.price ?? catalogue[key]
-            let estimate = historicalCost(bucket, price: price)
-            let costs = [old?.estimatedCost, estimate.cost].compactMap { $0 }
+            let estimate = Self.historicalCost(bucket, price: price)
+            let costs = [old?.estimatedCost, estimate.amount].compactMap { $0 }
             var row = CPAUsagePriceRow(model: old?.model ?? bucket.model,
                 requests: (old?.requests ?? 0) + bucket.requests,
                 tokens: (old?.tokens ?? 0) + bucket.totalTokens,
-                pricedRequests: (old?.pricedRequests ?? 0) + (estimate.complete ? bucket.requests : 0),
+                pricedRequests: (old?.pricedRequests ?? 0) + (estimate.isPartial ? 0 : bucket.requests),
                 estimatedCost: costs.isEmpty ? nil : costs.reduce(0, +), price: price)
             row.historicalRequests = (old?.historicalRequests ?? 0) + bucket.requests
-            row.hasPartialEstimate = (old?.hasPartialEstimate ?? false) || !estimate.complete
+            row.hasPartialEstimate = (old?.hasPartialEstimate ?? false) || estimate.isPartial
                 || row.pricedRequests < row.requests
             rows[key] = row
         }
@@ -190,20 +223,33 @@ nonisolated struct CPAUsageHistoricalReport {
         value.utf8.map { byte in (65...90).contains(byte) ? byte + 32 : byte }
     }
 
-    private func historicalCost(_ bucket: UsageBucket, price: CPAModelPrice?) -> (cost: Double?, complete: Bool) {
-        guard let price else { return (nil, false) }
+    private static func categoryName(_ bucket: UsageBucket, dimension: CPAUsageDimension) -> String {
+        switch dimension {
+        case .model: bucket.model
+        case .provider: bucket.provider
+        case .source, .apiKey: ""
+        }
+    }
+
+    private static func priceCatalogue(_ prices: [CPAModelPrice]) -> [[UInt8]: CPAModelPrice] {
+        Dictionary(prices.map { (sqliteNoCaseKey($0.model), $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private static func historicalCost(_ bucket: UsageBucket, price: CPAModelPrice?) -> CPAUsageCostEstimate {
+        let unknown = CPAUsageCostEstimate(isPartial: true)
+        guard let price else { return unknown }
         // 只有总 Token 而没有输入/输出分量的旧归档不能按零元处理。
         // 真实的零 Token 桶仍可使用显式配置单价得到完整的零费用。
-        guard bucket.inputTokens > 0 || bucket.outputTokens > 0 || bucket.totalTokens == 0 else { return (nil, false) }
+        guard bucket.inputTokens > 0 || bucket.outputTokens > 0 || bucket.totalTokens == 0 else { return unknown }
         // 输入/输出超出总量，或缓存超出输入时，已保存的分量彼此矛盾；此时无法证明
         // 任何分量计价是实际费用下界，必须保持未知。总量大于已知分量则仍可估算
         // 已知部分，只是不计为完整覆盖。用减法比较避免不可信旧数据的加法溢出。
         guard bucket.inputTokens <= bucket.totalTokens,
               bucket.outputTokens <= bucket.totalTokens - bucket.inputTokens,
-              bucket.cachedTokens <= bucket.inputTokens else { return (nil, false) }
+              bucket.cachedTokens <= bucket.inputTokens else { return unknown }
         let input = max(0, bucket.inputTokens - bucket.cachedTokens)
         let cost = (Double(input) * price.input + Double(bucket.outputTokens) * price.output) / 1_000_000
         let complete = bucket.cachedTokens == 0 && bucket.totalTokens == bucket.inputTokens + bucket.outputTokens
-        return (cost, complete)
+        return CPAUsageCostEstimate(amount: cost, isPartial: !complete)
     }
 }

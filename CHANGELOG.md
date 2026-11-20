@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.3] - 2026-11-20
 
+### build 114
+
+- 移除「仅监控」模式，统一使用本地代理并保留旧额度历史查询。
+- 合入账号额度与菜单栏缓存、代理进程管理、用量统计和工作区改进。详见 [1.1.3 发行说明](docs/releases/1.1.3.md)。
+
 ### build 113
 
 - 以尚未公开发布的 1.1.2 源码为基线，包含调用统计概览、后台钥匙串读取、Responses 路由和热力图改进。

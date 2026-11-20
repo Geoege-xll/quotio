@@ -1,7 +1,7 @@
 import Foundation
 
 // 全局导航类型归应用导航层；旧 quota、logs 和 workspace 兼容入口继续保留。
-// 原始值和刷新入口归属不变，本次拆文件不会更改侧边栏或新增页面。
+// 旧原始值继续用于程序化导航。
 
 // MARK: - Navigation
 
@@ -20,12 +20,23 @@ nonisolated enum NavigationPage: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// 这些页面已经提供完整的额度／用量刷新入口，监控模式的侧栏不能再添加
-    /// 第二个通用刷新按钮。旧 quota 路由与融合后的 providers 路由使用同一规则。
-    var providesDataRefreshAction: Bool {
+    /// 侧栏固定呈现本地路由工作流；旧额度与日志仍由 App 详情路由接收。
+    static let sidebarPages: [NavigationPage] = [
+        .dashboard, .analytics, .providers, .agents, .agentManagement, .apiKeys, .settings, .about
+    ]
+
+    var titleKey: String {
         switch self {
-        case .dashboard, .analytics, .quota, .providers: true
-        default: false
+        case .dashboard: "nav.dashboard"
+        case .analytics: "nav.analytics"
+        case .quota: "nav.quota"
+        case .providers: "nav.accounts"
+        case .agents: "nav.agents"
+        case .agentManagement: "nav.agentManagement"
+        case .apiKeys: "nav.apiKeys"
+        case .logs: "nav.logs"
+        case .settings: "nav.settings"
+        case .about: "nav.about"
         }
     }
 

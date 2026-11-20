@@ -9,23 +9,25 @@ struct AccountQuotaActions: View {
     @State private var showsWarmup = false
 
     private var isRefreshing: Bool {
-        viewModel.isRefreshing(provider: account.provider) || account.quotaAccountKeys.contains {
+        viewModel.canRefreshAccountQuotas && (viewModel.isRefreshing(provider: account.provider) || account.quotaAccountKeys.contains {
             viewModel.isRefreshing(account: QuotaAccountID(provider: account.provider, accountKey: $0))
-        }
+        })
     }
 
     private func isBlocked(_ key: String) -> Bool {
-        !viewModel.supportsScopedRefresh(for: account.provider)
+        !viewModel.canRefreshAccountQuotas || !viewModel.supportsScopedRefresh(for: account.provider)
             || viewModel.isRefreshBlocked(for: QuotaAccountID(provider: account.provider, accountKey: key))
     }
 
     private func refresh(_ key: String) {
+        guard !isBlocked(key) else { return }
         Task { await viewModel.refreshQuota(for: QuotaAccountID(provider: account.provider, accountKey: key)) }
     }
 
     var body: some View {
         HStack(spacing: 8) {
-            if account.provider == .antigravity, let key = account.quotaAccountKeys.first {
+            if account.provider == .antigravity, let key = account.quotaAccountKeys.first,
+               account.canManageCPA && viewModel.hasCurrentCPAAccountDirectory {
                 let enabled = viewModel.isWarmupEnabled(for: account.provider, accountKey: key)
                 QuotioCircularIconButton(systemImage: enabled ? "bolt.fill" : "bolt",
                     tint: enabled ? account.provider.color : .secondary,
@@ -52,6 +54,7 @@ struct AccountQuotaActions: View {
                 } label: { refreshIcon }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .disabled(!viewModel.canRefreshAccountQuotas)
                 .nativeTooltip("action.refreshQuota".localized())
                 .help("action.refreshQuota".localized())
                 .accessibilityLabel("action.refreshQuota".localized())
@@ -65,6 +68,10 @@ struct AccountQuotaActions: View {
                     .accessibilityLabel("action.refreshQuota".localized())
                     .accessibilityIdentifier("accounts.action.refresh")
             }
+        }
+        .onChange(of: viewModel.hasCurrentCPAAccountDirectory) { _, canManage in
+            // 已打开的预热设置不能在 CPA 目录切到快照后继续发起手动任务。
+            if !canManage { showsWarmup = false }
         }
     }
 

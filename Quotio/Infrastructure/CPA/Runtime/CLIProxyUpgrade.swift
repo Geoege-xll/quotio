@@ -280,10 +280,11 @@ extension CLIProxyManager {
     /// 3. Validate compatibility via /meta
     /// 4. If valid: promote to active; if not: rollback
     func performManagedUpgrade(to version: ProxyVersionInfo) async throws {
+        guard !isShuttingDown else { throw CancellationError() }
         guard version.isSupportedMajorVersion else {
             throw ProxyUpgradeError.dryRunFailed("QuotioPlus 现在仅支持 CLIProxyAPI 8.x")
         }
-        guard managerState == .active || managerState == .idle else {
+        guard !isDownloading, managerState == .active || managerState == .idle else {
             throw ProxyUpgradeError.dryRunFailed("Cannot upgrade while in \(managerState) state")
         }
 
@@ -302,21 +303,41 @@ extension CLIProxyManager {
         }
 
         // Step 3: Validate compatibility
-        guard let testPort = testPort, let testManagementKey = testManagementKey else {
+        guard let testPort, let testManagementKey, let testProcess else {
             await stopTestProxy()
             try? storageManager.deleteVersion(installed.version)
+            if isShuttingDown { throw CancellationError() }
             throw ProxyUpgradeError.dryRunFailed("Test port not available")
         }
 
-        let compatResult = await compatibilityChecker.fullCheck(port: testPort, managementKey: testManagementKey)
+        // 保留升级原有的两步兼容检查。每次管理请求前均由本轮 Process 证明回环端点归属。
+        let compatResult: CompatibilityCheckResult
+        if await isOwnedProxyHealthy(testProcess, port: testPort, managementKey: testManagementKey),
+           !isShuttingDown, self.testProcess === testProcess {
+            compatResult = await compatibilityChecker.checkCompatibility(port: testPort, managementKey: testManagementKey)
+        } else {
+            compatResult = .proxyNotRunning
+        }
+        if isShuttingDown || Task.isCancelled {
+            await stopTestProxy()
+            discardTestConfiguration()
+            try? storageManager.deleteVersion(installed.version)
+            throw CancellationError()
+        }
 
-        if !compatResult.isCompatible {
+        let result = ProxyProcessOwnership.ownsLoopbackListener(testProcess, port: testPort)
+            ? compatResult : .proxyNotRunning
+        if !result.isCompatible {
             // Compatibility failed, rollback
             await stopTestProxy()
+            discardTestConfiguration()
             try? storageManager.deleteVersion(installed.version)
-            upgradeError = compatResult.description
-            NotificationManager.shared.notifyUpgradeFailed(version: installed.version, reason: compatResult.description)
-            throw ProxyUpgradeError.compatibilityCheckFailed(compatResult)
+            managerState = proxyStatus.running ? .active : .idle
+            testingVersion = nil
+            self.testPort = nil
+            upgradeError = result.description
+            NotificationManager.shared.notifyUpgradeFailed(version: installed.version, reason: result.description)
+            throw ProxyUpgradeError.compatibilityCheckFailed(result)
         }
 
         // Step 4: Promote the new version
@@ -398,89 +419,74 @@ extension CLIProxyManager {
 
     /// Start a dry-run of a specific version on a test port.
     private func startDryRun(version: String) async throws {
+        try Task.checkCancellation()
+        guard !isShuttingDown else { throw CancellationError() }
         guard let binaryPath = storageManager.getBinaryPath(for: version) else {
             throw ProxyUpgradeError.dryRunFailed("Version \(version) not installed")
         }
 
+        let port = try findUnusedPort()
+        let managementKey = UUID().uuidString
+        let configPath = try createTestConfig(port: port, managementKey: managementKey)
         managerState = .testing
         testingVersion = version
-
-        // Find an unused port for testing
-        let port = try findUnusedPort()
         testPort = port
-
-        // Create a temporary config for the test
-        let managementKey = UUID().uuidString
-        let configPath = createTestConfig(port: port, managementKey: managementKey)
         testConfigPath = configPath
         testManagementKey = managementKey
-
-        // Track success to determine cleanup behavior
-        var succeeded = false
-        defer {
-            if !succeeded {
-                // Cleanup on any failure path (sync version for defer block)
-                stopTestProxySync()
-                cleanupTestConfig(configPath)
-                testConfigPath = nil
-                testManagementKey = nil
-                managerState = proxyStatus.running ? .active : .idle
-                testingVersion = nil
-                testPort = nil
-            }
-        }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
         process.arguments = ["-config", configPath]
         process.currentDirectoryURL = URL(fileURLWithPath: binaryPath).deletingLastPathComponent()
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        // 试运行无需输出，并且不能因无人读取标准输出的管道而阻塞健康探测。
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
 
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
         process.environment = environment
 
         do {
-            try process.run()
-        } catch {
-            throw ProxyUpgradeError.dryRunFailed(error.localizedDescription)
-        }
+            do {
+                try process.run()
+            } catch {
+                throw ProxyUpgradeError.dryRunFailed(error.localizedDescription)
+            }
+            testProcess = process
 
-        testProcess = process
-
-        // Slow machines can take longer than a fixed startup delay to bind the
-        // management endpoint. Poll with a bounded request timeout instead of
-        // rejecting an otherwise healthy proxy after one early connection.
-        let startupOutcome = try await ProxyStartupHealthPoller().waitUntilReady(
-            isProcessRunning: { process.isRunning },
-            checkHealth: {
-                await self.compatibilityChecker.isHealthy(
-                    port: port,
-                    managementKey: managementKey,
-                    requestTimeout: 1
+            // 即使有别的进程在端口预检之后启动，也只有本轮子进程实际监听后才检查管理接口。
+            let outcome = try await ProxyStartupHealthPoller().waitUntilReady(
+                isProcessRunning: { process.isRunning && !self.isShuttingDown },
+                checkHealth: {
+                    await self.isOwnedProxyHealthy(process, port: port, managementKey: managementKey, requestTimeout: 1)
+                }
+            )
+            try Task.checkCancellation()
+            guard !isShuttingDown, testProcess === process else { throw CancellationError() }
+            switch outcome {
+            case .ready:
+                return
+            case .processExited:
+                throw ProxyUpgradeError.dryRunFailed(
+                    "proxy.upgrade.error.testProcessExited".localizedStatic()
+                )
+            case .timedOut:
+                throw ProxyUpgradeError.dryRunFailed(
+                    "proxy.upgrade.error.startupTimedOut".localizedStatic()
                 )
             }
-        )
-
-        switch startupOutcome {
-        case .ready:
-            break
-        case .processExited:
-            throw ProxyUpgradeError.dryRunFailed(
-                "proxy.upgrade.error.testProcessExited".localizedStatic()
-            )
-        case .timedOut:
-            throw ProxyUpgradeError.dryRunFailed(
-                "proxy.upgrade.error.startupTimedOut".localizedStatic()
-            )
+        } catch {
+            await stopTestProxy()
+            discardTestConfiguration()
+            managerState = proxyStatus.running ? .active : .idle
+            testingVersion = nil
+            testPort = nil
+            if !(error is CancellationError), !isShuttingDown {
+                try ProxyProcessOwnership.requireAvailablePort(port)
+            }
+            throw error
         }
-
-        // Mark success - defer block will not cleanup
-        succeeded = true
     }
 
     /// Promote a tested version to active.
@@ -493,11 +499,8 @@ extension CLIProxyManager {
 
         // Stop the test proxy and clean up test config
         await stopTestProxy()
-        if let configPath = testConfigPath {
-            cleanupTestConfig(configPath)
-            testConfigPath = nil
-        }
-        testManagementKey = nil
+        discardTestConfiguration()
+        guard !isShuttingDown else { throw CancellationError() }
 
         // Stop the current active proxy if running
         let wasRunning = proxyStatus.running
@@ -521,6 +524,7 @@ extension CLIProxyManager {
 
     /// Rollback to the previous version.
     func rollback() async throws {
+        guard !isShuttingDown else { throw CancellationError() }
         guard let previousVersion = findPreviousVersion() else {
             throw ProxyUpgradeError.rollbackFailed("No previous version to rollback to")
         }
@@ -556,97 +560,22 @@ extension CLIProxyManager {
 
     // MARK: - Private Helpers
 
-    private func stopTestProxy() async {
-        guard let process = testProcess, process.isRunning else {
-            testProcess = nil
-            testManagementKey = nil
-            return
-        }
-
-        let pid = process.processIdentifier
-        process.terminate()
-
-        // Wait up to 2 seconds for graceful termination
-        let deadline = Date().addingTimeInterval(2.0)
-        while process.isRunning && Date() < deadline {
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-        }
-
-        if process.isRunning {
-            kill(pid, SIGKILL)
-        }
-
-        testProcess = nil
-        testManagementKey = nil
-
-        // Also kill anything on test port
-        if let port = testPort {
-            Self.killProcessOnPortSync(port)
-        }
-    }
-
-    /// Synchronous version for use in defer blocks.
-    private func stopTestProxySync() {
-        guard let process = testProcess, process.isRunning else {
-            testProcess = nil
-            testManagementKey = nil
-            return
-        }
-
-        let pid = process.processIdentifier
-        process.terminate()
-
-        // Wait up to 2 seconds for graceful termination
-        let deadline = Date().addingTimeInterval(2.0)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-
-        if process.isRunning {
-            kill(pid, SIGKILL)
-        }
-
-        testProcess = nil
-        testManagementKey = nil
-
-        // Also kill anything on test port
-        if let port = testPort {
-            Self.killProcessOnPortSync(port)
-        }
-    }
-
     private func findUnusedPort() throws -> UInt16 {
-        // Try ports in range 18000-18100
-        for port in UInt16(18000)...UInt16(18100) {
-            if !isPortInUse(port) && port != proxyStatus.port {
+        for port in UInt16(18000)...UInt16(18100) where port != proxyStatus.port {
+            do {
+                try ProxyProcessOwnership.requireAvailablePort(port)
                 return port
+            } catch ProxyProcessOwnership.PortError.inUse {
+                continue
             }
         }
         throw ProxyUpgradeError.dryRunFailed("No available port for testing")
     }
 
-    private func isPortInUse(_ port: UInt16) -> Bool {
-        let socket = socket(AF_INET, SOCK_STREAM, 0)
-        guard socket >= 0 else { return true }
-        defer { close(socket) }
-
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = port.bigEndian
-        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
-
-        let bindResult = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-
-        return bindResult != 0
-    }
-
-    private func createTestConfig(port: UInt16, managementKey: String) -> String {
+    private func createTestConfig(port: UInt16, managementKey: String) throws -> String {
         let tempDir = FileManager.default.temporaryDirectory
-        let testConfigPath = tempDir.appendingPathComponent("quotio-test-config-\(port).yaml").path
+        // 每次试运行使用独立文件，端口重用时也不覆盖上一次启动留下的文件。
+        let testConfigPath = tempDir.appendingPathComponent("quotio-test-config-\(UUID().uuidString).yaml").path
 
         let testConfig = """
         config-version: 8
@@ -671,12 +600,17 @@ extension CLIProxyManager {
           strategy: "round-robin"
         """
 
-        try? testConfig.write(toFile: testConfigPath, atomically: true, encoding: .utf8)
+        try testConfig.write(toFile: testConfigPath, atomically: true, encoding: .utf8)
         return testConfigPath
     }
 
-    private func cleanupTestConfig(_ configPath: String) {
-        try? FileManager.default.removeItem(atPath: configPath)
+    /// 清理仅属于本轮试运行的临时配置。升级收尾与应用退出可以重复调用。
+    func discardTestConfiguration() {
+        if let testConfigPath {
+            try? FileManager.default.removeItem(atPath: testConfigPath)
+            self.testConfigPath = nil
+        }
+        testManagementKey = nil
     }
 
     /// Compare two semantic version strings.

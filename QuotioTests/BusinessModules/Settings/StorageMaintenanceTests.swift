@@ -67,6 +67,7 @@ final class StorageMaintenanceTests: XCTestCase {
             XCTAssertTrue(try database.hasMigration(migration))
         }
         XCTAssertFalse(try database.hasMigration("cpa-unified-storage-v1"))
+        XCTAssertNil(try database.scalarInt("SELECT 1 FROM sqlite_master WHERE name='call_analytics_reset'"))
     }
 
     func testClearDashboardPreservesPricesAndExistingMigrationMarkers() async throws {
@@ -89,6 +90,51 @@ final class StorageMaintenanceTests: XCTestCase {
         XCTAssertEqual(try database.scalarText("SELECT aggregation_timezone FROM call_meta"), "Asia/Shanghai")
         XCTAssertEqual(try database.scalarInt("SELECT schema_version FROM call_meta"), 7)
         XCTAssertLessThan(try XCTUnwrap(database.scalarInt("SELECT CAST(generated_at AS INTEGER) FROM call_meta")), 0)
+        XCTAssertTrue(try database.hasMigration("call_analytics_json_v1"))
+    }
+
+    /// 后续模块失败必须恢复已删调用、指纹、时间与代次，而非只恢复发起这个错误的模块。
+    func testLaterModuleFailureRollsBackCallResetAndCheckpoints() async throws {
+        let url = try location()
+        let database = try seededDatabase(url)
+        _ = try await StorageMaintenanceStore(databaseURL: url, callResetClock: { Date(timeIntervalSince1970: 100) })
+            .clearStatistics([.callAnalytics])
+        let generation = try XCTUnwrap(database.scalarInt("SELECT generation FROM call_analytics_reset WHERE id=1"))
+        let store = StorageMaintenanceStore(databaseURL: url, callResetClock: { Date(timeIntervalSince1970: 200) })
+        // 删除夹具墓碑以覆盖失败时本事务新增的调用迁移标记，而不接触真实归档。
+        try database.execute("DELETE FROM analytics_migrations WHERE id='call_analytics_json_v1'")
+        try database.execute("INSERT INTO call_daily VALUES(1)")
+        try database.execute("INSERT INTO call_scan_checkpoint VALUES(1)")
+        try database.execute("UPDATE call_meta SET generated_at=200")
+        try database.execute("CREATE TABLE quota_history_samples(id INTEGER PRIMARY KEY, observed_at REAL)")
+        try database.execute("INSERT INTO quota_history_samples VALUES(1,101)")
+        try database.execute("""
+            CREATE TRIGGER reject_quota_clear BEFORE DELETE ON quota_history_samples
+            BEGIN SELECT RAISE(ABORT, 'fixture quota failure'); END
+            """)
+        do {
+            _ = try await store.clearStatistics(Set(AnalyticsStorageModule.allCases))
+            XCTFail("限额删除故障应使整个维护事务失败")
+        } catch let AnalyticsDatabase.DatabaseError.sqlite(_, message) {
+            XCTAssertEqual(message, "fixture quota failure")
+        }
+        XCTAssertEqual(try database.scalarInt("SELECT COUNT(*) FROM call_daily"), 1)
+        XCTAssertEqual(try database.scalarInt("SELECT COUNT(*) FROM call_scan_checkpoint"), 1)
+        XCTAssertEqual(try database.scalarInt("SELECT CAST(generated_at AS INTEGER) FROM call_meta"), 200)
+        XCTAssertEqual(try database.scalarInt("SELECT CAST(cleared_at AS INTEGER) FROM call_analytics_reset WHERE id=1"), 100)
+        XCTAssertEqual(try database.scalarInt("SELECT generation FROM call_analytics_reset WHERE id=1"), generation)
+        XCTAssertEqual(try database.scalarInt("SELECT COUNT(*) FROM quota_history_samples"), 1)
+        XCTAssertFalse(try database.hasMigration("cpa-unified-storage-v1"))
+        XCTAssertFalse(try database.hasMigration("call_analytics_json_v1"))
+
+        // 单选其他模块不动已有边界；下一次成功清理调用才更新同一行并补回墓碑。
+        _ = try await store.clearStatistics([.dashboard])
+        XCTAssertEqual(try database.scalarInt("SELECT CAST(cleared_at AS INTEGER) FROM call_analytics_reset"), 100)
+        XCTAssertEqual(try database.scalarInt("SELECT generation FROM call_analytics_reset"), generation)
+        _ = try await store.clearStatistics([.callAnalytics])
+        XCTAssertEqual(try database.scalarInt("SELECT COUNT(*) FROM call_analytics_reset"), 1)
+        XCTAssertEqual(try database.scalarInt("SELECT CAST(cleared_at AS INTEGER) FROM call_analytics_reset"), 200)
+        XCTAssertGreaterThan(try XCTUnwrap(database.scalarInt("SELECT generation FROM call_analytics_reset")), generation)
         XCTAssertTrue(try database.hasMigration("call_analytics_json_v1"))
     }
 

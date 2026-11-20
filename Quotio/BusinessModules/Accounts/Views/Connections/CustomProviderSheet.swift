@@ -11,16 +11,23 @@ struct CustomProviderSheet: View {
 
     let provider: CustomProvider?
     let initialProviderType: CustomProviderType
+    private let isAddingOfficialOpenAI: Bool
     let onSave: (CustomProvider) -> Void
 
     init(
         provider: CustomProvider?,
         initialProviderType: CustomProviderType = .openaiCompatibility,
+        isAddingOfficialOpenAI: Bool = false,
         onSave: @escaping (CustomProvider) -> Void
     ) {
         self.provider = provider
         self.initialProviderType = initialProviderType
+        // 预设只约束新建流程。稍后通过现有入口编辑已保存的供应商时，仍加载它自己的配置。
+        self.isAddingOfficialOpenAI = provider == nil && isAddingOfficialOpenAI
         self.onSave = onSave
+        if self.isAddingOfficialOpenAI {
+            _name = State(initialValue: "OpenAI")
+        }
     }
     
     // MARK: - Form State
@@ -42,6 +49,10 @@ struct CustomProviderSheet: View {
     @State private var showValidationAlert = false
     @State private var isTestingConnection = false
     @State private var testError: String?
+    // 取消后可能仍收到此前请求的结果，关闭标记让旧表单失去保存资格。
+    @State private var didCloseOfficialOpenAIAddition = false
+    // 目录读取和保存验证同用一个任务，由现有表单在关闭时取消并释放。
+    @State private var officialOpenAICatalogTask: Task<Void, Never>?
     
     // Model fetching state
     @State private var availableModels: [AvailableModel] = []
@@ -111,7 +122,7 @@ struct CustomProviderSheet: View {
                     }
 
                     // Step 4: Custom headers (optional)
-                    if providerType.supportsCustomHeaders {
+                    if providerType.supportsCustomHeaders && !isAddingOfficialOpenAI {
                         customHeadersSection
                     }
 
@@ -122,6 +133,7 @@ struct CustomProviderSheet: View {
                 }
                 .padding(20)
             }
+            .disabled(isAddingOfficialOpenAI && isTestingConnection)
 
             footerView
         }
@@ -129,6 +141,9 @@ struct CustomProviderSheet: View {
         .frame(width: 600, height: 700)
         .onAppear {
             loadProviderData()
+        }
+        .onDisappear {
+            cancelOfficialOpenAIAddition()
         }
         .alert("customProviders.validationError".localized(), isPresented: $showValidationAlert) {
             Button("action.ok".localized(), role: .cancel) {
@@ -157,7 +172,8 @@ struct CustomProviderSheet: View {
             }
             
             VStack(alignment: .leading, spacing: 2) {
-                Text(isEditing ? "customProviders.edit".localized() : "customProviders.add".localized())
+                Text(isAddingOfficialOpenAI ? "customProviders.openAIOfficial".localized()
+                    : isEditing ? "customProviders.edit".localized() : "customProviders.add".localized())
                     .font(.headline)
                 
                 Text(providerType.localizedDescription)
@@ -170,7 +186,7 @@ struct CustomProviderSheet: View {
 
             // Close (26pt circular target per design spec)
             QuotioCircularIconButton(systemImage: "xmark") {
-                dismiss()
+                closeSheet()
             }
             .accessibilityLabel("action.cancel".localized())
         }
@@ -256,6 +272,7 @@ struct CustomProviderSheet: View {
                     )
                 }
                 .menuStyle(.borderlessButton)
+                .disabled(isAddingOfficialOpenAI)
             }
             
             VStack(alignment: .leading, spacing: 8) {
@@ -271,13 +288,20 @@ struct CustomProviderSheet: View {
                     }
                 }
                 
-                QuotioCapsuleTextField(
-                    providerType.defaultBaseURL ?? "https://api.example.com",
-                    text: $baseURL,
-                    systemImage: "network",
-                    monospaced: true
-                )
-                .disabled(providerType == .clinePass)
+                if isAddingOfficialOpenAI {
+                    // 官方地址以可读文本呈现。请求与保存从同一常量取值，表单草稿不参与寻址。
+                    Text(CustomProvider.officialOpenAIBaseURL)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                } else {
+                    QuotioCapsuleTextField(
+                        providerType.defaultBaseURL ?? "https://api.example.com",
+                        text: $baseURL,
+                        systemImage: "network",
+                        monospaced: true
+                    )
+                    .disabled(providerType == .clinePass)
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -308,7 +332,7 @@ struct CustomProviderSheet: View {
 
                 Spacer()
 
-                if providerType != .clinePass {
+                if providerType != .clinePass && !isAddingOfficialOpenAI {
                     Button {
                         apiKeys.append(CustomAPIKeyEntry(apiKey: ""))
                     } label: {
@@ -345,13 +369,24 @@ struct CustomProviderSheet: View {
 
             QuotioCapsuleSecureField("customProviders.apiKeys".localized(), text: Binding(
                 get: { apiKeys[safe: index]?.apiKey ?? "" },
-                set: { if index < apiKeys.count { apiKeys[index].apiKey = $0 } }
+                set: { key in
+                    guard index < apiKeys.count else { return }
+                    if isAddingOfficialOpenAI, apiKeys[index].apiKey != key {
+                        // 模型权限随密钥变化。清除旧目录与选择，迟到的查询只在密钥仍匹配时回填。
+                        availableModels = []
+                        selectedModelIds = []
+                        modelFetchError = nil
+                    }
+                    apiKeys[index].apiKey = key
+                }
             ), systemImage: "key")
 
-            QuotioCapsuleTextField("customProviders.proxyURL".localized(), text: Binding(
-                get: { apiKeys[safe: index]?.proxyURL ?? "" },
-                set: { if index < apiKeys.count { apiKeys[index].proxyURL = $0.isEmpty ? nil : $0 } }
-            ), systemImage: "globe", monospaced: true)
+            if !isAddingOfficialOpenAI {
+                QuotioCapsuleTextField("customProviders.proxyURL".localized(), text: Binding(
+                    get: { apiKeys[safe: index]?.proxyURL ?? "" },
+                    set: { if index < apiKeys.count { apiKeys[index].proxyURL = $0.isEmpty ? nil : $0 } }
+                ), systemImage: "globe", monospaced: true)
+            }
         }
         .padding(12)
         .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
@@ -382,7 +417,9 @@ struct CustomProviderSheet: View {
                         stepPill(providerType == .clinePass ? 2 : 3)
                     }
                     
-                    Text("customProviders.modelMappingDesc".localized())
+                    Text((isAddingOfficialOpenAI
+                        ? "customProviders.selectModelsHint"
+                        : "customProviders.modelMappingDesc").localized())
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -406,7 +443,7 @@ struct CustomProviderSheet: View {
             }
             
             // Limit models toggle
-            if !availableModels.isEmpty {
+            if !isAddingOfficialOpenAI && !availableModels.isEmpty {
                 Toggle(isOn: $limitToSelectedModels) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("customProviders.limitModels".localized())
@@ -444,7 +481,7 @@ struct CustomProviderSheet: View {
             // Model selection interface
             if !availableModels.isEmpty {
                 modelSelectionList
-            } else if !isLoadingModels {
+            } else if !isLoadingModels && !isAddingOfficialOpenAI {
                 // Manual entry fallback
                 manualModelEntry
             }
@@ -461,7 +498,7 @@ struct CustomProviderSheet: View {
             // All models (searchable)
             if !models.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    if modelSearchText.isEmpty {
+                    if modelSearchText.isEmpty && !isAddingOfficialOpenAI {
                         Text("customProviders.allModels".localized())
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -686,11 +723,11 @@ struct CustomProviderSheet: View {
     private var footerView: some View {
         HStack {
             Button("action.cancel".localized()) {
-                dismiss()
+                closeSheet()
             }
             .buttonStyle(.quotioSecondaryCapsule)
             .keyboardShortcut(.escape)
-            .disabled(isTestingConnection)
+            .disabled(isTestingConnection && !isAddingOfficialOpenAI)
             
             Spacer()
             
@@ -709,15 +746,29 @@ struct CustomProviderSheet: View {
             }
             .keyboardShortcut(.return, modifiers: .command)
             .buttonStyle(.quotioPrimaryCapsule)
-            .disabled(isTestingConnection)
+            .disabled(isTestingConnection || (isAddingOfficialOpenAI && isLoadingModels))
         }
         .padding(20)
     }
     
     // MARK: - Actions
+
+    private func closeSheet() {
+        cancelOfficialOpenAIAddition()
+        dismiss()
+    }
+
+    private func cancelOfficialOpenAIAddition() {
+        guard isAddingOfficialOpenAI else { return }
+        // 在弹窗动画或外层卸载前同步失效，防止取消时到达的响应回填表单或触发保存。
+        didCloseOfficialOpenAIAddition = true
+        officialOpenAICatalogTask?.cancel()
+        officialOpenAICatalogTask = nil
+    }
     
     private func loadProviderData() {
         guard let provider = provider else {
+            if isAddingOfficialOpenAI { return }
             providerType = initialProviderType
             if initialProviderType == .clinePass {
                 name = nextAvailableClinePassName()
@@ -805,6 +856,11 @@ struct CustomProviderSheet: View {
     }
     
     private func fetchModelsFromAPI() {
+        if isAddingOfficialOpenAI {
+            loadOfficialOpenAICatalog()
+            return
+        }
+
         if providerType == .clinePass {
             availableModels = Self.clinePassModels
             modelFetchError = nil
@@ -900,6 +956,8 @@ struct CustomProviderSheet: View {
     }
     
     private func saveProvider() {
+        // 保存和刷新共用原表单任务的忙碌状态，连续快捷键不能提交两次或竞争更新目录。
+        if isAddingOfficialOpenAI && (didCloseOfficialOpenAIAddition || isTestingConnection || isLoadingModels) { return }
         // Clear previous errors
         testError = nil
         let weightedKeys: [CustomAPIKeyEntry]
@@ -927,20 +985,34 @@ struct CustomProviderSheet: View {
         }
         
         // Build provider
+        let keysToSave: [CustomAPIKeyEntry]
+        if isAddingOfficialOpenAI {
+            // 只保存本轮探测的那把 Key，去掉粘贴时附带的空白，同时排除草稿中的代理配置。
+            keysToSave = weightedKeys.prefix(1).compactMap { entry in
+                var key = entry
+                key.apiKey = key.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                key.proxyURL = nil
+                return key.apiKey.isEmpty ? nil : key
+            }
+        } else {
+            keysToSave = weightedKeys.filter { !$0.apiKey.trimmingCharacters(in: .whitespaces).isEmpty }
+        }
+
         let newProvider = CustomProvider(
             id: provider?.id ?? UUID(),
             name: name.trimmingCharacters(in: .whitespaces),
-            type: providerType,
-            baseURL: providerType == .clinePass
-                ? (providerType.defaultBaseURL ?? baseURL)
+            type: isAddingOfficialOpenAI ? .openaiCompatibility : providerType,
+            baseURL: isAddingOfficialOpenAI ? CustomProvider.officialOpenAIBaseURL
+                : providerType == .clinePass ? (providerType.defaultBaseURL ?? baseURL)
                 : normalizedBaseURL(baseURL, for: providerType),
             prefix: prefix.trimmingCharacters(in: .whitespaces).isEmpty ? nil : prefix.trimmingCharacters(in: .whitespaces),
-            apiKeys: weightedKeys.filter { !$0.apiKey.trimmingCharacters(in: .whitespaces).isEmpty },
-            models: limitToSelectedModels ? allModels : [],
-            headers: providerType.supportsCustomHeaders
+            apiKeys: keysToSave,
+            models: !isAddingOfficialOpenAI && limitToSelectedModels ? allModels : [],
+            // 自定义头在一般表单可以覆盖 Authorization、Host，官方添加时不让它们进入请求或持久化数据。
+            headers: providerType.supportsCustomHeaders && !isAddingOfficialOpenAI
                 ? CustomHeader.canonicalized(headers)
                 : [],
-            limitToSelectedModels: limitToSelectedModels,
+            limitToSelectedModels: isAddingOfficialOpenAI || limitToSelectedModels,
             isEnabled: isEnabled,
             createdAt: provider?.createdAt ?? Date(),
             updatedAt: Date(),
@@ -952,6 +1024,11 @@ struct CustomProviderSheet: View {
         
         if !validationErrors.isEmpty {
             showValidationAlert = true
+            return
+        }
+
+        if isAddingOfficialOpenAI {
+            loadOfficialOpenAICatalog(saving: newProvider)
             return
         }
         
@@ -976,6 +1053,82 @@ struct CustomProviderSheet: View {
                 }
             }
         }
+    }
+
+    /// 官方添加只注册这把 Key 的最新目录中明确选中的模型。目录变化时拒绝保存，
+    /// 由界面保留仍然可用的选择并提示复核，避免写入空目录或悄悄丢掉已选模型。
+    static func verifiedOfficialOpenAIProvider(
+        _ draft: CustomProvider,
+        selectedIDs: Set<String>,
+        catalog: [AvailableModel]
+    ) -> CustomProvider? {
+        let availableIDs = Set(catalog.map(\.id))
+        guard !selectedIDs.isEmpty, selectedIDs.isSubset(of: availableIDs) else { return nil }
+        var verified = draft
+        verified.models = selectedIDs.sorted().map { ModelMapping(name: $0, alias: $0) }
+        return verified
+    }
+
+    private func loadOfficialOpenAICatalog(saving draft: CustomProvider? = nil) {
+        guard !didCloseOfficialOpenAIAddition, !isLoadingModels, !isTestingConnection,
+              let key = apiKeys.first?.apiKey else { return }
+        let requestedSelection = selectedModelIds
+        let saving = draft != nil
+        isTestingConnection = saving
+        isLoadingModels = !saving
+        modelFetchError = nil
+
+        // 手动查询和点击添加使用同一条鉴权路径。首次直接点添加也会显示真实目录，
+        // 但这轮只回填候选，用户选择至少一个模型后才能提交原保存回调。
+        officialOpenAICatalogTask = Task {
+            defer {
+                if !didCloseOfficialOpenAIAddition {
+                    officialOpenAICatalogTask = nil
+                    isTestingConnection = false
+                    isLoadingModels = false
+                }
+            }
+            guard !Task.isCancelled else { return }
+            do {
+                let fetched = try await CustomProviderService.fetchOfficialOpenAIModels(apiKey: key)
+                guard !Task.isCancelled, !didCloseOfficialOpenAIAddition, apiKeys.first?.apiKey == key else { return }
+                let catalog = fetched.filter { !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                availableModels = catalog.sorted { $0.name < $1.name }
+                selectedModelIds.formIntersection(catalog.map(\.id))
+                let emptyMessage = "customProviders.openAIOfficial.emptyModels".localized()
+                if let draft {
+                    guard let provider = Self.verifiedOfficialOpenAIProvider(
+                        draft, selectedIDs: requestedSelection, catalog: catalog
+                    ) else {
+                        modelSearchText = ""
+                        testError = catalog.isEmpty ? emptyMessage : "customProviders.openAIOfficial.selectModel".localized()
+                        showValidationAlert = true
+                        return
+                    }
+                    onSave(provider)
+                    closeSheet()
+                } else if catalog.isEmpty {
+                    modelFetchError = emptyMessage
+                }
+            } catch {
+                guard !Task.isCancelled, !didCloseOfficialOpenAIAddition, apiKeys.first?.apiKey == key else { return }
+                let message = Self.officialOpenAIErrorMessage(error)
+                if saving {
+                    testError = message
+                    showValidationAlert = true
+                } else {
+                    modelFetchError = message
+                }
+            }
+        }
+    }
+
+    /// 目录读取与保存校验共用提示，保持 HTTP 错误的类型和原自定义表单文案各自独立。
+    static func officialOpenAIErrorMessage(_ error: Error) -> String {
+        if let connectionError = error as? CustomProviderTestError, case .unauthorized = connectionError {
+            return "customProviders.openAIOfficial.unauthorized".localized()
+        }
+        return error.localizedDescription
     }
     
     private func testConnection(provider: CustomProvider) async throws -> Bool {
@@ -1136,6 +1289,8 @@ private struct ModelSelectionRowView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // 选中状态同时交给系统辅助功能，读屏不依赖圆形图标或强调色。
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) {
                 isHovered = hovering

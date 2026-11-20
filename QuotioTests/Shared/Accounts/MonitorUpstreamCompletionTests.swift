@@ -48,25 +48,24 @@ final class MonitorUpstreamCompletionTests: XCTestCase {
     @MainActor
     private func isolatedViewModel() throws -> QuotaViewModel {
         let root = try directory()
-        let originalMode = OperatingModeManager.shared.currentMode
         let originalIDE = UserDefaults.standard.data(forKey: "persisted.ideQuotas")
         addTeardownBlock {
             await MainActor.run {
-                OperatingModeManager.shared.setMode(originalMode)
                 if let originalIDE { UserDefaults.standard.set(originalIDE, forKey: "persisted.ideQuotas") }
                 else { UserDefaults.standard.removeObject(forKey: "persisted.ideQuotas") }
             }
         }
-        OperatingModeManager.shared.setMode(.monitor)
+        let name = "quota-account-revision-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: name))
+        addTeardownBlock { preferences.removePersistentDomain(forName: name) }
         let service = DirectAuthFileService(authDirectory: root)
         let metadata = MonitorMetadataStore(url: root.appendingPathComponent("metadata.json"))
         let coordinator = MonitorRefreshCoordinator(
-            discovery: MonitorAccountDiscovery(vault: CompletionEmptyVault(), directAuthService: service,
-                                               metadata: metadata, codexFetcher: fetcher(root: root)),
+            metadata: metadata,
             snapshots: MonitorSnapshotStore(url: root.appendingPathComponent("snapshot.json")))
-        let viewModel = QuotaViewModel(monitorCoordinator: coordinator, directAuthService: service)
-        viewModel.monitorDiscoveryHookForTesting = { _ in [] }
-        return viewModel
+        return QuotaViewModel(monitorCoordinator: coordinator, directAuthService: service,
+            startsBackgroundServices: false, modeManager: OperatingModeManager(defaults: preferences),
+            menuBarSettings: MenuBarSettingsManager(defaults: preferences))
     }
 
     /// 删除后主动重加同键，旧数据库请求不能把刚添加的数据覆盖成之前的结果。
@@ -86,7 +85,7 @@ final class MonitorUpstreamCompletionTests: XCTestCase {
         XCTAssertEqual(model.providerQuotas[.cursor]?["A"]?.models.first?.percentage, 90)
     }
 
-    /// 离开 Monitor 再返回时枚举值虽相同，模式世代已变化，旧刷新仍不可提交。
+    /// 两次来源变动后标记虽相同，世代已变化，旧 IDE 刷新仍不可提交。
     @MainActor
     func testModeRoundTripInvalidatesInFlightRefresh() async throws {
         let model = try isolatedViewModel()
@@ -96,45 +95,22 @@ final class MonitorUpstreamCompletionTests: XCTestCase {
         model.ideQuotaFetchHookForTesting = { _ in started.fulfill(); await gate.wait(); return ["A": self.quota(80)] }
         let refresh = Task { await model.refreshImportedIDEQuotas() }
         await fulfillment(of: [started], timeout: 5)
-        OperatingModeManager.shared.setMode(.localProxy)
-        OperatingModeManager.shared.setMode(.monitor)
+        model.modeManager.setMode(.monitor)
+        model.modeManager.setMode(.localProxy)
         await gate.open()
         await refresh.value
         XCTAssertEqual(model.providerQuotas[.cursor]?["A"]?.models.first?.percentage, 10)
     }
 
-    /// 账号发现返回的旧列表也必须丢弃，不能只保护 quota 字典。
     @MainActor
-    func testDiscoverySuspendedDuringDeletionCannotRestoreAccountList() async throws {
+    func testDeleteClearsOrphanSubscriptionAndIssueWithoutQuotaEntry() async throws {
         let model = try isolatedViewModel()
-        let account = MonitorAccount.make(provider: .cursor, accountKey: "A", source: .localIDE, canDelete: true)
-        model.providerQuotas = [.cursor: ["A": quota()]]
-        model.monitorAccounts = [account]
-        let gate = CompletionGate()
-        let started = expectation(description: "账号发现挂起")
-        model.monitorDiscoveryHookForTesting = { _ in started.fulfill(); await gate.wait(); return [account] }
-        let load = Task { await model.loadDirectAuthFiles() }
-        await fulfillment(of: [started], timeout: 5)
-        model.monitorDiscoveryHookForTesting = { _ in [] }
-        await model.deleteAutoDetectedAccount(provider: .cursor, accountKey: "A")
-        await gate.open()
-        await load.value
-        XCTAssertFalse(model.monitorAccounts.contains { $0.accountKey == "A" })
-        XCTAssertNil(model.providerQuotas[.cursor]?["A"])
-    }
-
-    @MainActor
-    func testDisableClearsOrphanSubscriptionAndIssueWithoutQuotaEntry() async throws {
-        let model = try isolatedViewModel()
-        let account = MonitorAccount.make(provider: .antigravity, accountKey: "A", source: .nativeCredential)
-        model.monitorAccounts = [account]
-        model.providerQuotas = [:]
-        model.subscriptionInfos = [.antigravity: ["A": SubscriptionInfo(currentTier: nil, allowedTiers: nil,
+        model.subscriptionInfos = [.cursor: ["A": SubscriptionInfo(currentTier: nil, allowedTiers: nil,
             cloudaicompanionProject: nil, gcpManaged: nil, upgradeSubscriptionUri: nil, paidTier: nil)]]
-        let key = QuotaAccountID(provider: .antigravity, accountKey: "A")
+        let key = QuotaAccountID(provider: .cursor, accountKey: "A")
         model.monitorAccountIssues[key] = MonitorRefreshIssue(message: "fixture", occurredAt: Date())
-        await model.setMonitorAccountDisabled(true, accountID: account.id)
-        XCTAssertNil(model.subscriptionInfos[.antigravity]?["A"])
+        await model.deleteAutoDetectedAccount(provider: .cursor, accountKey: "A")
+        XCTAssertNil(model.subscriptionInfos[.cursor]?["A"])
         XCTAssertNil(model.monitorAccountIssues[key])
     }
 
@@ -202,8 +178,7 @@ final class MonitorUpstreamCompletionTests: XCTestCase {
         XCTAssertEqual(CompletionHTTPProtocol.requests.count, 0)
         XCTAssertEqual(try Data(contentsOf: path), data)
         // 启用从磁盘重读所有来源标记，随后可正常得到唯一额度行。
-        let discovery = MonitorAccountDiscovery(vault: vault, metadata: metadata, codexFetcher: reader)
-        await discovery.setDisabled(false, accountID: group.account.id)
+        try await metadata.setDisabled(false, accountID: group.stableDisabledID)
         let refreshed = await reader.fetchMonitorQuotas()
         XCTAssertEqual(refreshed.count, 1)
         XCTAssertEqual(CompletionHTTPProtocol.requests.filter { $0.url?.path.hasSuffix("/usage") == true }.count, 1)
@@ -294,29 +269,6 @@ final class MonitorUpstreamCompletionTests: XCTestCase {
         XCTAssertTrue(all.isEmpty)
     }
 
-    func testEnableDuringEmailAmbiguityClearsLegacyDisableWhenSiblingDisappears() async throws {
-        let root = try directory()
-        let pathA = root.appendingPathComponent("A.json"), pathB = root.appendingPathComponent("B.json")
-        try native(id: "A").write(to: pathA)
-        let metadata = MonitorMetadataStore(url: root.appendingPathComponent("metadata.json"))
-        let reader = fetcher(root: root, paths: [pathA.path, pathB.path])
-        let discovery = MonitorAccountDiscovery(vault: CompletionEmptyVault(), metadata: metadata, codexFetcher: reader)
-        let original = await reader.monitorCredentialGroups().first!
-        await discovery.setDisabled(true, accountID: original.account.id)
-        // 同时模拟旧版本留下的邮箱 ID，启用时也必须迁移清理。
-        try await metadata.setDisabled(true, accountID: original.account.id)
-        try native(id: "B").write(to: pathB)
-        let groups = await reader.monitorCredentialGroups()
-        let a = try XCTUnwrap(groups.first { $0.account.accountKey == "A" })
-        XCTAssertTrue(a.account.isDisabled)
-        await discovery.setDisabled(false, accountID: a.account.id)
-        try FileManager.default.removeItem(at: pathB)
-        let final = await reader.monitorCredentialGroups()
-        XCTAssertEqual(final.count, 1)
-        XCTAssertEqual(final.first?.account.isDisabled, false)
-    }
-
-    /// 两个不同账号的用户命令都应完成，只有同账号后来的命令可以使先前命令失效。
     func testIndependentAccountMutationsBothPersistButSameAccountKeepsLatest() async throws {
         let root = try directory()
         let metadata = MonitorMetadataStore(url: root.appendingPathComponent("metadata.json"))
@@ -340,67 +292,6 @@ final class MonitorUpstreamCompletionTests: XCTestCase {
         let enabled = await metadata.disabledAccountIDs(), current = await snapshots.load()
         XCTAssertEqual(enabled, ["B"])
         XCTAssertEqual(current[.cursor]?["A"]?.models.first?.percentage, 90)
-    }
-
-    func testNativeDisableCanBeClearedAfterAddingOwnedSource() async throws {
-        let root = try directory()
-        let path = root.appendingPathComponent("native.json")
-        try native(id: "A").write(to: path)
-        let metadata = MonitorMetadataStore(url: root.appendingPathComponent("metadata.json"))
-        let memory = CompletionCredentialMemory()
-        let vault = MonitorCredentialVault(metadata: metadata, backend: memory.backend)
-        let reader = fetcher(root: root, paths: [path.path], vault: vault)
-        let discovery = MonitorAccountDiscovery(vault: vault, metadata: metadata, codexFetcher: reader)
-        let nativeGroup = await reader.monitorCredentialGroups().first!
-        await discovery.setDisabled(true, accountID: nativeGroup.account.id)
-        let token = try jwt(id: "A")
-        let owned = MonitorAccount.make(provider: .codex, accountKey: "owned", source: .quotioKeychain, canDelete: true)
-        try await vault.save(MonitorOAuthCredential(accessToken: token, refreshToken: "fixture", idToken: token,
-                                                    accountID: "A", expiresAt: .distantFuture, extra: [:]), metadata: owned)
-        let withOwned = await reader.monitorCredentialGroups().first!
-        XCTAssertTrue(withOwned.account.isDisabled)
-        await discovery.setDisabled(false, accountID: withOwned.account.id)
-        let enabled = await reader.monitorCredentialGroups().first!
-        XCTAssertFalse(enabled.account.isDisabled)
-    }
-
-    func testCoordinatorFiltersRemovedIdentityButKeepsFailedLiveAccount() async {
-        let coordinator = MonitorRefreshCoordinator()
-        let old = quota(20), fresh = quota(80)
-        let result = await coordinator.refresh(provider: .codex, force: true,
-                                               previous: ["removed": old, "failed": old, "success": old],
-                                               credentialAccountKeys: ["failed", "success"]) { ["success": fresh] }
-        XCTAssertNil(result["removed"])
-        XCTAssertEqual(result["failed"]?.lastUpdated, old.lastUpdated)
-        XCTAssertEqual(result["success"]?.lastUpdated, fresh.lastUpdated)
-        let issues = await coordinator.currentIssues()
-        XCTAssertNotNil(issues[.codex])
-    }
-
-    func testAllSharedWaitersRejectDeletedGenerationAndAllowNewRefresh() async {
-        let coordinator = MonitorRefreshCoordinator()
-        let gate = CompletionGate()
-        let bothWaiting = expectation(description: "两个等待者均已进入")
-        bothWaiting.expectedFulfillmentCount = 2
-        await coordinator.setWaiterHookForTesting { bothWaiting.fulfill() }
-        let fresh = quota()
-        let first = Task { await coordinator.refresh(provider: .codex, force: true, previous: [:]) {
-            await gate.wait(); return ["deleted": fresh]
-        } }
-        let second = Task { await coordinator.refresh(provider: .codex, force: true, previous: [:]) {
-            await gate.wait(); return ["deleted": fresh]
-        } }
-        await fulfillment(of: [bothWaiting], timeout: 5)
-        coordinator.revision.advance()
-        await coordinator.setWaiterHookForTesting(nil)
-        let readded = await coordinator.refresh(provider: .codex, force: true, previous: [:]) { ["readded": fresh] }
-        await gate.open()
-        let a = await first.value, b = await second.value
-        XCTAssertTrue(a.isEmpty)
-        XCTAssertTrue(b.isEmpty)
-        XCTAssertNotNil(readded["readded"])
-        let issues = await coordinator.currentIssues()
-        XCTAssertTrue(issues.isEmpty)
     }
 
     func testOldSnapshotCannotOverwriteDeletionOrExplicitReadd() async throws {

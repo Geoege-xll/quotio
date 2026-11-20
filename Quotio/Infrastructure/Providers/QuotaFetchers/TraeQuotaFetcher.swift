@@ -41,11 +41,14 @@ struct TraeQuotaInfo: Sendable {
 /// Fetches quota from Trae using stored auth
 actor TraeQuotaFetcher {
     private var session: URLSession
+    private let readAuth: (@Sendable () -> TraeAuthData?)?
     private let storageJsonPath = "~/Library/Application Support/Trae/User/globalStorage/storage.json"
     private let authKey = "iCubeAuthInfo://icube.cloudide"
     
-    init() {
-        let config = ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 15)
+    /// 生产读取原存储文件；测试注入临时认证数据与 URLSession 验证出站前的账号筛选。
+    init(configuration: URLSessionConfiguration? = nil, readAuth: (@Sendable () -> TraeAuthData?)? = nil) {
+        self.readAuth = readAuth
+        let config = configuration ?? ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 15)
         config.httpAdditionalHeaders = [
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         ]
@@ -85,6 +88,7 @@ actor TraeQuotaFetcher {
     
     /// Read auth data from Trae's storage.json
     func readAuthFromStorageJson() -> TraeAuthData? {
+        if let readAuth { return readAuth() }
         let expandedPath = NSString(string: storageJsonPath).expandingTildeInPath
         
         guard FileManager.default.fileExists(atPath: expandedPath) else {
@@ -134,10 +138,13 @@ actor TraeQuotaFetcher {
     
     /// Fetch quota from Trae API
     func fetchQuota() async -> TraeQuotaInfo? {
-        guard let authData = readAuthFromStorageJson(),
-              let accessToken = authData.accessToken else {
-            return nil
-        }
+        guard let authData = readAuthFromStorageJson() else { return nil }
+        return await fetchQuota(authData: authData, isCurrent: { true })
+    }
+
+    /// 账号匹配完成后只使用已确认的这份凭据，不重新读取 IDE 文件。
+    private func fetchQuota(authData: TraeAuthData, isCurrent: @Sendable () async -> Bool) async -> TraeQuotaInfo? {
+        guard !Task.isCancelled, let accessToken = authData.accessToken else { return nil }
         
         // Use the API host from auth data or default
         let apiHost = authData.apiHost ?? "https://api-sg-central.trae.ai"
@@ -159,6 +166,8 @@ actor TraeQuotaFetcher {
         let body = ["require_usage": true]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
+        // 即使凭据已匹配，先复核 CPA 会话再让携带令牌的 HTTP 请求离开本机。
+        guard await isCurrent(), !Task.isCancelled else { return nil }
         do {
             let (data, response) = try await session.data(for: request)
             
@@ -265,10 +274,19 @@ actor TraeQuotaFetcher {
         )
     }
     
-    /// Convert to ProviderQuotaData for unified display
-    func fetchAsProviderQuota() async -> [String: ProviderQuotaData] {
-        guard await isInstalled() else { return [:] }
-        guard let info = await fetchQuota() else { return [:] }
+    /// 保留原有邮箱、用户名、用户 ID 的优先级。只有显式导入可显示缺失身份的占位符。
+    func fetchAsProviderQuota(matchingAccountKeys: Set<String>? = nil,
+                              isCurrent: @Sendable () async -> Bool = { true }) async -> [String: ProviderQuotaData] {
+        guard await isCurrent(), !Task.isCancelled else { return [:] }
+        if readAuth == nil, await !isInstalled() { return [:] }
+        // 安装探测完成后再确认许可，避免停机后读取 IDE 存储里的认证文件。
+        guard await isCurrent(), !Task.isCancelled, let authData = readAuthFromStorageJson() else { return [:] }
+        let identity = [authData.email, authData.username, authData.userId].compactMap { $0 }
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if let matchingAccountKeys {
+            guard let identity, identity != "Trae User", matchingAccountKeys.contains(identity) else { return [:] }
+        }
+        guard let info = await fetchQuota(authData: authData, isCurrent: isCurrent) else { return [:] }
         
         var models: [ModelQuota] = []
         
@@ -343,8 +361,9 @@ actor TraeQuotaFetcher {
             models.append(quotaModel)
         }
         
-        // If no quota models, add placeholder
+        // 有效权益也可能缺额度数据。明确导入仍可显示该账号，已导入刷新只保留上一份有效额度。
         if models.isEmpty {
+            guard matchingAccountKeys == nil else { return [:] }
             models.append(ModelQuota(
                 name: "trae-usage",
                 percentage: -1,
@@ -352,7 +371,7 @@ actor TraeQuotaFetcher {
             ))
         }
         
-        let email = info.email ?? info.username ?? info.userId ?? "Trae User"
+        let accountKey = identity ?? "Trae User"
         
         let quotaData = ProviderQuotaData(
             models: models,
@@ -361,6 +380,6 @@ actor TraeQuotaFetcher {
             planType: info.planType
         )
         
-        return [email: quotaData]
+        return [accountKey: quotaData]
     }
 }

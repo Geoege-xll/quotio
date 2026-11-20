@@ -37,7 +37,7 @@ struct LogsScreen: View {
         Group {
             if !viewModel.proxyManager.proxyStatus.running {
                 ProxyRequiredView(description: "logs.startProxy".localized()) {
-                    await viewModel.startProxy()
+                    viewModel.currentPage = .dashboard
                 }
             } else if logsViewModel.isFileLoggingEnabled == false {
                 ContentUnavailableView("logs.browser.disabled".localized(), systemImage: "doc.text",

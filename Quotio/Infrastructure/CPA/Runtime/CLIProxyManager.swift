@@ -39,48 +39,13 @@ final class CLIProxyManager {
         }
     }
     
-    nonisolated static func terminateProxyOnShutdown() {
-        let savedPort = UserDefaults.standard.integer(forKey: "proxyPort")
-        let port = (savedPort > 0 && savedPort < 65536) ? UInt16(savedPort) : 8080
-        killProcessOnPort(port)
-    }
-    
-    nonisolated private static func killProcessOnPort(_ port: UInt16) {
-        let lsofProcess = Process()
-        lsofProcess.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        lsofProcess.arguments = ["-ti", "tcp:\(port)"]
-
-        let pipe = Pipe()
-        lsofProcess.standardOutput = pipe
-        lsofProcess.standardError = FileHandle.nullDevice
-
-        let ownPid = ProcessInfo.processInfo.processIdentifier
-
-        do {
-            try lsofProcess.run()
-            lsofProcess.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !output.isEmpty else { return }
-
-            for pidString in output.components(separatedBy: .newlines) {
-                if let pid = Int32(pidString.trimmingCharacters(in: .whitespaces)) {
-                    if pid == ownPid {
-                        NSLog("[CLIProxyManager] Skipping kill of own PID \(pid) on port \(port) during shutdown")
-                        continue
-                    }
-                    kill(pid, SIGKILL)
-                }
-            }
-        } catch {
-        }
-    }
-    
     private var process: Process?
     // 试运行与认证流程在独立扩展中管理各自的进程句柄。
     var testProcess: Process?
+    @ObservationIgnored private var testStopTask: Task<Void, Never>?
     var authProcess: Process?
+    /// 保留已移交后台的授权清理，包括重试前取消的旧进程，直到该对象的有界清理完成。
+    @ObservationIgnored private var authStopTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     private(set) var proxyStatus = ProxyStatus()
     /// 只暴露当前由 Quotio 持有且仍存活的进程标识；不从端口或旧记录猜测 PID。
     var processIdentifier: Int32? {
@@ -101,7 +66,11 @@ final class CLIProxyManager {
     private(set) var isStopping = false
     @ObservationIgnored private var stopTask: Task<Void, Never>?
     private(set) var isStarting = false
-    /// 停止可能发生在旧启动的端口清理期间；下一次启动要等旧流程真正退出。
+    /// 退出是单向状态。即使迟到的安装、恢复或设置任务继续返回，也不能再拉起 CPA。
+    private(set) var isShuttingDown = false
+    @ObservationIgnored private var shutdownTask: Task<Void, Never>?
+    @ObservationIgnored private var startupTask: Task<Void, Error>?
+    /// 停止可能发生在健康探测或配置迁移期间；下一轮启动须等待旧流程完成收尾。
     @ObservationIgnored private var startupWaiters: [CheckedContinuation<Void, Never>] = []
     /// 界面可能连续保存或切换服务商；串行执行局部 PATCH，防止后发请求用旧文件覆盖先发结果。
     @ObservationIgnored private var providerSyncInProgress = false
@@ -151,9 +120,6 @@ final class CLIProxyManager {
     
     /// Health monitor task for auto-recovery
     private var healthMonitorTask: Task<Void, Never>?
-
-    /// PIDs that Quotio intentionally terminates during stop/restart/upgrade flows.
-    private var expectedTerminationPIDs = Set<Int32>()
 
     /// Pending restart after an unexpected proxy process exit.
     private var crashRestartTask: Task<Void, Never>?
@@ -280,20 +246,31 @@ final class CLIProxyManager {
         ensureConfigExists()
     }
 
+    #if DEBUG
+    /// 退出回归只使用测试子进程和隔离路径，不读取用户配置、偏好或钥匙串。
+    init(testingDirectory: URL) {
+        binaryPath = testingDirectory.appendingPathComponent("CLIProxyAPI").path
+        configPath = testingDirectory.appendingPathComponent("config.yaml").path
+        authDir = testingDirectory.appendingPathComponent("auth").path
+        managementKey = UUID().uuidString
+    }
+    #endif
+
     /// Restart the proxy if it is currently running.
     /// This is used to apply configuration changes that require a restart.
     private func restartProxyIfRunning() {
-        guard proxyStatus.running else { return }
+        guard !isShuttingDown, proxyStatus.running else { return }
 
         Task {
+            guard !isShuttingDown, proxyStatus.running else { return }
             NSLog("[CLIProxyManager] Restarting proxy to apply configuration changes...")
             stop()
-            // Wait 0.5s for ports to clear
-            try? await Task.sleep(nanoseconds: 500_000_000)
-
             do {
+                // start 会等待实际子进程退出，并拒绝被随后停止或退出意图作废的请求。
                 try await start()
                 NSLog("[CLIProxyManager] Proxy restarted successfully")
+            } catch is CancellationError {
+                return
             } catch {
                 NSLog("[CLIProxyManager] Failed to restart proxy: \(error)")
                 lastError = "Failed to restart: \(error.localizedDescription)"
@@ -880,14 +857,16 @@ final class CLIProxyManager {
     }
     
     func start(resetCrashRecoveryState: Bool = true) async throws {
+        guard !isShuttingDown else { throw CancellationError() }
         let requestedSession = runtimeSessionID
-        // 等待真实端口清理结束，防止旧停止任务误杀新启动的进程。
-        if let stopTask { await stopTask.value }
+        // 启动请求先等已持有的子进程退出，再核对等待期间有无停止或退出意图。
+        await waitForStop()
         while isStarting {
             await withCheckedContinuation { startupWaiters.append($0) }
         }
         try Task.checkCancellation()
-        guard requestedSession == runtimeSessionID else { throw CancellationError() }
+        guard !isShuttingDown, requestedSession == runtimeSessionID else { throw CancellationError() }
+        guard !proxyStatus.running else { return }
         guard isBinaryInstalled else {
             throw ProxyError.binaryNotFound
         }
@@ -896,8 +875,6 @@ final class CLIProxyManager {
             throw ProxyError.networkError("QuotioPlus 现在仅支持 CLIProxyAPI 8.x，请先安装并激活 8.x 版本")
         }
         
-        guard !proxyStatus.running else { return }
-
         if resetCrashRecoveryState {
             cancelCrashRestart()
             crashRestartAttempts = 0
@@ -907,19 +884,38 @@ final class CLIProxyManager {
         runtimeSessionID = UUID()
         let startingSession = runtimeSessionID
         lastError = nil
-        
+
+        // 管理器保留本轮启动句柄，使停止能取消正在等待的健康请求或配置迁移。
+        // 调用方取消也要传递到同一个任务，以免旧页面或恢复流程离开后仍继续启动。
+        let task = Task { try await runStartup(startingSession: startingSession) }
+        startupTask = task
         defer {
+            startupTask = nil
             isStarting = false
             let waiters = startupWaiters
             startupWaiters.removeAll()
             for waiter in waiters { waiter.resume() }
         }
-        
-        // Clean up any orphan processes from previous runs
-        await cleanupOrphanProcesses()
+
+        do {
+            try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch {
+            if !(error is CancellationError), runtimeSessionID == startingSession {
+                lastError = error.localizedDescription
+            }
+            throw error
+        }
+    }
+
+    private func runStartup(startingSession: UUID) async throws {
         try Task.checkCancellation()
-        guard runtimeSessionID == startingSession else { throw CancellationError() }
-        
+        let startingPort = proxyStatus.port
+        try ProxyProcessOwnership.requireAvailablePort(startingPort)
+
         // 旧配置在同步管理密钥和端口之前先留内存快照；迁移开始时再写入备份文件。
         // 这样备份保留的是本轮启动前的原件，而不是已经被启动前步骤改写的版本。
         let originalLegacyConfig: Data?
@@ -929,7 +925,7 @@ final class CLIProxyManager {
         syncSecretKeyInConfig()
         // 服务商变更等 v8 管理接口就绪后再提交，避免离线重写整份配置及用户注释。
         
-        updateConfigPort(proxyStatus.port)
+        updateConfigPort(startingPort)
         guard !configWriteFailed else {
             throw ProxyError.networkError("CPA 8 配置更新失败，请检查 config.yaml 的字段结构")
         }
@@ -974,7 +970,6 @@ final class CLIProxyManager {
         // Process 会持有终止回调；外层也弱引用管理器，避免进程存活期间通过回调形成保留环。
         process.terminationHandler = { [weak self] terminatedProcess in
             let status = terminatedProcess.terminationStatus
-            let pid = terminatedProcess.processIdentifier
             
             // Clear readability handlers to release closures and prevent resource leaks
             outputPipe.fileHandleForReading.readabilityHandler = nil
@@ -985,18 +980,14 @@ final class CLIProxyManager {
             try? errorPipe.fileHandleForReading.close()
             
             Task { @MainActor [weak self] in
-                guard let self = self else { return }
+                // 主动停止会先交出进程对象。按对象比较，迟到的回调不能修改新进程的状态。
+                guard let self, self.process === terminatedProcess else { return }
 
-                let wasExpected = self.expectedTerminationPIDs.remove(pid) != nil
-
-                guard self.process?.processIdentifier == pid else {
-                    return
-                }
-
+                let wasRunning = self.proxyStatus.running
                 self.proxyStatus.running = false
                 self.process = nil
                 
-                if !wasExpected && !self.isStarting {
+                if wasRunning, !self.isShuttingDown {
                     self.lastError = "Process exited with code: \(status)"
                     if status != 0 {
                         NotificationManager.shared.notifyProxyCrashed(exitCode: status)
@@ -1013,11 +1004,11 @@ final class CLIProxyManager {
             try await Task.sleep(nanoseconds: 1_500_000_000)
             // 停止会立即更换会话；旧启动恢复时不能把已停止的服务重新标为运行中。
             try Task.checkCancellation()
-            guard runtimeSessionID == startingSession, self.process === process else {
+            guard runtimeSessionID == startingSession, proxyStatus.port == startingPort else {
                 throw CancellationError()
             }
             
-            guard process.isRunning else {
+            guard self.process === process, process.isRunning else {
                 throw ProxyError.startupFailed
             }
 
@@ -1026,8 +1017,9 @@ final class CLIProxyManager {
             let outcome = try await ProxyStartupHealthPoller().waitUntilReady(
                 isProcessRunning: { process.isRunning },
                 checkHealth: {
-                    await self.compatibilityChecker.isHealthy(
-                        port: self.proxyStatus.port,
+                    await self.isOwnedProxyHealthy(
+                        process,
+                        port: startingPort,
                         managementKey: self.managementKey,
                         requestTimeout: 1
                     )
@@ -1036,15 +1028,18 @@ final class CLIProxyManager {
             guard case .ready = outcome else { throw ProxyError.startupFailed }
             // 健康检查期间用户可能已经点了停止；不能让旧启动继续迁移或写入配置。
             try Task.checkCancellation()
-            guard runtimeSessionID == startingSession, self.process === process, process.isRunning else {
+            guard runtimeSessionID == startingSession, proxyStatus.port == startingPort else {
                 throw CancellationError()
+            }
+            guard self.process === process, ProxyProcessOwnership.ownsLoopbackListener(process, port: startingPort) else {
+                throw ProxyError.startupFailed
             }
             if !usesV8Config {
                 guard let originalLegacyConfig else {
                     throw ProxyError.networkError("CPA 配置在启动期间被修改，请重试迁移")
                 }
                 try await migrateLegacyConfigToV8(
-                    startingSession: startingSession, process: process,
+                    startingSession: startingSession, startingPort: startingPort, process: process,
                     originalLegacyConfig: originalLegacyConfig
                 )
             } else {
@@ -1064,8 +1059,11 @@ final class CLIProxyManager {
             // 迁移与服务商同步都有网络等待；停止操作会更换会话并清空进程。
             // 重新确认本轮仍有效，避免旧任务把已停止的服务重新标为运行中。
             try Task.checkCancellation()
-            guard runtimeSessionID == startingSession, self.process === process, process.isRunning else {
+            guard runtimeSessionID == startingSession, proxyStatus.port == startingPort else {
                 throw CancellationError()
+            }
+            guard self.process === process, ProxyProcessOwnership.ownsLoopbackListener(process, port: startingPort) else {
+                throw ProxyError.startupFailed
             }
             // 全局代理偏好在官方迁移之后才写入 requests.proxy-url。
             // 旧配置里的单密钥 proxy-url 不能在备份之前被无锚点文本替换。
@@ -1074,22 +1072,23 @@ final class CLIProxyManager {
                 throw ProxyError.networkError("CPA 8 全局代理配置更新失败，请检查 config.yaml 的字段结构")
             }
             
-            NSLog("[CLIProxyManager] Proxy started on port \(proxyStatus.port)")
+            NSLog("[CLIProxyManager] Proxy started on port \(startingPort)")
             
             proxyStatus.running = true
             
             startHealthMonitor()
             
         } catch {
-            // 迁移或健康检查失败也必须清理本轮进程，避免界面显示已停止但端口仍被占用。
+            // 只有仍由本轮持有的子进程才会被清理。停止操作如果已经接管，沿用它的等待屏障。
             if self.process === process {
-                markExpectedTermination(process)
-                if process.isRunning { process.terminate() }
-                self.process = nil
-                proxyStatus.running = false
+                beginOwnedProcessStop()
             }
-            if !(error is CancellationError) && runtimeSessionID == startingSession {
-                lastError = error.localizedDescription
+            await waitForStop()
+            // 如果另一个进程在预检后抢占端口，等本轮子进程退出后再检查，
+            // 将该竞争报告为端口冲突，且不会把本轮进程自己的监听误报为冲突。
+            if runtimeSessionID == startingSession, !Task.isCancelled,
+               let proxyError = error as? ProxyError, case .startupFailed = proxyError {
+                try ProxyProcessOwnership.requireAvailablePort(startingPort)
             }
             throw error
         }
@@ -1097,7 +1096,7 @@ final class CLIProxyManager {
 
     /// 只借助 CPA 官方迁移器改写配置。保留原文件副本直到新布局及 v8 管理接口都通过检查。
     private func migrateLegacyConfigToV8(
-        startingSession: UUID, process: Process, originalLegacyConfig: Data
+        startingSession: UUID, startingPort: UInt16, process: Process, originalLegacyConfig: Data
     ) async throws {
         let configURL = URL(fileURLWithPath: configPath)
         guard let legacyYAML = String(data: originalLegacyConfig, encoding: .utf8) else {
@@ -1125,12 +1124,13 @@ final class CLIProxyManager {
             // 才允许自动恢复旧配置，避免覆盖等待期间其他管理客户端的修改。
             migratedSnapshot = try Data(contentsOf: configURL)
             guard usesV8Config,
-                  await compatibilityChecker.isHealthy(port: proxyStatus.port, managementKey: managementKey) else {
+                  await isOwnedProxyHealthy(process, port: startingPort, managementKey: managementKey) else {
                 throw ProxyError.networkError("CPA 8 配置迁移后校验失败")
             }
             // 停止可能发生在官方迁移的网络请求期间；不得再提交服务商补丁。
             try Task.checkCancellation()
-            guard runtimeSessionID == startingSession, self.process === process, process.isRunning else {
+            guard runtimeSessionID == startingSession, proxyStatus.port == startingPort,
+                  self.process === process else {
                 throw CancellationError()
             }
             // 完成结构转换后仅 PATCH 受管理的凭据族，CPA 会校验并保留其余注释。
@@ -1180,34 +1180,83 @@ final class CLIProxyManager {
         // 正在等待 stopTask 的启动请求；仅底层进程清理需要去重。
         cancelCrashRestart()
         runtimeSessionID = UUID()
-        guard !isStopping else { return }
-        terminateAuthProcess()
+        startupTask?.cancel()
         stopHealthMonitor()
+        terminateAuthProcess()
+        guard !isStopping else { return }
+        beginOwnedProcessStop()
+    }
 
+    private func beginOwnedProcessStop() {
         let currentProcess = process
-        let port = proxyStatus.port
-        markExpectedTermination(currentProcess)
-        isStopping = true
         process = nil
         proxyStatus.running = false
-
-        // 停止状态覆盖实际后台清理周期；所有启动入口会等待此任务，不能用延时模拟完成。
+        guard let currentProcess else { return }
+        isStopping = true
+        // 先移交进程对象再开始清理，旧回调不会修改运行状态。任务不持有端口，也无权终止其他进程。
         stopTask = Task { @MainActor [weak self] in
             await Task.detached(priority: .userInitiated) {
-                if let proc = currentProcess, proc.isRunning {
-                    let pid = proc.processIdentifier
-                    proc.terminate()
-                    let deadline = Date().addingTimeInterval(2.0)
-                    while proc.isRunning && Date() < deadline {
-                        usleep(100_000)
-                    }
-                    if proc.isRunning { kill(pid, SIGKILL) }
-                }
-                Self.killProcessOnPortSync(port)
+                await ProxyProcessOwnership.terminate(currentProcess)
             }.value
             self?.isStopping = false
             self?.stopTask = nil
         }
+    }
+
+    /// 等待已经发出的停止实际完成；没有停止任务时立即返回。
+    func waitForStop() async {
+        await stopTask?.value
+    }
+
+    /// 试运行也需要先等待当前对象终止。升级与退出同时请求时共用同一停止任务。
+    func stopTestProxy() async {
+        if let testStopTask {
+            await testStopTask.value
+            return
+        }
+        guard let testProcess else {
+            testManagementKey = nil
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            await Task.detached(priority: .userInitiated) {
+                await ProxyProcessOwnership.terminate(testProcess)
+            }.value
+            guard let self else { return }
+            if self.testProcess === testProcess {
+                self.testProcess = nil
+                self.testManagementKey = nil
+            }
+            self.testStopTask = nil
+        }
+        testStopTask = task
+        await task.value
+    }
+
+    /// 退出先封锁全部启动入口并取消旧任务，再并行等待仍由本应用持有的子进程。
+    /// 管理请求即使正在超时，也已被换代和取消，退出只需等待子进程清理。
+    func shutdownForApplicationExit() async {
+        if let shutdownTask {
+            await shutdownTask.value
+            return
+        }
+        isShuttingDown = true
+        stop()
+        // stop 同步移交仍活跃的授权。退出闸已关闭后续启动，快照同时包含此前取消或替换的授权。
+        let authorizationStops = Array(authStopTasks.values)
+
+        let task = Task { @MainActor in
+            async let testStop: Void = stopTestProxy()
+            await waitForStop()
+            // 各授权任务早已独立运行。逐一等待结果不会串行累加各进程的清理时限。
+            for authorizationStop in authorizationStops {
+                await authorizationStop.value
+            }
+            await testStop
+            discardTestConfiguration()
+        }
+        shutdownTask = task
+        await task.value
     }
 
     
@@ -1234,18 +1283,13 @@ final class CLIProxyManager {
         healthMonitorTask = nil
     }
 
-    private func markExpectedTermination(_ process: Process?) {
-        guard let process else { return }
-        expectedTerminationPIDs.insert(process.processIdentifier)
-    }
-
     private func cancelCrashRestart() {
         crashRestartTask?.cancel()
         crashRestartTask = nil
     }
 
     private func scheduleCrashRestart(exitCode: Int32) {
-        guard crashRestartTask == nil else { return }
+        guard !isShuttingDown, crashRestartTask == nil else { return }
 
         switch managerState {
         case .testing, .promoting, .rollingBack:
@@ -1272,7 +1316,7 @@ final class CLIProxyManager {
 
             self.crashRestartTask = nil
 
-            guard !self.proxyStatus.running else { return }
+            guard !self.isShuttingDown, !self.proxyStatus.running else { return }
 
             switch self.managerState {
             case .testing, .promoting, .rollingBack:
@@ -1286,6 +1330,9 @@ final class CLIProxyManager {
                 NSLog("[CLIProxyManager] Crash auto-restart successful")
             } catch is CancellationError {
                 // 用户停止优先于自动恢复，取消不应生成新的重试任务。
+            } catch ProxyProcessOwnership.PortError.inUse {
+                // 冲突需要用户更换端口或自行关闭外部进程。保留启动错误，停止无意义的自动重试。
+                return
             } catch {
                 self.lastError = "Auto-restart failed: \(error.localizedDescription)"
                 NSLog("[CLIProxyManager] Crash auto-restart failed: \(error)")
@@ -1296,7 +1343,7 @@ final class CLIProxyManager {
     
     private func performHealthCheck() async {
         // Bail out if proxy is not running or manager is in upgrade flow
-        guard proxyStatus.running else {
+        guard proxyStatus.running, let process else {
             healthCheckFailures = 0
             return
         }
@@ -1311,13 +1358,16 @@ final class CLIProxyManager {
         }
         
         let session = runtimeSessionID
-        let isHealthy = await compatibilityChecker.isHealthy(
-            port: proxyStatus.port,
+        let port = proxyStatus.port
+        let isHealthy = await isOwnedProxyHealthy(
+            process,
+            port: port,
             managementKey: managementKey
         )
         
         // Re-check state after await - proxy may have been stopped or upgrade may have started
-        guard !Task.isCancelled, runtimeSessionID == session, proxyStatus.running else { return }
+        guard !Task.isCancelled, runtimeSessionID == session, proxyStatus.running,
+              self.process === process, proxyStatus.port == port else { return }
         
         switch managerState {
         case .testing, .promoting, .rollingBack:
@@ -1350,73 +1400,36 @@ final class CLIProxyManager {
     // MARK: - Process Cleanup
     // ════════════════════════════════════════════════════════════════════════
     
-    /// Clean up any orphan proxy processes from previous runs.
-    /// Executes blocking operations on background thread to avoid blocking MainActor.
-    private func cleanupOrphanProcesses() async {
-        let port = proxyStatus.port
-        
-        // Execute blocking operations on background thread
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            Task.detached(priority: .userInitiated) {
-                Self.killProcessOnPortSync(port)
-                NSLog("[CLIProxyManager] Cleaned up orphan process on port \(port)")
-                
-                // Small delay to ensure ports are released
-                usleep(200_000)  // 200ms, avoid Thread.sleep in async context
-                continuation.resume()
-            }
+    /// 只向当前子进程持有的端点发送管理密钥，并拒绝归属已在网络等待期间变化的响应。
+    func isOwnedProxyHealthy(
+        _ process: Process, port: UInt16, managementKey: String, requestTimeout: TimeInterval = 3
+    ) async -> Bool {
+        guard !Task.isCancelled, ProxyProcessOwnership.ownsLoopbackListener(process, port: port) else {
+            return false
         }
+        let healthy = await compatibilityChecker.isHealthy(
+            port: port, managementKey: managementKey, requestTimeout: requestTimeout
+        )
+        return healthy && !Task.isCancelled && ProxyProcessOwnership.ownsLoopbackListener(process, port: port)
     }
-    
-    /// Synchronous port cleanup for use in detached tasks.
-    /// This method is `nonisolated` to allow calling from background threads.
-    nonisolated static func killProcessOnPortSync(_ port: UInt16) {
-        let lsofProcess = Process()
-        lsofProcess.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        lsofProcess.arguments = ["-ti", "tcp:\(port)"]
 
-        let pipe = Pipe()
-        lsofProcess.standardOutput = pipe
-        lsofProcess.standardError = FileHandle.nullDevice
-
-        let ownPid = ProcessInfo.processInfo.processIdentifier
-
-        do {
-            try lsofProcess.run()
-            lsofProcess.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !output.isEmpty else { return }
-
-            for pidString in output.components(separatedBy: .newlines) {
-                if let pid = Int32(pidString.trimmingCharacters(in: .whitespaces)) {
-                    if pid == ownPid {
-                        NSLog("[CLIProxyManager] Skipping kill of own PID \(pid) on port \(port)")
-                        continue
-                    }
-                    kill(pid, SIGKILL)
-                }
-            }
-        } catch {
-            // Silent failure - process may not exist
-        }
-    }
-    
     func terminateAuthProcess() {
-        guard let authProcess = authProcess, authProcess.isRunning else { return }
-        authProcess.terminate()
+        guard let process = authProcess else { return }
         self.authProcess = nil
-    }
-    
-    func toggle() async throws {
-        if proxyStatus.running {
-            stop()
-        } else {
-            try await start()
+        let id = ObjectIdentifier(process)
+        guard process.isRunning, authStopTasks[id] == nil else { return }
+
+        // 立即释放授权入口并交给高优先级清理。重试和 UI 取消无须等待 TERM 的宽限期。
+        authStopTasks[id] = Task.detached(priority: .userInitiated) { [weak self] in
+            await ProxyProcessOwnership.terminate(process)
+            await self?.finishAuthProcessStop(process)
         }
     }
-    
+
+    private func finishAuthProcessStop(_ process: Process) {
+        // 任务持有原对象直到登记移除。迟到的收尾只释放该对象，不访问当前授权。
+        authStopTasks.removeValue(forKey: ObjectIdentifier(process))
+    }
     
     func revealInFinder() {
         let path = effectiveBinaryPath

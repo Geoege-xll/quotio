@@ -25,6 +25,10 @@ public nonisolated protocol WorkspaceSkillServicing: Sendable {
     func saveRepos(_ repos: [SkillRepo]) async throws
     func loadInstalledSkills() async throws -> [WorkspaceSkill]
     func scanUnmanagedSkills() async throws -> [UnmanagedSkill]
+    func loadUnmanagedSkillSnapshot() async throws -> UnmanagedSkillSnapshot
+    func ignoreUnmanagedSkill(_ unmanaged: UnmanagedSkill) async throws
+    /// 返回原位置是否仍有待纳管技能。来源消失时也可删除忽略记录。
+    func unignoreUnmanagedSkill(_ ignored: UnmanagedSkill) async throws -> Bool
     func toggleAgent(skillDirectory: String, agent: WorkspaceAgent, enable: Bool) async throws
     func bulkToggleAllAgents(skillDirectory: String, enable: Bool) async throws
     func uninstallSkill(skillDirectory: String) async throws

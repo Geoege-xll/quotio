@@ -25,6 +25,9 @@ struct CPAUsageFilterCard: View {
         .init(selection: selection, dimension: dimension, metric: metric)
     }
 
+    // 指标已在主界面常驻，因此不再算作隐藏条件。
+    private var hiddenFilterCount: Int { current.hiddenConditionCount - (metric == .tokens ? 0 : 1) }
+
     private var rangeChoices: [CPAUsageFilterChoice] {
         CPAUsageTimeRange.dashboardOptions.map { .init(id: $0.rawValue, title: $0.titleKey.localized()) }
     }
@@ -54,7 +57,7 @@ struct CPAUsageFilterCard: View {
                     if !activeConditions.isEmpty {
                         activeConditionsBadges
                     }
-                    if current.hiddenConditionCount > 0 {
+                    if hiddenFilterCount > 0 {
                         resetButton
                     }
                     moreFiltersButton
@@ -65,7 +68,7 @@ struct CPAUsageFilterCard: View {
                     HStack(spacing: 8) {
                         timeRangeControl
                         Spacer(minLength: 8)
-                        if current.hiddenConditionCount > 0 {
+                        if hiddenFilterCount > 0 {
                             resetButton
                         }
                         moreFiltersButton
@@ -84,6 +87,12 @@ struct CPAUsageFilterCard: View {
                     }
                 }
             }
+
+            // 日期只写 selection.range；展示胶囊只写 metric。两个控件不共用重置路径。
+            QuotioCapsuleSegmentedControl(CPAUsageChartMetric.allCases, selection: $metric,
+                size: .small, tint: .accentColor, isEqualWidth: false, title: { $0.titleKey.localized() })
+                .disabled(!isAvailable)
+                .accessibilityIdentifier("cpaDisplayMetric")
 
             if !isAvailable {
                 Label("usage.cpa.legacyScope".localized(), systemImage: "info.circle")
@@ -169,7 +178,6 @@ struct CPAUsageFilterCard: View {
                     selection.range = .today
                 }
                 dimension = .model
-                metric = .tokens
             }
         } label: {
             Image(systemName: "arrow.counterclockwise")
@@ -189,21 +197,22 @@ struct CPAUsageFilterCard: View {
                     .font(.system(size: 11, weight: .medium))
                 Text("usage.dashboard.moreFilters".localized())
                     .font(.system(size: 12, weight: .medium))
-                if current.hiddenConditionCount > 0 {
-                    Text("\(current.hiddenConditionCount)")
+                if hiddenFilterCount > 0 {
+                    Text("\(hiddenFilterCount)")
                         .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .monospacedDigit()
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)
-                        .background(Color.accentColor)
-                        .foregroundStyle(.white)
-                        .clipShape(Capsule())
+                        .foregroundStyle(.primary)
+                        .background(QuotioTheme.Colors.cardTag(for: colorScheme), in: Capsule())
                 }
             }
         }
         .buttonStyle(.quotioMicroCapsule(height: 26))
         .disabled(!isAvailable)
-        .help(String(format: "usage.dashboard.hiddenFilters".localized(), current.hiddenConditionCount))
+        .help(String(format: "usage.dashboard.hiddenFilters".localized(), hiddenFilterCount))
         .accessibilityLabel("usage.dashboard.moreFilters".localized())
+        .accessibilityValue(String(format: "usage.dashboard.hiddenFilters".localized(), hiddenFilterCount))
         .accessibilityIdentifier("cpaMoreFiltersButton")
     }
 }
@@ -215,20 +224,39 @@ struct CPAUsageFilterHeader: View {
     @State private var showsPrivacy = false
     @Environment(\.colorScheme) private var colorScheme
 
+    private var activeCount: Int {
+        CPAUsageFilterSummary(selection: selection, options: nil).activeCount
+    }
+
     var body: some View {
-        let activeCount = CPAUsageFilterSummary(selection: selection, options: nil).activeCount
-        HStack(spacing: 8) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                heading
+                Spacer(minLength: 8)
+                actions
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                heading
+                actions
+            }
+        }
+    }
+
+    private var heading: some View {
+        HStack(spacing: 6) {
             Label("usage.dashboard.filters".localized(), systemImage: "line.3.horizontal.decrease")
                 .font(.headline).accessibilityAddTraits(.isHeader)
-                .fixedSize()
             if isAvailable, activeCount > 0 {
                 Text(String(format: "usage.dashboard.activeFilters".localized(), activeCount))
-                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                    .padding(.horizontal, 8).frame(height: 20)
+                    .font(.caption).monospacedDigit().foregroundStyle(.primary)
+                    .padding(.horizontal, 8).padding(.vertical, 2)
                     .background(QuotioTheme.Colors.cardTag(for: colorScheme), in: Capsule())
-                    .fixedSize()
             }
-            Spacer(minLength: 8)
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 6) {
             Button {
                 selection = CPAUsageSelection(range: .all)
             } label: {
@@ -264,8 +292,8 @@ struct CPAUsageFilterSummary {
     var rangeTitle: String {
         if selection.range == .custom {
             // 摘要与展开字段共用精确时间，避免不同小时窗口被显示成相同范围。
-            return selection.start.formatted(date: .abbreviated, time: .shortened) + " – "
-                + selection.end.formatted(date: .abbreviated, time: .shortened)
+            return min(selection.start, selection.end).formatted(date: .abbreviated, time: .shortened) + " – "
+                + max(selection.start, selection.end).formatted(date: .abbreviated, time: .shortened)
         }
         return selection.range.titleKey.localized()
     }

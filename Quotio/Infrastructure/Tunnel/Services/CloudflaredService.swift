@@ -8,6 +8,8 @@ import Foundation
 actor CloudflaredService {
     
     private var process: Process?
+    private var stopTask: Task<Void, Never>?
+    private var isShuttingDown = false
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
     
@@ -54,16 +56,17 @@ actor CloudflaredService {
         }
     }
     
-    func start(port: UInt16, onURLDetected: @escaping @Sendable (String) -> Void) async throws {
+    func start(port: UInt16, binaryPath: String, onURLDetected: @escaping @Sendable (String) -> Void) async throws {
+        guard !isShuttingDown else { throw CancellationError() }
         guard process == nil else {
             throw TunnelError.alreadyRunning
         }
-        
-        let installation = detectInstallation()
-        guard installation.isInstalled, let binaryPath = installation.path else {
+
+        // 启动复用已探测的路径。再次运行同步的 --version 可能让停止一直排在启动之后。
+        guard FileManager.default.isExecutableFile(atPath: binaryPath) else {
             throw TunnelError.notInstalled
         }
-        
+
         let newProcess = Process()
         newProcess.executableURL = URL(fileURLWithPath: binaryPath)
         // Use --config /dev/null to ignore user's existing config file
@@ -171,29 +174,55 @@ actor CloudflaredService {
     }
     
     func stop() async {
-        guard let process = process, process.isRunning else {
+        if let stopTask {
+            // 手动停止、启动超时和应用退出可能重叠，复用同一次 Process 清理。
+            await stopTask.value
+            return
+        }
+        guard let process, process.isRunning else {
             cleanup()
             return
         }
-        
+
+        let task = Task { await stopProcess(process) }
+        stopTask = task
+        await task.value
+    }
+
+    func shutdownForApplicationExit() async {
+        // 即使退出先于待调度的启动进入此 actor，后者也不能再创建进程。
+        isShuttingDown = true
+        await stop()
+    }
+
+    private func stopProcess(_ process: Process) async {
+        defer {
+            cleanup()
+            stopTask = nil
+        }
+        guard process.isRunning else { return }
         let pid = process.processIdentifier
         NSLog("[CloudflaredService] Stopping tunnel, PID: %d", pid)
-        
         process.terminate()
-        
-        let deadline = Date().addingTimeInterval(0.5)
-        while process.isRunning && Date() < deadline {
-            try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let deadline = ContinuousClock.now + .milliseconds(500)
+        while process.isRunning && ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
         }
-        
+
         if process.isRunning {
-            NSLog("[CloudflaredService] Force killing tunnel, PID: %d", pid)
+            // 只升级信号到当前持有的子进程；用有界轮询等待系统回收。
             kill(pid, SIGKILL)
+            let killDeadline = ContinuousClock.now + .milliseconds(250)
+            while process.isRunning && ContinuousClock.now < killDeadline {
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+            if process.isRunning {
+                NSLog("[CloudflaredService] Tunnel did not exit before deadline, PID: %d", pid)
+            }
         }
-        
-        cleanup()
     }
-    
+
     var isRunning: Bool {
         process?.isRunning ?? false
     }
@@ -210,39 +239,6 @@ actor CloudflaredService {
         process = nil
     }
     
-    nonisolated static func killOrphanProcesses() {
-        // Use app-specific pattern matching tunnels spawned by Quotio (--config /dev/null)
-        let pattern = "cloudflared.*tunnel.*--config.*/dev/null.*--url"
-        
-        // First try graceful SIGTERM
-        let termProcess = Process()
-        termProcess.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        termProcess.arguments = ["-TERM", "-f", pattern]
-        termProcess.standardOutput = FileHandle.nullDevice
-        termProcess.standardError = FileHandle.nullDevice
-        
-        do {
-            try termProcess.run()
-            termProcess.waitUntilExit()
-            
-            // Wait briefly for graceful shutdown
-            Thread.sleep(forTimeInterval: 0.3)
-            
-            // Check if any matching processes remain and force kill
-            let killProcess = Process()
-            killProcess.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-            killProcess.arguments = ["-9", "-f", pattern]
-            killProcess.standardOutput = FileHandle.nullDevice
-            killProcess.standardError = FileHandle.nullDevice
-            
-            try killProcess.run()
-            killProcess.waitUntilExit()
-            
-            NSLog("[CloudflaredService] Cleaned up orphan cloudflared processes")
-        } catch {
-            // Silent failure - no orphans to kill is fine
-        }
-    }
 }
 
 enum TunnelError: Error, Sendable {

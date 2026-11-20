@@ -28,7 +28,7 @@ struct APIKeysScreen: View {
             VStack(alignment: .leading, spacing: 20) {
                 if !viewModel.proxyManager.proxyStatus.running {
                     ProxyRequiredView(description: "apiKeys.proxyRequired".localized()) {
-                        await viewModel.startProxy()
+                        viewModel.currentPage = .dashboard
                     }
                     .frame(minHeight: 240)
                 } else {

@@ -15,20 +15,27 @@ import SwiftUI
 struct MenuProxyState {
     let port: UInt16
     let isRunning: Bool
-    var isStarting = false
-    var isStopping = false
+    let isInstalled: Bool
+    let isInstalling: Bool
+    let isStarting: Bool
+    let isStopping: Bool
+    let isRestarting: Bool
+    let error: String?
 
-    var isBusy: Bool { isStarting || isStopping }
-    var actionKey: String {
+    var isBusy: Bool { isInstalling || isStarting || isStopping || isRestarting }
+    var statusKey: String {
+        if isInstalling { return "runtime.installing" }
+        if isRestarting { return "runtime.restarting" }
         if isStopping { return "runtime.stopping" }
         if isStarting { return "runtime.starting" }
-        return isRunning ? "action.stopProxy" : "action.startProxy"
+        if !isInstalled { return "dashboard.cliNotInstalled" }
+        return isRunning ? "runtime.running" : "runtime.stopped"
     }
 }
 
 struct MenuNetworkInfoView: View {
     let proxyState: () -> MenuProxyState
-    let onProxyToggle: () -> Void
+    let onProxyRestart: () -> Void
     let onCopyProxyURL: () -> Void
     let onTunnelToggle: () -> Void
     let onCopyTunnelURL: () -> Void
@@ -78,22 +85,36 @@ struct MenuNetworkInfoView: View {
                     }
                 }
 
-                Spacer()
+                if !isProxyRunning || proxy.isBusy {
+                    Text(proxy.statusKey.localized())
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
 
-                Button(action: onProxyToggle) {
-                    if proxy.isBusy {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Image(systemName: isProxyRunning ? "stop.fill" : "play.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(isProxyRunning ? .red : .green)
+                if let error = proxy.error, !proxy.isBusy {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .help(error)
+                        .accessibilityLabel(error)
+                }
+
+                Spacer(minLength: 4)
+
+                Button(action: onProxyRestart) {
+                    HStack(spacing: 4) {
+                        if proxy.isBusy {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        Text("runtime.restart".localized())
                     }
+                    .font(.caption2)
                 }
                 .buttonStyle(.plain)
-                .disabled(proxy.isBusy)
-                .help(proxy.actionKey.localized())
-                .accessibilityLabel(proxy.actionKey.localized())
-                .accessibilityIdentifier("menubar.proxy.toggle")
+                .disabled(proxy.isBusy || !proxy.isInstalled)
+                .help("runtime.restart".localized())
+                .accessibilityIdentifier("menubar.proxy.restart")
             }
 
             // Tunnel Row (only show when proxy is running)

@@ -116,12 +116,16 @@ actor KiroQuotaFetcher {
         }
         let seed = tokenData.clientId ?? tokenData.refreshToken ?? hardwareUUID
         if let cached = machineIdCache[seed] { return cached }
+        let id = Self.hashedMachineID(seed)
+        machineIdCache[seed] = id
+        return id
+    }
+
+    private static func hashedMachineID(_ seed: String) -> String {
         let data = Data(seed.utf8)
         var hash = [UInt8](repeating: 0, count: 32)
         data.withUnsafeBytes { _ = CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash) }
-        let id = hash.map { String(format: "%02x", $0) }.joined()
-        machineIdCache[seed] = id
-        return id
+        return hash.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Hardware UUID stable across app launches
@@ -144,14 +148,12 @@ actor KiroQuotaFetcher {
         }
     }()
 
-    private func kiroUserAgent(for tokenData: AuthTokenData) -> String {
-        let mid = machineId(for: tokenData)
-        return "aws-sdk-js/1.0.0 ua/2.1 os/darwin#\(darwinVersion) lang/js md/nodejs#22.21.1 api/codewhispererruntime#1.0.0 m/N,E KiroIDE-\(kiroVersion)-\(mid)"
+    private func kiroUserAgent(machineID: String) -> String {
+        "aws-sdk-js/1.0.0 ua/2.1 os/darwin#\(darwinVersion) lang/js md/nodejs#22.21.1 api/codewhispererruntime#1.0.0 m/N,E KiroIDE-\(kiroVersion)-\(machineID)"
     }
 
-    private func kiroAmzUserAgent(for tokenData: AuthTokenData) -> String {
-        let mid = machineId(for: tokenData)
-        return "aws-sdk-js/1.0.0 KiroIDE-\(kiroVersion)-\(mid)"
+    private func kiroAmzUserAgent(machineID: String) -> String {
+        "aws-sdk-js/1.0.0 KiroIDE-\(kiroVersion)-\(machineID)"
     }
 
     private var session: URLSession
@@ -160,15 +162,86 @@ actor KiroQuotaFetcher {
     /// Path to Kiro IDE auth token file
     private let kiroIDEAuthPath = NSString(string: "~/.aws/sso/cache/kiro-auth-token.json").expandingTildeInPath
 
-    init() {
-        let config = ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 20)
-        self.session = URLSession(configuration: config)
+    init(session: URLSession? = nil) {
+        self.session = session ?? URLSession(configuration: ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 20))
     }
 
     /// Update the URLSession with current proxy settings
     func updateProxyConfiguration() {
         let config = ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 20)
         self.session = URLSession(configuration: config)
+    }
+
+    /// 仅使用当前 CPA 文件中尚有效的 access token 和明确的 CodeWhisperer profile。
+    /// OIDC 的 region／start_url 与用量主机无关；此路径无本机读取、无令牌续期或写回。
+    func fetchCPAQuota(credential data: Data, file: AuthFile,
+                       checkSession: @Sendable () async throws -> Void) async throws -> ProviderQuotaData {
+        guard file.providerType == .kiro,
+              let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              fields["type"] as? String == "kiro",
+              let token = try Self.cpaField(fields, keys: ["access_token", "accessToken"]),
+              token.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
+              let expiry = parseExpiryDate(try Self.cpaField(fields, keys: ["expires_at", "expiresAt", "expiry"])),
+              expiry > .now,
+              let profile = try Self.cpaField(fields, keys: ["profile_arn", "profileArn"]),
+              let region = Self.cpaProfileRegion(profile) else { throw QuotaFetchError.invalidResponse }
+
+        // 仅使用目录已提供的邮箱／用户 ID。相同 profile 可包含多个订阅，故仍要核对 AWS 返回的身份。
+        let email = QuotaResponseValue.string(file.email)?.lowercased()
+        let userID = QuotaResponseValue.string(file.quotaUserID)
+        let credentialEmail = try Self.cpaField(fields, keys: ["email"])?.lowercased()
+        let credentialUserID = try Self.cpaField(fields, keys: ["user_id", "userId"])
+        guard email != nil || userID != nil,
+              email == nil || credentialEmail == nil || credentialEmail == email,
+              userID == nil || credentialUserID == nil || credentialUserID == userID else {
+            throw QuotaFetchError.invalidResponse
+        }
+        let expectedEmail = email ?? credentialEmail
+        let expectedUserID = userID ?? credentialUserID
+
+        // profile 与目录账号已提供非秘密的稳定标识，副查询不读取本机设备标识或轮换密钥。
+        let machineID = Self.hashedMachineID(profile + ":" + (userID ?? email ?? ""))
+        try await checkSession()
+        let result = await fetchUsageAPI(token: token, tokenExpiresAt: expiry, profileArn: profile,
+                                         region: region, source: .cpa(machineID: machineID))
+        try await checkSession()
+        if let failure = result.networkFailure {
+            if failure == .cancelled { throw CancellationError() }
+            throw URLError(failure)
+        }
+        if result.statusCode != 0, result.statusCode != 200 { throw QuotaFetchError.httpError(result.statusCode) }
+        guard result.statusCode == 200, let user = result.userInfo,
+              expectedEmail == nil || QuotaResponseValue.string(user.email)?.lowercased() == expectedEmail,
+              expectedUserID == nil || QuotaResponseValue.string(user.userId) == expectedUserID,
+              let quota = result.quotaData, quota.models.contains(where: { $0.percentage >= 0 }) else {
+            throw QuotaFetchError.invalidResponse
+        }
+        return quota
+    }
+
+    /// 历史 CPA 与 Kiro 导出分别使用 snake_case／camelCase。若同一字段出现两种写法，必须一致。
+    private static func cpaField(_ fields: [String: Any], keys: [String]) throws -> String? {
+        var result: String?
+        for key in keys {
+            guard let field = fields[key] else { continue }
+            guard let value = field as? String, !value.isEmpty,
+                  result == nil || result == value else { throw QuotaFetchError.invalidResponse }
+            result = value
+        }
+        return result
+    }
+
+    /// 只用商业 AWS 的完整 profile ARN 生成 q.<region>.amazonaws.com，缺少区域时不能套用默认值。
+    private static func cpaProfileRegion(_ profile: String) -> String? {
+        let parts = profile.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 6, parts[0] == "arn", parts[1] == "aws", parts[2] == "codewhisperer",
+              let region = validatedRegion(String(parts[3])), region == parts[3],
+              parts[4].utf8.count == 12, parts[4].utf8.allSatisfy({ (48...57).contains($0) }),
+              parts[5].hasPrefix("profile/"), !parts[5].dropFirst("profile/".count).isEmpty,
+              parts[5].dropFirst("profile/".count).utf8.allSatisfy({
+                  (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95
+              }) else { return nil }
+        return region
     }
 
     /// Scan and fetch quotas for all Kiro auth files
@@ -229,7 +302,7 @@ actor KiroQuotaFetcher {
                 tokenExpiresAt: credential.expiresAt,
                 profileArn: credential.extra["profileArn"],
                 region: region,
-                tokenData: tokenData
+                source: .local(tokenData)
             )
             if (response.statusCode == 401 || response.statusCode == 403),
                await reloadAndRefreshOwnedCredential(&credential, account: account) {
@@ -239,7 +312,7 @@ actor KiroQuotaFetcher {
                     tokenExpiresAt: credential.expiresAt,
                     profileArn: credential.extra["profileArn"],
                     region: region,
-                    tokenData: tokenData
+                    source: .local(tokenData)
                 )
             }
             return response.quotaData
@@ -418,14 +491,14 @@ actor KiroQuotaFetcher {
 
         let region = extractRegionFromProfileArn(tokenData.extras?["profileArn"]) ?? tokenData.extras?["region"] ?? defaultRegion
         let profileArn = tokenData.extras?["profileArn"]
-        let result = await fetchUsageAPI(token: currentToken, tokenExpiresAt: tokenExpiresAt, profileArn: profileArn, region: region, tokenData: tokenData)
+        let result = await fetchUsageAPI(token: currentToken, tokenExpiresAt: tokenExpiresAt, profileArn: profileArn, region: region, source: .local(tokenData))
 
         // Reactive refresh: If 401/403 and haven't tried refresh yet, refresh and retry
         if (result.statusCode == 401 || result.statusCode == 403) && !hasAttemptedRefresh {
             let latestTokenData = await reloadTokenData(at: filePath) ?? tokenData
             if let (refreshed, newExpiry) = await refreshTokenWithExpiry(tokenData: latestTokenData, filePath: filePath) {
                 let latestRegion = extractRegionFromProfileArn(latestTokenData.extras?["profileArn"]) ?? latestTokenData.extras?["region"] ?? defaultRegion
-                let retryResult = await fetchUsageAPI(token: refreshed, tokenExpiresAt: newExpiry, profileArn: latestTokenData.extras?["profileArn"], region: latestRegion, tokenData: latestTokenData)
+                let retryResult = await fetchUsageAPI(token: refreshed, tokenExpiresAt: newExpiry, profileArn: latestTokenData.extras?["profileArn"], region: latestRegion, source: .local(latestTokenData))
                 return retryResult.quotaData ?? ProviderQuotaData(models: [], lastUpdated: Date(), isForbidden: true, planType: "Unauthorized", tokenExpiresAt: newExpiry)
             }
         }
@@ -465,16 +538,24 @@ actor KiroQuotaFetcher {
     private struct UsageAPIResult {
         let statusCode: Int
         let quotaData: ProviderQuotaData?
-        let accountIdentity: String?
+        let userInfo: KiroUsageResponse.KiroUserInfo?
+        // CPA 调用方读取安全的传输错误码。本机调用维持已有 quotaData 和账号身份语义。
+        let networkFailure: URLError.Code?
+
+        var accountIdentity: String? {
+            QuotaResponseValue.string(userInfo?.email) ?? QuotaResponseValue.string(userInfo?.userId)
+        }
 
         init(
             statusCode: Int,
             quotaData: ProviderQuotaData?,
-            accountIdentity: String? = nil
+            userInfo: KiroUsageResponse.KiroUserInfo? = nil,
+            networkFailure: URLError.Code? = nil
         ) {
             self.statusCode = statusCode
             self.quotaData = quotaData
-            self.accountIdentity = accountIdentity
+            self.userInfo = userInfo
+            self.networkFailure = networkFailure
         }
     }
 
@@ -499,11 +580,25 @@ actor KiroQuotaFetcher {
             tokenExpiresAt: expiresAt,
             profileArn: nil,
             region: region,
-            tokenData: tokenData
+            source: .local(tokenData)
         ).accountIdentity
     }
 
-    private func fetchUsageAPI(token: String, tokenExpiresAt: Date?, profileArn: String?, region: String, tokenData: AuthTokenData) async -> UsageAPIResult {
+    private enum UsageSource {
+        case local(AuthTokenData)
+        case cpa(machineID: String)
+    }
+
+    /// 副查询的 bearer 只允许发送到由已确认 profile 派生的固定 AWS 地址。
+    private nonisolated final class CPAUsageNoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                        completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
+
+    private func fetchUsageAPI(token: String, tokenExpiresAt: Date?, profileArn: String?, region: String, source: UsageSource) async -> UsageAPIResult {
         guard let region = Self.validatedRegion(region),
               var components = URLComponents(string: usageEndpoint(region: region)) else {
             return UsageAPIResult(statusCode: 0, quotaData: ProviderQuotaData(
@@ -531,19 +626,29 @@ actor KiroQuotaFetcher {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
 
+        let machineID: String
+        let delegate: (any URLSessionTaskDelegate)?
+        switch source {
+        case .local(let tokenData):
+            machineID = machineId(for: tokenData)
+            delegate = nil
+        case .cpa(let verifiedMachineID):
+            machineID = verifiedMachineID
+            delegate = CPAUsageNoRedirect()
+        }
         // Headers matching Kiro IDE requests
         let headers: [String: String] = [
             "Authorization": "Bearer \(token)",
             "Host": "q.\(region).amazonaws.com",
-            "User-Agent": kiroUserAgent(for: tokenData),
-            "x-amz-user-agent": kiroAmzUserAgent(for: tokenData),
+            "User-Agent": kiroUserAgent(machineID: machineID),
+            "x-amz-user-agent": kiroAmzUserAgent(machineID: machineID),
             "amz-sdk-invocation-id": UUID().uuidString.lowercased(),
             "amz-sdk-request": "attempt=1; max=1"
         ]
         headers.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
 
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request, delegate: delegate)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 return UsageAPIResult(statusCode: 0, quotaData: ProviderQuotaData(
@@ -567,17 +672,10 @@ actor KiroQuotaFetcher {
             do {
                 let usageResponse = try JSONDecoder().decode(KiroUsageResponse.self, from: data)
                 let planType = usageResponse.subscriptionInfo?.subscriptionTitle ?? "Standard"
-                let accountIdentity = [usageResponse.userInfo?.email, usageResponse.userInfo?.userId]
-                    .compactMap { value -> String? in
-                        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-                              !value.isEmpty else { return nil }
-                        return value
-                    }
-                    .first
                 return UsageAPIResult(
                     statusCode: 200,
                     quotaData: convertToQuotaData(usageResponse, planType: planType, tokenExpiresAt: tokenExpiresAt),
-                    accountIdentity: accountIdentity
+                    userInfo: usageResponse.userInfo
                 )
             } catch {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -593,10 +691,11 @@ actor KiroQuotaFetcher {
                 ))
             }
         } catch {
+            let failure: URLError.Code? = error is CancellationError ? .cancelled : (error as? URLError)?.code
             return UsageAPIResult(statusCode: 0, quotaData: ProviderQuotaData(
                 models: [ModelQuota(name: "Error", percentage: -1, resetTime: error.localizedDescription)],
                 lastUpdated: Date(), isForbidden: false, planType: "Error", tokenExpiresAt: tokenExpiresAt
-            ))
+            ), networkFailure: failure)
         }
     }
 

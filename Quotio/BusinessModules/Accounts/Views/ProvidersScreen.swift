@@ -18,6 +18,7 @@ struct ProvidersScreen: View {
     @Environment(QuotaViewModel.self) private var viewModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var isImporterPresented = false
+    @State private var vertexImportSource: CPAFileTransferSource?
     @State private var selectedProvider: AIProvider?
     @State private var showProxyRequiredAlert = false
     @State private var showIDEScanSheet = false
@@ -29,54 +30,38 @@ struct ProvidersScreen: View {
     @State private var showMainstreamConnectionSheet = false
     @State private var mainstreamTargetProvider: AIProvider = .deepseek
     @State private var editingMainstreamProvider: CustomProvider?
-    @State private var monitorAPIKeyProvider: AIProvider?
-    @State private var editingMonitorAPIKeyAccount: MonitorAccount?
     @State private var showAddProviderPopover = false
+    // 添加选择器和目标表单由同一窗口呈现，只有选择器关闭后才提交下一张 Sheet。
+    @State private var pendingOfficialOpenAIAddition = false
     @State private var switchingAccount: AccountRowData?
     @State private var isResettingAllCooldowns = false
     // nil 表示“全部服务商”，此筛选状态与 OAuth 弹窗的 selectedProvider 完全独立。
     @State private var selectedAccountProvider: AIProvider?
     @State private var isDropTargeted = false
     @State private var quotaSettings = MenuBarSettingsManager.shared
-    @State private var modeManager = OperatingModeManager.shared
 
     private let customProviderService = CustomProviderService.shared
     private let warpService = WarpService.shared
 
     // MARK: - Computed Properties
 
-    /// Providers that can be added manually
+    /// 账号授权只提供原有 CPA 与本地配置入口；Factory Droid 等客户端配置仍在客户端管理。
     private var addableProviders: [AIProvider] {
         let mainstreamExtra: Set<AIProvider> = [.glm, .clinePass, .deepseek, .moonshot, .minimax]
-        if modeManager.isLocalProxyMode {
-            return AIProvider.allCases.filter {
-                ![.factoryDroid, .openRouter, .amp].contains($0)
-                    && ($0.supportsManualAuth(in: .localProxy) || mainstreamExtra.contains($0))
-            }
-        } else {
-            return AIProvider.allCases.filter {
-                $0.supportsQuotaOnlyMode
-                    && ($0.supportsManualAuth(in: .monitor) || mainstreamExtra.contains($0))
-                    && ($0 != .amp || modeManager.isMonitorMode)
-            }
+        return AIProvider.allCases.filter {
+            ![.factoryDroid, .openRouter, .amp].contains($0)
+                && ($0.supportsManualAuth || mainstreamExtra.contains($0))
         }
     }
-    
-    /// 统一连接目录与额度缓存；完整来源规则位于可离线测试的 AccountPageData。
+
+    /// 目录与权限分别传入：新会话尚未确认目录时继续展示上一份身份，所有 CPA 行保持只读。
     private var groupedAccounts: [AIProvider: [AccountRowData]] {
         AccountPageData.groupedAccounts(
-            mode: modeManager.currentMode,
-            proxyRunning: viewModel.proxyManager.proxyStatus.running,
+            hasCurrentCPAAccountDirectory: viewModel.hasCurrentCPAAccountDirectory,
             authFiles: viewModel.authFiles,
-            directAuthFiles: viewModel.directAuthFiles,
-            monitorAccounts: viewModel.monitorAccounts,
-            quotas: viewModel.providerQuotas,
+            importedIDEAccountKeys: viewModel.importedIDEAccountKeys,
             customProviders: customProviderService.providers,
-            warpTokens: warpService.tokens,
-            monitorStatus: { account in
-                let state = viewModel.monitorStatus(for: account)
-                return (state.status, state.message)
-            }
+            warpTokens: warpService.tokens
         )
     }
 
@@ -112,7 +97,11 @@ struct ProvidersScreen: View {
     }
 
     private func lowestQuotaPercent(for provider: AIProvider) -> Double? {
-        viewModel.providerQuotas[provider]?.values.compactMap { quota in
+        // 筛选摘要也按已显示的连接计算；未匹配的旧快照不能让服务商胶囊出现过低额度。
+        let keys = groupedAccounts[provider, default: []].flatMap(\.quotaAccountKeys)
+        let quotas = viewModel.providerQuotas[provider, default: [:]]
+        return keys.compactMap { key in
+            guard let quota = quotas[key] else { return nil }
             let value = quotaSettings.quotaSummaryPercentage(for: provider, models: quota.models)
             return value >= 0 && value.isFinite ? value : nil
         }.min()
@@ -129,10 +118,7 @@ struct ProvidersScreen: View {
                 providerFilter
                 accountsSection
 
-                // Section 2: Custom Providers (Local Proxy Mode only)
-                if modeManager.isLocalProxyMode {
-                    customProvidersSection
-                }
+                customProvidersSection
             }
             .padding(20)
         }
@@ -163,25 +149,33 @@ struct ProvidersScreen: View {
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                Task { await viewModel.importVertexServiceAccount(url: url) }
+            allowsMultipleSelection: false,
+            onCompletion: { result in
+                let source = vertexImportSource
+                vertexImportSource = nil
+                guard let source, case .success(let urls) = result, let url = urls.first else { return }
+                Task {
+                    guard canUseCPAFileTransfer(source) else { return }
+                    await viewModel.importVertexServiceAccount(url: url)
+                }
+            },
+            onCancellation: {
+                vertexImportSource = nil
             }
-            // Failure case is silently ignored - user can retry via UI
-        }
-        .task {
-            await viewModel.loadDirectAuthFiles()
-        }
+        )
         .onChange(of: sortedProviders) { _, providers in
-            // 删除最后一个被筛选的账号或切换运行模式后，自动恢复全部列表，避免空筛选困住用户。
+            // 删除当前筛选的最后一个账号后，自动恢复全部列表，避免空筛选困住用户。
             if let selectedAccountProvider, !providers.contains(selectedAccountProvider) {
                 self.selectedAccountProvider = nil
             }
         }
+        .onChange(of: viewModel.hasCurrentCPAAccountDirectory) { _, canManage in
+            if !canManage { switchingAccount = nil }
+        }
         .alert("providers.proxyRequired.title".localized(), isPresented: $showProxyRequiredAlert) {
-            Button("action.startProxy".localized()) {
-                Task { await viewModel.startProxy() }
+            Button("runtime.openRoutingCenter".localized()) {
+                // 路由中心统一呈现安装或重启，并显示失败原因。
+                viewModel.currentPage = .dashboard
             }
             Button("action.cancel".localized(), role: .cancel) {}
         } message: {
@@ -194,7 +188,8 @@ struct ProvidersScreen: View {
         .sheet(item: $customProviderSheetMode) { mode in
             CustomProviderSheet(
                 provider: mode.provider,
-                initialProviderType: mode.initialProviderType
+                initialProviderType: mode.initialProviderType,
+                isAddingOfficialOpenAI: mode.isAddingOfficialOpenAI
             ) { provider in
                 // Check if provider already exists by ID to determine if we're updating or adding
                 let previous = customProviderService.providers.first { $0.id == provider.id }
@@ -219,12 +214,14 @@ struct ProvidersScreen: View {
                     var updated = existing
                     updated.name = name
                     updated.token = token
+                    viewModel.prepareWarpQuotaMutation(previous: existing, replacement: updated)
                     warpService.updateToken(updated)
                 } else {
                     warpService.addToken(name: name, token: token)
                 }
                 editingWarpToken = nil
-                Task { await viewModel.refreshAutoDetectedProviders() }
+                viewModel.syncMenuBarSelection()
+                Task { await viewModel.refreshQuota(for: .warp, waitForAvailability: true) }
             }
         }
         .sheet(isPresented: $showGLMConnectionSheet) {
@@ -269,31 +266,12 @@ struct ProvidersScreen: View {
             }
             .environment(viewModel)
         }
-        .sheet(item: $monitorAPIKeyProvider) { provider in
-            MonitorAPIKeyConnectionSheet(provider: provider, account: editingMonitorAPIKeyAccount) { label, apiKey in
-                if provider == .factoryDroid {
-                    try await viewModel.saveFactoryDroidAccount(
-                        label: label,
-                        apiKey: apiKey,
-                        existingAccountID: editingMonitorAPIKeyAccount?.id
-                    )
-                } else if provider == .amp {
-                    try await viewModel.saveAmpAccount(
-                        label: label,
-                        apiKey: apiKey,
-                        existingAccountID: editingMonitorAPIKeyAccount?.id
-                    )
-                } else {
-                    try await viewModel.saveOpenRouterAccount(
-                        label: label,
-                        apiKey: apiKey,
-                        existingAccountID: editingMonitorAPIKeyAccount?.id
-                    )
-                }
-                editingMonitorAPIKeyAccount = nil
-            }
-        }
-        .sheet(isPresented: $showAddProviderPopover) {
+        .sheet(isPresented: $showAddProviderPopover, onDismiss: {
+            guard pendingOfficialOpenAIAddition else { return }
+            pendingOfficialOpenAIAddition = false
+            // 等添加选择器的原生 Sheet 完全关闭，再展示官方表单。
+            customProviderSheetMode = .addOfficialOpenAI
+        }) {
             AddProviderPopover(
                 providers: addableProviders,
                 existingCounts: providerAccountCounts,
@@ -303,6 +281,7 @@ struct ProvidersScreen: View {
                 onScanIDEs: {
                     showIDEScanSheet = true
                 },
+                onAddOfficialOpenAI: { pendingOfficialOpenAIAddition = true },
                 onAddCustomProvider: {
                     customProviderSheetMode = .add(.openaiCompatibility)
                 },
@@ -322,12 +301,6 @@ struct ProvidersScreen: View {
         }
     }
     
-    /// 保留管理目录、全部额度与 Grok／Devin 补充刷新。等待由 ViewModel 在实际
-    /// 获取批次槽位时完成，目录读取期间出现新的后台批次也不会丢失用户操作。
-    private func refreshAllAccounts() async {
-        await viewModel.manualRefresh()
-    }
-
     // MARK: - Toolbar
     
     @ToolbarContentBuilder
@@ -359,10 +332,12 @@ struct ProvidersScreen: View {
                 unavailableProviders: Set(filteredProviders.filter {
                     viewModel.isRefreshing(provider: $0) || !viewModel.supportsScopedRefresh(for: $0)
                 }),
-                refreshAll: { await refreshAllAccounts() },
+                refreshAll: { await viewModel.manualRefresh() },
                 refreshProvider: { await viewModel.refreshQuota(for: $0) },
                 sharedRefresh: viewModel.manualAccountRefreshState,
-                isRefreshingOverride: viewModel.isLoadingQuotas || viewModel.isLoading)
+                isRefreshingOverride: viewModel.canRefreshAccountQuotas
+                    && (viewModel.isLoadingQuotas || viewModel.isLoading))
+            .disabled(!viewModel.canRefreshAccountQuotas)
         }
 
         ToolbarItem(placement: .primaryAction) {
@@ -382,6 +357,7 @@ struct ProvidersScreen: View {
                 Image(systemName: "arrow.up.circle")
             }
             .help("action.upload".localized())
+            .disabled(!viewModel.hasCurrentCPAAccountDirectory)
         }
     }
     
@@ -412,9 +388,29 @@ struct ProvidersScreen: View {
             }
             .padding(.horizontal, 4)
 
+            let isOffline = !viewModel.proxyManager.proxyStatus.running
+            let directoryError = viewModel.lastCPAAccountDirectoryError
+            if isOffline || directoryError != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(isOffline ? "accounts.quota.offline".localized() : "accounts.directory.unavailable".localized(),
+                          systemImage: isOffline ? "bolt.slash" : "exclamationmark.triangle")
+                    if let error = isOffline ? viewModel.proxyManager.lastError ?? directoryError : directoryError,
+                       !error.isEmpty {
+                        Text(error)
+                            .foregroundStyle(.orange)
+                            .lineLimit(3)
+                            .help(error)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                .accessibilityElement(children: .combine)
+            }
+
             // 横幅只更新时间投影；到期后自动消失，不借 UI 时钟创建第二轮账号刷新。
             let cooldownAccounts = groupedAccounts.values.flatMap { $0 }.filter { $0.cooldowns?.isEmpty == false }
-            if modeManager.isLocalProxyMode, !cooldownAccounts.isEmpty {
+            if !cooldownAccounts.isEmpty {
                 TimelineView(.periodic(from: .now, by: 1)) { timeline in
                     let count = cooldownAccounts.filter { !$0.activeCooldowns(at: timeline.date).isEmpty }.count
                     if count > 0 { coolingAlertBanner(count: count) }
@@ -448,11 +444,11 @@ struct ProvidersScreen: View {
                                 handleEditMainstreamAccount(account)
                             } else if account.provider == .warp {
                                 handleEditWarpAccount(account)
-                            } else if [.factoryDroid, .openRouter, .amp].contains(account.provider) {
-                                handleEditMonitorAPIKeyAccount(account)
                             }
                         },
-                        onSwitch: { switchingAccount = $0 },
+                        onSwitch: { account in
+                            if viewModel.hasCurrentCPAAccountDirectory { switchingAccount = account }
+                        },
                         onToggleDisabled: { account in Task { await toggleAccountDisabled(account) } },
                         onDownload: { account in Task { await downloadAccountAuthFile(account) } }
                     )
@@ -485,6 +481,7 @@ struct ProvidersScreen: View {
             Spacer(minLength: 8)
 
             Button {
+                guard viewModel.hasCurrentCPAAccountDirectory else { return }
                 Task {
                     isResettingAllCooldowns = true
                     defer { isResettingAllCooldowns = false }
@@ -503,7 +500,7 @@ struct ProvidersScreen: View {
                 }
             }
             .buttonStyle(.quotioPrimaryCapsule)
-            .disabled(isResettingAllCooldowns)
+            .disabled(isResettingAllCooldowns || !viewModel.hasCurrentCPAAccountDirectory)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -599,23 +596,24 @@ struct ProvidersScreen: View {
             showMainstreamConnectionSheet = true
             return
         }
-        if [.factoryDroid, .openRouter, .amp].contains(provider) {
-            editingMonitorAPIKeyAccount = nil
-            monitorAPIKeyProvider = provider
+        if provider == .warp {
+            editingWarpToken = nil
+            showWarpConnectionSheet = true
             return
         }
-
-        // In Local Proxy Mode, require proxy to be running for OAuth
-        if modeManager.isLocalProxyMode && !viewModel.proxyManager.proxyStatus.running {
+        // CPA 授权和导入仍依赖当前管理接口；本地配置保持原管理入口。
+        if !viewModel.canRefreshAccountQuotas {
             showProxyRequiredAlert = true
             return
         }
 
         if provider == .vertex {
+            guard let source = currentCPAFileTransferSource() else {
+                showProxyRequiredAlert = true
+                return
+            }
+            vertexImportSource = source
             isImporterPresented = true
-        } else if provider == .warp {
-            editingWarpToken = nil
-            showWarpConnectionSheet = true
         } else {
             viewModel.cancelOAuth()
             selectedProvider = provider
@@ -623,15 +621,15 @@ struct ProvidersScreen: View {
     }
     
     private func deleteAccount(_ account: AccountRowData) async {
-        // Only proxy accounts can be deleted via API
         guard account.canDelete else { return }
 
-        if modeManager.isMonitorMode, case .monitor = account.source {
-            await viewModel.deleteMonitorAccount(accountID: account.id)
+        // 同一提供商可以同时有 CPA 文件和手动 Key。优先按行的来源处理，避免用文件 ID 查本地配置。
+        if account.source == .proxy {
+            if let authFile = currentCPAAuthFile(for: account) { await viewModel.deleteAuthFile(authFile) }
             return
         }
 
-        // Handle auto-detected IDE accounts (Cursor, Trae) imported via "Scan for IDEs"
+        // Cursor／Trae 删除仅影响用户先前显式导入的记录。
         if account.source == .autoDetected {
             await viewModel.deleteAutoDetectedAccount(
                 provider: account.provider,
@@ -685,54 +683,68 @@ struct ProvidersScreen: View {
 
         // Handle Warp accounts (stored in WarpService)
         if account.provider == .warp {
-            if let uuid = UUID(uuidString: account.id) {
-                warpService.deleteToken(id: uuid)
+            if let token = warpService.tokens.first(where: { $0.id.uuidString == account.id }) {
+                viewModel.prepareWarpQuotaMutation(previous: token, replacement: nil)
+                warpService.deleteToken(id: token.id)
+                viewModel.syncMenuBarSelection()
                 await viewModel.refreshQuotaForProvider(.warp)
             }
             return
         }
 
-        // Find the original AuthFile to delete
-        if let authFile = viewModel.authFiles.first(where: { $0.id == account.id }) {
-            await viewModel.deleteAuthFile(authFile)
-        }
     }
 
     private func toggleAccountDisabled(_ account: AccountRowData) async {
-        if modeManager.isMonitorMode, case .monitor = account.source {
-            await viewModel.setMonitorAccountDisabled(!account.isDisabled, accountID: account.id)
-            return
-        }
+        guard let authFile = currentCPAAuthFile(for: account) else { return }
+        await viewModel.toggleAuthFileDisabled(authFile)
+    }
 
-        if [.glm, .clinePass, .deepseek, .moonshot, .minimax].contains(account.provider) {
-            if let uuid = UUID(uuidString: account.id) {
-                customProviderService.toggleProvider(id: uuid)
-                syncCustomProvidersToConfig()
-            }
-            return
-        }
-
-        guard account.source == .proxy else { return }
-
-        // Find the original AuthFile to toggle
-        if let authFile = viewModel.authFiles.first(where: { $0.id == account.id }) {
-            await viewModel.toggleAuthFileDisabled(authFile)
+    private func currentCPAAuthFile(for account: AccountRowData) -> AuthFile? {
+        // 延迟确认或原生菜单回调必须重新检查来源、当前目录和规范键，避免操作同名的另一份凭据。
+        guard account.source == .proxy, viewModel.hasCurrentCPAAccountDirectory else { return nil }
+        return viewModel.authFiles.first {
+            $0.id == account.id && $0.providerType == account.provider && $0.menuBarAccountKey == account.menuBarAccountKey
         }
     }
 
-    private func downloadAccountAuthFile(_ account: AccountRowData) async {
-        guard let filename = account.authFileName else { return }
+    private struct CPAFileTransferSource {
+        let context: QuotaViewModel.RefreshContext
+        let client: ManagementAPIClient
+    }
 
+    /// 系统面板与拖放 URL 读取都可能让应用处理停机或重连。操作开始时固定会话和原客户端，
+    /// 回到界面后再校验，避免让用户在旧代理会话里的选择送到新 CPA。
+    private func currentCPAFileTransferSource() -> CPAFileTransferSource? {
+        guard viewModel.hasCurrentCPAAccountDirectory, let client = viewModel.apiClient else { return nil }
+        return CPAFileTransferSource(context: viewModel.refreshContext(), client: client)
+    }
+
+    private func canUseCPAFileTransfer(_ source: CPAFileTransferSource) -> Bool {
+        viewModel.canUseRefreshSource(source.context) && viewModel.apiClient === source.client
+            && viewModel.hasCurrentCPAAccountDirectory
+    }
+
+    private func downloadAccountAuthFile(_ account: AccountRowData) async {
+        guard account.canDownloadAuthFile, let source = currentCPAFileTransferSource(),
+              let file = currentCPAAuthFile(for: account), file.name == account.authFileName else { return }
+
+        let filename = file.name
+        // 导出接口只收文件名，因此在交给它之前必须再次确认原账号、规范键与文件名。
+        func canExportOriginalFile() -> Bool {
+            canUseCPAFileTransfer(source) && currentCPAAuthFile(for: account)?.name == filename
+        }
         let savePanel = NSSavePanel()
         savePanel.nameFieldStringValue = filename.hasSuffix(".json") ? filename : filename + ".json"
         savePanel.allowedContentTypes = [.json]
         savePanel.canCreateDirectories = true
 
-        guard savePanel.runModal() == .OK, let url = savePanel.url else { return }
+        guard savePanel.runModal() == .OK, let url = savePanel.url,
+              canExportOriginalFile() else { return }
 
         do {
             try await viewModel.exportAuthFile(name: filename, to: url)
         } catch {
+            guard !(error is CancellationError), canExportOriginalFile() else { return }
             viewModel.errorMessage = error.localizedDescription
         }
     }
@@ -759,6 +771,7 @@ struct ProvidersScreen: View {
     }
 
     private func uploadAuthFile() {
+        guard let source = currentCPAFileTransferSource() else { return }
         let openPanel = NSOpenPanel()
         openPanel.allowsMultipleSelection = true
         openPanel.allowedContentTypes = [.json]
@@ -766,20 +779,25 @@ struct ProvidersScreen: View {
 
         if openPanel.runModal() == .OK {
             let urls = openPanel.urls
-            guard !urls.isEmpty else { return }
+            guard !urls.isEmpty, canUseCPAFileTransfer(source) else { return }
             Task {
+                guard canUseCPAFileTransfer(source) else { return }
                 await viewModel.importAuthFiles(from: urls)
             }
         }
     }
 
     private func handleFileDrop(providers: [NSItemProvider]) -> Bool {
+        guard let source = currentCPAFileTransferSource() else { return false }
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !fileProviders.isEmpty else { return false }
         Task {
+            guard canUseCPAFileTransfer(source) else { return }
             var droppedURLs: [URL] = []
             for itemProvider in fileProviders {
-                if let url = await loadURL(from: itemProvider), url.pathExtension.lowercased() == "json" {
+                let url = await loadURL(from: itemProvider)
+                guard canUseCPAFileTransfer(source) else { return }
+                if let url, url.pathExtension.lowercased() == "json" {
                     droppedURLs.append(url)
                 }
             }
@@ -818,13 +836,9 @@ struct ProvidersScreen: View {
         }
     }
 
-    private func handleEditMonitorAPIKeyAccount(_ account: AccountRowData) {
-        guard let monitorAccount = viewModel.monitorAccounts.first(where: { $0.id == account.id }) else { return }
-        editingMonitorAPIKeyAccount = monitorAccount
-        monitorAPIKeyProvider = monitorAccount.provider
-    }
-
     private func syncCustomProvidersToConfig() {
+        // 显式配置变更就是菜单目录变化，不能等离线额度刷新成功后才发布。
+        viewModel.syncMenuBarSelection()
         // 服务运行时使用 CPA 8 的局部配置接口；停止时由下一次启动统一同步。
         Task { @MainActor in
             let source = viewModel.refreshContext()
@@ -1048,12 +1062,15 @@ struct MenuBarBadge: View {
 
 enum CustomProviderSheetMode: Identifiable {
     case add(CustomProviderType)
+    case addOfficialOpenAI
     case edit(CustomProvider)
 
     var id: String {
         switch self {
         case .add(let type):
             return "add-\(type.rawValue)"
+        case .addOfficialOpenAI:
+            return "add-official-openai"
         case .edit(let provider):
             return provider.id.uuidString
         }
@@ -1061,7 +1078,7 @@ enum CustomProviderSheetMode: Identifiable {
 
     var provider: CustomProvider? {
         switch self {
-        case .add:
+        case .add, .addOfficialOpenAI:
             return nil
         case .edit(let provider):
             return provider
@@ -1072,8 +1089,15 @@ enum CustomProviderSheetMode: Identifiable {
         switch self {
         case .add(let type):
             return type
+        case .addOfficialOpenAI:
+            return .openaiCompatibility
         case .edit(let provider):
             return provider.type
         }
+    }
+
+    var isAddingOfficialOpenAI: Bool {
+        if case .addOfficialOpenAI = self { return true }
+        return false
     }
 }

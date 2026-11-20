@@ -33,7 +33,7 @@ struct CPAUsagePricingView: View {
                 if let result = model.result {
                     // 四项摘要与请求明细采用相同的内嵌指标卡，窄窗口按两列排布。
                     CPAUsageAdaptiveGrid(maximumColumns: 4, minimumColumnWidth: 130) {
-                        summary("usage.pricing.estimated", CPAUsagePriceFormatting.money(result.estimatedCost, isPartial: result.hasPartialEstimate))
+                        summary("usage.pricing.estimated", CPAUsageCostEstimate.money(result.estimatedCost, isPartial: result.hasPartialEstimate))
                         // 精确筛选若无法纳入旧日桶，就缺少总体分母；已知部分全已定价也不能显示 100%。
                         summary("usage.pricing.coverage", result.omittedHistoricalRequests == 0 && result.summary.metrics.requests > 0
                             ? String(format: "%.1f%%", Double(result.pricedRequests) / Double(result.summary.metrics.requests) * 100) : "—")
@@ -145,7 +145,7 @@ struct CPAUsagePricingView: View {
             TableColumn("Tokens") { row in Text(row.tokens.formattedCompact).monospacedDigit().help(row.tokens.formatted()).frame(maxWidth: .infinity, alignment: .trailing) }.width(72)
             TableColumn("usage.pricing.estimated".localized()) { row in
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(CPAUsagePriceFormatting.money(row.estimatedCost, isPartial: row.hasPartialEstimate))
+                    Text(CPAUsageCostEstimate.money(row.estimatedCost, isPartial: row.hasPartialEstimate))
                         .monospacedDigit().fontWeight(.medium).lineLimit(1)
                     // 覆盖率不再单独占一列：只对未定价／部分估算行显示说明，精确行保留悬停详情。
                     if row.price == nil {
@@ -156,7 +156,7 @@ struct CPAUsagePricingView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .help(CPAUsagePriceFormatting.money(row.estimatedCost, isPartial: row.hasPartialEstimate)
+                .help(CPAUsageCostEstimate.money(row.estimatedCost, isPartial: row.hasPartialEstimate)
                     + "\n" + (row.price == nil ? "usage.pricing.unpricedRow".localized()
                     : String(format: "usage.pricing.rowCoverage".localized(), row.pricedRequests, row.requests)
                         + "\n" + (row.hasPartialEstimate ? "usage.pricing.partialNotice".localized() : "usage.pricing.formula".localized())))
@@ -265,12 +265,7 @@ private struct CPAModelPriceEditor: View {
     }
 }
 
-/// 小额估算保留八位小数，避免正常的低单价请求被两位小数格式化成零费用。
 private enum CPAUsagePriceFormatting {
-    static func money(_ value: Double?, isPartial: Bool = false) -> String {
-        // 金额下界仍必须有已知计价分量；没有单价或可估量时保持未知，不能显示 ≥ 0。
-        value.map { (isPartial ? "≥ " : "") + $0.formatted(.currency(code: "USD").precision(.fractionLength(2...8))) } ?? "—"
-    }
     static func rate(_ value: Double?) -> String {
         value.map { $0.formatted(.number.precision(.fractionLength(0...6))) } ?? "—"
     }

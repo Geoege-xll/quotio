@@ -1,31 +1,35 @@
 import SwiftUI
 
-/// 六个筛选条件共用原生菜单、选择器与搜索浮层，全部保留在 CPA 卡片下方。
-/// 标题行承担重置与说明操作，字段按三列／两列排齐，不再混用自绘胶囊和系统下拉框。
+/// 请求明细与价格统计共用筛选条；编辑仍通过各页自己的 Binding 即时生效。
+/// 只改变控件密度与摆放，不改变请求条件、选项目录或分页触发路径。
 struct CPAUsageFilterBar: View {
     @Binding var selection: CPAUsageSelection
     let options: CPAUsageEventPage?
     /// 明细和费用页面保留独立标题行；复用字段时可以由外层面板提供标题与操作。
     var showsHeader = true
+    /// 仅覆盖模型搜索浮层的内容宽度；未指定时沿用菜单默认值，筛选控件和日期浮层不受影响。
+    var modelSearchPopoverWidth: CGFloat? = nil
     @State private var showsDates = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 10) {
             if showsHeader {
                 CPAUsageFilterHeader(selection: $selection)
             }
 
-            CPAUsageAdaptiveGrid(maximumColumns: 3, minimumColumnWidth: 180) {
-                CPAUsageFilterField(titleKey: "usage.records.range") { rangeMenu }
+            // 宽窗口优先一行；宽度递减时按六、三、二、一列排列，控件顺序与状态不变。
+            CPAUsageAdaptiveGrid(maximumColumns: 6, minimumColumnWidth: 136, spacing: 8) {
+                CPAUsageCompactFilterField(titleKey: "usage.records.range", isActive: selection.range != .all) { rangeMenu }
                 CPAUsageOptionMenu(titleKey: "usage.provider", value: $selection.provider,
-                                   options: options?.providers ?? [], searchable: false)
+                                   options: options?.providers ?? [], searchable: false, isCompact: true)
                 CPAUsageOptionMenu(titleKey: "usage.model", value: $selection.model,
-                                   options: options?.models ?? [], searchable: true)
+                                   options: options?.models ?? [], searchable: true, isCompact: true,
+                                   searchPopoverWidth: modelSearchPopoverWidth)
                 CPAUsageOptionMenu(titleKey: "usage.records.source", value: $selection.source,
-                                   options: options?.sources ?? [], searchable: false)
+                                   options: options?.sources ?? [], searchable: false, isCompact: true)
                 CPAUsageOptionMenu(titleKey: "usage.records.apiKey", value: $selection.apiKey,
-                                   options: options?.apiKeys ?? [], searchable: false)
-                CPAUsageFilterField(titleKey: "usage.records.result") {
+                                   options: options?.apiKeys ?? [], searchable: false, isCompact: true)
+                CPAUsageCompactFilterField(titleKey: "usage.records.result", isActive: selection.outcome != .all) {
                     CPAUsageFilterMenu(titleKey: "usage.records.result", value: selection.outcome.titleKey.localized()) {
                         Picker("usage.records.result".localized(), selection: $selection.outcome) {
                             ForEach(CPAUsageOutcome.allCases, id: \.self) { Text($0.titleKey.localized()).tag($0) }
@@ -34,8 +38,6 @@ struct CPAUsageFilterBar: View {
                 }
             }
         }
-        // 模型与提供商继续保持独立条件，外观调整不改变筛选语义或触发额外查询。
-        .popover(isPresented: $showsDates) { dateFilters }
     }
 
     private var rangeMenu: some View {
@@ -50,6 +52,7 @@ struct CPAUsageFilterBar: View {
                 }
             }
         }
+        .popover(isPresented: $showsDates) { dateFilters }
     }
 
     private var rangeTitle: String {
@@ -59,10 +62,7 @@ struct CPAUsageFilterBar: View {
     private var dateFilters: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(CPAUsageTimeRange.custom.titleKey.localized()).font(.headline)
-            DatePicker("callAnalytics.startDate".localized(), selection: $selection.start, in: ...selection.end,
-                       displayedComponents: [.date, .hourAndMinute]).datePickerStyle(.field)
-            DatePicker("callAnalytics.endDate".localized(), selection: $selection.end, in: selection.start...,
-                       displayedComponents: [.date, .hourAndMinute]).datePickerStyle(.field)
+            CPAUsageCustomDateFields(selection: $selection)
             HStack {
                 Spacer()
                 Button("action.close".localized()) { showsDates = false }.keyboardShortcut(.cancelAction)
@@ -72,13 +72,38 @@ struct CPAUsageFilterBar: View {
     }
 }
 
-/// 少量提供商使用系统 Picker；模型、来源和密钥保留可搜索浮层。
-/// 两种入口都使用系统边框和焦点反馈，长名称通过截断、提示及无障碍值完整保留。
+/// 子页的紧凑字段：标题以字重与勾号标出已启用条件，原生控件仍负责完整名称、值和焦点。
+private struct CPAUsageCompactFilterField<Content: View>: View {
+    let titleKey: String
+    let isActive: Bool
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                if isActive { Image(systemName: "checkmark") }
+                Text(titleKey.localized())
+            }
+            .font(.caption.weight(isActive ? .semibold : .medium))
+            .foregroundStyle(isActive ? Color.primary : Color.secondary)
+            .accessibilityHidden(true)
+
+            if #available(macOS 26.0, *) { content.buttonSizing(.flexible) }
+            else { content }
+        }
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 选项菜单与搜索浮层都保留原生焦点。长名称靠提示及无障碍值完整传递，不撑宽栏位。
 struct CPAUsageOptionMenu: View {
     let titleKey: String
     @Binding var value: String
     let options: [CPAUsageOption]
     let searchable: Bool
+    var isCompact = false
+    var searchPopoverWidth: CGFloat? = nil
     @State private var showsSearch = false
 
     private var title: String {
@@ -88,34 +113,41 @@ struct CPAUsageOptionMenu: View {
     }
 
     var body: some View {
-        CPAUsageFilterField(titleKey: titleKey) {
-            if searchable {
-                Button { showsSearch = true } label: {
-                    HStack(spacing: 8) {
-                        Text(title).lineLimit(1).truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+        if isCompact {
+            CPAUsageCompactFilterField(titleKey: titleKey, isActive: !value.isEmpty) { optionControl }
+        } else {
+            CPAUsageFilterField(titleKey: titleKey) { optionControl }
+        }
+    }
+
+    @ViewBuilder private var optionControl: some View {
+        if searchable {
+            Button { showsSearch = true } label: {
+                HStack(spacing: 8) {
+                    Text(title).lineLimit(1).truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.bordered)
+            .help(title)
+            .accessibilityLabel(titleKey.localized())
+            .accessibilityValue(title)
+            .popover(isPresented: $showsSearch) {
+                CPAUsageOptionSearch(titleKey: titleKey, value: $value, options: options,
+                                     isPresented: $showsSearch, width: searchPopoverWidth ?? 390)
+            }
+        } else {
+            CPAUsageFilterMenu(titleKey: titleKey, value: title) {
+                Picker(titleKey.localized(), selection: $value) {
+                    Text("usage.records.outcome.all".localized()).tag("")
+                    Text("usage.records.unknown".localized()).tag("__unknown__")
+                    ForEach(options) { item in Text(item.title).tag(item.id) }
+                    if !value.isEmpty, value != "__unknown__", !options.contains(where: { $0.id == value }) {
+                        // 后台重查选项时仍展示已有选择，不能暂时将其画成“全部”或无效标签。
+                        Text(title).tag(value)
                     }
-                }
-                .buttonStyle(.bordered)
-                .help(title)
-                .accessibilityLabel(titleKey.localized())
-                .accessibilityValue(title)
-                .popover(isPresented: $showsSearch) {
-                    CPAUsageOptionSearch(titleKey: titleKey, value: $value, options: options, isPresented: $showsSearch)
-                }
-            } else {
-                CPAUsageFilterMenu(titleKey: titleKey, value: title) {
-                    Picker(titleKey.localized(), selection: $value) {
-                        Text("usage.records.outcome.all".localized()).tag("")
-                        Text("usage.records.unknown".localized()).tag("__unknown__")
-                        ForEach(options) { item in Text(item.title).tag(item.id) }
-                        if !value.isEmpty, value != "__unknown__", !options.contains(where: { $0.id == value }) {
-                            // 后台重查选项时仍展示已有选择，不能暂时将其画成“全部”或无效标签。
-                            Text(title).tag(value)
-                        }
-                    }.labelsHidden()
-                }
+                }.labelsHidden()
             }
         }
     }
@@ -127,6 +159,7 @@ private struct CPAUsageOptionSearch: View {
     @Binding var value: String
     let options: [CPAUsageOption]
     @Binding var isPresented: Bool
+    let width: CGFloat
     @State private var search = ""
     @FocusState private var isSearchFocused: Bool
 
@@ -152,7 +185,7 @@ private struct CPAUsageOptionSearch: View {
                 }
             }.listStyle(.plain)
         }
-        .padding(16).frame(width: 390, height: 380)
+        .padding(16).frame(width: width, height: 380)
         .onAppear { isSearchFocused = true }
     }
 
@@ -162,7 +195,10 @@ private struct CPAUsageOptionSearch: View {
                 Text(title).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 if value == id { Image(systemName: "checkmark").foregroundStyle(.tint) }
             }.contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityAddTraits(value == id ? .isSelected : [])
     }
 }
 

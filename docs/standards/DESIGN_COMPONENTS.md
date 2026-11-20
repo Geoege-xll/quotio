@@ -12,7 +12,7 @@
 ## 0. 原生组件与设置导航优先规则
 
 - `[des-native-001] [hard]` 系统已有合适组件时优先复用。设置使用原生 `Form`、`Section`、`LabeledContent`、`Toggle`、`Picker`、`TextField`、`Stepper` 与 `Button`。系统分隔线、标准输入框、焦点环及默认按钮形状均允许且应保留。
-- `[des-native-002] [hard]` 设置首页直接展示应用模式；分类使用单列系统导航行。页面入口使用 `NavigationLink` 和 `NavigationStack`，不手工模拟返回按钮、不通过切换主侧栏绕过返回路径。
+- `[des-native-002] [hard]` 分类使用单列系统导航行。页面入口使用 `NavigationLink` 和 `NavigationStack`，不手工模拟返回按钮、不通过切换主侧栏绕过返回路径。
 - `[des-native-003] [hard]` 自定义配色、间距和信息层级必须服务于平台一致性。不得为了统一胶囊或卡片外形，牺牲系统导航、键盘交互、无障碍或可读性。本节优先于下面面向自定义组件的样式细则。
 - `[des-native-004] [hard]` 页面配置采用 Push；删除、模式切换、密钥轮换等操作使用系统确认。不可中断的写入期间可暂时禁止返回，结束后恢复系统返回按钮，不替换为自绘按钮。
 

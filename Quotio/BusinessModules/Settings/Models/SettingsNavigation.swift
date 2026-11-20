@@ -1,6 +1,6 @@
 import Foundation
 
-/// 分类与搜索目标使用系统导航栈；应用模式归属首页，复杂配置可继续 Push。
+/// 分类与搜索目标使用系统导航栈，复杂配置可进入下一层。
 /// 不创建第二份可编辑配置，也不在路由中保存密钥或其他用户输入。
 enum SettingsCategory: String, CaseIterable, Identifiable {
     case general, usage, notifications, service, requests, security, maintenance
@@ -8,7 +8,6 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String { "settings.navigation.\(rawValue).title".localized() }
     var subtitle: String { "settings.navigation.\(rawValue).subtitle".localized() }
-    var isCPAOnly: Bool { self == .service || self == .requests }
 
     var icon: String {
         switch self {
@@ -84,7 +83,7 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
 
     private var keywords: String {
         switch self {
-        case .mode: "运行模式 监控 本地代理 operating mode monitor local proxy"
+        case .mode: ""
         case .startup: "开机 登录 启动 launch login startup"
         case .language: "语言 中文 英文 language locale"
         case .appearance: "外观 浅色 深色 跟随系统 appearance theme dark light"
@@ -94,7 +93,7 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
         case .usage: "用量 合计 模型 聚合 tokens usage aggregation total"
         case .refresh: "刷新 频率 间隔 手动 refresh cadence interval manual"
         case .notifications: "通知 提醒 阈值 授权 低额度 冷却 崩溃 更新 notification threshold cooling crash"
-        case .server: "端口 监听 地址 自动启动 局域网 隧道 重启 port endpoint bind tunnel network restart"
+        case .server: "端口 监听 地址 局域网 隧道 重启 port endpoint bind tunnel network restart"
         case .upstream: "上游代理 网络 HTTP HTTPS SOCKS proxy url upstream"
         case .aliases: "模型别名 思考强度 默认思考 reasoning effort thinking alias CPA"
         // 搜索只指向当前可配置的路由与重试；旧版预览模型开关已移除，避免搜索命中不存在的控件。
@@ -110,6 +109,7 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
     }
 
     func matches(_ query: String) -> Bool {
+        guard self != .mode else { return false }
         let haystack = [title, category.title, category.subtitle, keywords].joined(separator: " ")
         let terms = query.split(whereSeparator: \.isWhitespace)
         return terms.allSatisfy { haystack.localizedStandardContains(String($0)) }
@@ -118,7 +118,13 @@ enum SettingsTopic: String, CaseIterable, Identifiable {
 
 struct SettingsDestination: Hashable {
     let category: SettingsCategory
-    var topic: SettingsTopic? = nil
+    let topic: SettingsTopic?
+
+    init(category: SettingsCategory, topic: SettingsTopic? = nil) {
+        // 兼容旧的模式设置链接，将它们定位到仍可操作的本地服务设置。
+        self.category = topic == .mode ? .service : category
+        self.topic = topic == .mode ? .server : topic
+    }
 }
 
 /// 辅助页面同样进入设置导航栈，不通过修改主侧栏选中项绕过系统返回。

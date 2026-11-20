@@ -10,28 +10,57 @@ struct CPAUsageOverviewSection: View {
     var historicalRequests = 0
     /// 仪表盘摘要只保留四项主指标。完整分析继续显示 Token、缓存、结果及统计口径说明。
     var showsDetails = true
+    var cost: CPAUsageCostEstimate?
+    var detailDestination: CPAUsageDestination?
 
     var body: some View {
         let presentation = CPAUsageOverviewPresentation(metrics: metrics, isIncomplete: isIncomplete)
+        let costMetric = cost.map {
+            CPAUsageOverviewPresentation.Metric(titleKey: "usage.pricing.estimated", value: $0.formatted,
+                exactValue: $0.amount == nil ? "usage.records.unknown".localized() : $0.formatted)
+        }
         VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("usage.dashboard.overview".localized())
-                    .font(.headline).accessibilityAddTraits(.isHeader)
-                Text(String(format: "usage.cpa.accounts".localized(), totalAccounts, readyAccounts))
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("usage.dashboard.overview".localized())
+                        .font(.headline).accessibilityAddTraits(.isHeader)
+                    Text(String(format: "usage.cpa.accounts".localized(), totalAccounts, readyAccounts))
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Spacer()
+                if showsDetails, let detailDestination {
+                    NavigationLink(value: detailDestination) {
+                        HStack(spacing: 4) {
+                            Text("usage.analytics.viewDetails".localized())
+                            // 尾部箭头仅作装饰，导航链接仍以本地化文字作为无障碍名称。
+                            Image(systemName: "chevron.right").accessibilityHidden(true)
+                        }
+                    }
+                    .buttonStyle(.quotioMicroCapsule)
+                    .accessibilityIdentifier("cpaOverviewDetails")
+                }
             }
 
             // 主指标优先四等分；降低原 145pt 的列宽门槛，让默认窗口能够一行展示四张卡。
             // 宽度不足仍沿用共享布局的两列／单列回退，卡片文字、数值和紧凑处理保持原样。
             CPAUsageAdaptiveGrid(maximumColumns: 4, minimumColumnWidth: 120) {
                 CPAUsageOverviewMetric(metric: presentation.requests, icon: "network", tint: .blue)
-                CPAUsageOverviewMetric(metric: presentation.tokens, icon: "number", tint: .purple)
+                CPAUsageOverviewMetric(metric: costMetric ?? presentation.tokens,
+                                       icon: costMetric == nil ? "number" : "dollarsign.circle", tint: .purple)
                 CPAUsageOverviewMetric(metric: presentation.successRate, icon: "checkmark.seal", tint: .green)
                 CPAUsageOverviewMetric(metric: presentation.latency, icon: "clock", tint: .orange)
             }
 
             if showsDetails {
                 CPAUsageOverviewDetails(presentation: presentation)
+                if let cost {
+                    Text("usage.pricing.notice".localized())
+                        .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if cost.isPartial {
+                        Text("usage.pricing.partialNotice".localized())
+                            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 // 完整分析随结果解释计算口径，缺失数据仍显示未知而不补零。
                 Text("usage.records.metricRules".localized())
                     .font(.caption2).foregroundStyle(.secondary)

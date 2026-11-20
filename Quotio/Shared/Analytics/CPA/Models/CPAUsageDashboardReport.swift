@@ -14,8 +14,37 @@ nonisolated enum CPAUsageDimension: String, CaseIterable, Sendable {
 }
 
 nonisolated enum CPAUsageChartMetric: String, CaseIterable, Sendable {
-    case tokens, requests
-    var titleKey: String { self == .tokens ? "usage.tokens" : "usage.cpa.requests" }
+    case tokens, cost, requests
+
+    var titleKey: String {
+        switch self {
+        case .tokens: "usage.tokens"
+        case .cost: "usage.analytics.costMode"
+        case .requests: "usage.cpa.requests"
+        }
+    }
+
+    func detailDestination(for selection: CPAUsageSelection) -> CPAUsageDestination {
+        self == .cost ? .pricing(selection) : .records(selection)
+    }
+}
+
+/// nil 表示完全未知；0 是有依据的零费用；部分覆盖时，即使下界为零也保留标记。
+nonisolated struct CPAUsageCostEstimate: Equatable, Sendable {
+    var amount: Double? = nil
+    var isPartial = false
+
+    mutating func add(_ estimate: Self) {
+        if let amount = estimate.amount { self.amount = (self.amount ?? 0) + amount }
+        isPartial = isPartial || estimate.isPartial
+    }
+
+    var formatted: String { Self.money(amount, isPartial: isPartial) }
+
+    /// 价格页和图表共用 USD 格式；小额请求保留与现有价格页一致的精度。
+    static func money(_ amount: Double?, isPartial: Bool = false) -> String {
+        amount.map { (isPartial ? "≥ " : "") + $0.formatted(.currency(code: "USD").precision(.fractionLength(2...8))) } ?? "—"
+    }
 }
 
 nonisolated struct CPAUsageTrendPoint: Sendable, Identifiable, Equatable {
@@ -79,8 +108,16 @@ nonisolated struct CPAUsageCategory: Sendable, Identifiable, Equatable {
     let provider: String
     let requests: Int
     let tokens: Int
+    var cost = CPAUsageCostEstimate()
     var id: String { "\(provider.utf8.count):\(provider)\(key)" }
-    func value(_ metric: CPAUsageChartMetric) -> Int { metric == .tokens ? tokens : requests }
+
+    func value(_ metric: CPAUsageChartMetric) -> Double? {
+        switch metric {
+        case .tokens: Double(tokens)
+        case .requests: Double(requests)
+        case .cost: cost.amount
+        }
+    }
     func selection(from original: CPAUsageSelection, dimension: CPAUsageDimension) -> CPAUsageSelection {
         var selection = original
         switch dimension {
@@ -101,9 +138,27 @@ nonisolated struct CPAUsageDashboardReport: Sendable, Equatable {
     var hasMoreCategories: Bool
     /// 最近 52 周的日级按提供商/模型聚合桶（应用非时间筛选，独立于今日/近24小时等短时间窗）。
     var heatmapBuckets: [UsageBucket] = []
+    var estimatedCost = CPAUsageCostEstimate()
+    /// 日格费用按账本桶身份保留，不属于筛选时间窗内的费用总计。
+    var heatmapCosts: [String: CPAUsageCostEstimate] = [:]
+    var heatmapPartialDays: Set<Date> = []
+    var heatmapToday: Date = .distantPast
+    var selectedStart: Date?
+    var selectedEnd: Date?
     /// 旧日归档只贡献真实保存的汇总；不生成虚构事件或小时级请求。
     var historicalRequests = 0
     var omittedHistoricalRequests = 0
+
+    /// 日级热力图只用时间上下界判断自然日是否在选择范围内。秒级的滚动不改变日格，
+    /// 但原始报表仍保留精确上下界，查询和其他调用方继续使用完整值。
+    func hasSamePresentation(as newer: Self, calendar: Calendar = .current) -> Bool {
+        guard selectedStart.map({ calendar.startOfDay(for: $0) }) == newer.selectedStart.map({ calendar.startOfDay(for: $0) }),
+              selectedEnd.map({ calendar.startOfDay(for: $0) }) == newer.selectedEnd.map({ calendar.startOfDay(for: $0) }) else { return false }
+        var comparable = self
+        comparable.selectedStart = newer.selectedStart
+        comparable.selectedEnd = newer.selectedEnd
+        return comparable == newer
+    }
 }
 
 /// 价格仅表示用户配置的标准单价，单位统一为 USD / 百万 Tokens。

@@ -29,6 +29,21 @@ nonisolated struct ClaudeCallEventSource {
         let dayKey: String
     }
 
+    private struct SessionTiming {
+        var earliest: Date?
+        // 仅结果或无日期的首条会话消息不能证明会话在清理后启动；副本也不能补造启动。
+        var firstMessageCanStart: Bool?
+
+        mutating func observe(_ date: Date?) {
+            if let date, earliest.map({ date < $0 }) ?? true { earliest = date }
+        }
+
+        mutating func merge(_ other: Self) {
+            observe(other.earliest)
+            firstMessageCanStart = firstMessageCanStart == true && other.firstMessageCanStart == true
+        }
+    }
+
     func resolveProjectRoots() -> [String] {
         if let env = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines), !env.isEmpty {
             return env.split(separator: ",").map { part -> String in
@@ -49,7 +64,8 @@ nonisolated struct ClaudeCallEventSource {
             return ([], CallSourceStatus(source: .claude, available: false, eventCount: 0, filesScanned: 0, errorCode: nil), [:])
         }
 
-        let files = try collectJSONLFiles(roots: roots, cutoff: cutoff)
+        // 重置只看声明时间：保留旧文件与其副本，才能识别旧会话并读取其中新追加的调用。
+        let files = try collectJSONLFiles(roots: roots)
         var accumulator = CallEventAccumulator()
         // 各 agent 的「被调用次数」：一份会话文件 = 一次。主会话（根文件）记 "main"，
         // 子代理记其具体 agentType（读不到 → "subagent"）。与该 agent 是否调过工具无关。
@@ -58,7 +74,7 @@ nonisolated struct ClaudeCallEventSource {
         var seenCallIDs = Set<String>()
         // 会话标识只在本次扫描内去重，绝不落盘；复制日志不能增加启动次数。
         // 子代理共享父 sessionId，因此还必须包含 agentId（缺失时用稳定文件名）。
-        struct SessionObservation { var day: String?; let agent: String }
+        struct SessionObservation { var timing: SessionTiming; let agent: String }
         var sessions: [String: SessionObservation] = [:]
         for file in files {
             try Task.checkCancellation()
@@ -67,10 +83,10 @@ nonisolated struct ClaudeCallEventSource {
             let isSubagentFile = file.contains("/subagents/")
             let subagentType = isSubagentFile ? readSubagentType(forFile: file) : nil
             let agentName = isSubagentFile ? (subagentType ?? "subagent") : "main"
-            let fallbackDayKey = clock.dayKey(fileModificationDate(file) ?? Date())
+            let fallbackDayKey = cutoff == nil ? clock.dayKey(fileModificationDate(file) ?? Date()) : nil
             // 同文件内按 tool_use_id 配对 tool_result（成功率）。配对发生在文件内、顺序保证 result 在 use 之后。
             var pending: [String: PendingCall] = [:]
-            var earliestDayKey: String?
+            var sessionTiming = SessionTiming()
             var sessionID: String?
             var agentID: String?
             var hasSessionMessage = false
@@ -81,9 +97,9 @@ nonisolated struct ClaudeCallEventSource {
                 needles: [],
                 maxLineBytes: Self.maxLineBytes
             ) { line in
-                parseLine(line, clock: clock, fallbackDayKey: fallbackDayKey,
+                parseLine(line, clock: clock, cutoff: cutoff, fallbackDayKey: fallbackDayKey,
                           isSubagentFile: isSubagentFile, subagentType: subagentType,
-                          pending: &pending, seenCallIDs: &seenCallIDs, earliestDayKey: &earliestDayKey,
+                          pending: &pending, seenCallIDs: &seenCallIDs, sessionTiming: &sessionTiming,
                           sessionID: &sessionID, agentID: &agentID, hasSessionMessage: &hasSessionMessage, into: &accumulator)
             }
             // 文件结束仍未配到 tool_result 的 tool_use：只计数，成功率未知（不计入分母）。
@@ -97,9 +113,9 @@ nonisolated struct ClaudeCallEventSource {
                 ? "sub:" + (sessionID ?? "") + ":" + (agentID ?? stem)
                 : "main:" + (sessionID ?? stem)
             if var previous = sessions[identity] {
-                if let day = earliestDayKey, previous.day == nil || day < previous.day! { previous.day = day }
+                previous.timing.merge(sessionTiming)
                 sessions[identity] = previous
-            } else { sessions[identity] = SessionObservation(day: earliestDayKey, agent: agentName) }
+            } else { sessions[identity] = SessionObservation(timing: sessionTiming, agent: agentName) }
         }
 
         let status = CallSourceStatus(
@@ -112,7 +128,12 @@ nonisolated struct ClaudeCallEventSource {
         var invocationsByDay: [String: [String: Int]] = [:]
         for session in sessions.values {
             // 空键是内部「日期未知」桶，Engine 显式转换为 nil；绝不使用 mtime 或扫描日期。
-            invocationsByDay[session.day ?? "", default: [:]][session.agent, default: 0] += 1
+            if let cutoff {
+                guard session.timing.firstMessageCanStart == true,
+                      CallAnalyticsClock.includesInvocation(at: session.timing.earliest, after: cutoff) else { continue }
+            }
+            let day = session.timing.earliest.map(clock.dayKey) ?? ""
+            invocationsByDay[day, default: [:]][session.agent, default: 0] += 1
         }
         let agentInvocationsByDay = invocationsByDay.mapValues { perAgent in
             perAgent.map { AgentInvocationCount(source: .claude, agent: $0.key, count: $0.value) }
@@ -125,12 +146,13 @@ nonisolated struct ClaudeCallEventSource {
     private func parseLine(
         _ line: Data,
         clock: CallAnalyticsClock,
-        fallbackDayKey: String,
+        cutoff: Date?,
+        fallbackDayKey: String?,
         isSubagentFile: Bool,
         subagentType: String?,
         pending: inout [String: PendingCall],
         seenCallIDs: inout Set<String>,
-        earliestDayKey: inout String?,
+        sessionTiming: inout SessionTiming,
         sessionID: inout String?,
         agentID: inout String?,
         hasSessionMessage: inout Bool,
@@ -140,24 +162,25 @@ nonisolated struct ClaudeCallEventSource {
               let type = object["type"] as? String else { return }
         // 先读取结构化会话元数据，再进入工具解析；纯文本 content 可以是字符串或数组。
         // 文件修改时间可因复制、同步或追加而改变，不能作为启动日期的证据。
-        if let timestamp = object["timestamp"] as? String, let date = clock.date(fromISO: timestamp) {
-            let day = clock.dayKey(date)
-            if earliestDayKey == nil || day < earliestDayKey! { earliestDayKey = day }
-        }
+        let date = (object["timestamp"] as? String).flatMap { clock.invocationDate(fromISO: $0, cutoff: cutoff) }
+        sessionTiming.observe(date)
         if let value = object["sessionId"] as? String, !value.isEmpty { sessionID = value }
         if let value = object["agentId"] as? String, !value.isEmpty { agentID = value }
         guard let message = object["message"] as? [String: Any] else { return }
-        if type == "assistant" || type == "user" { hasSessionMessage = true }
-        guard let content = message["content"] as? [[String: Any]] else { return }
+        let content = message["content"] as? [[String: Any]]
+        if type == "assistant" || type == "user" {
+            if cutoff != nil, !hasSessionMessage {
+                let containsResult = type == "user" && content?.contains { $0["type"] as? String == "tool_result" } == true
+                sessionTiming.firstMessageCanStart = date != nil && !containsResult
+            }
+            hasSessionMessage = true
+        }
+        guard let content else { return }
 
         switch type {
         case "assistant":
-            let dayKey: String
-            if let ts = object["timestamp"] as? String, let date = clock.date(fromISO: ts) {
-                dayKey = clock.dayKey(date)
-            } else {
-                dayKey = fallbackDayKey
-            }
+            guard CallAnalyticsClock.includesInvocation(at: date, after: cutoff),
+                  let dayKey = date.map(clock.dayKey) ?? fallbackDayKey else { return }
             // agent：子代理文件用其具体类型（拿不到→"subagent"）；常规文件按行 isSidechain 兜底；否则 "main"。
             let agent: String
             if isSubagentFile {
@@ -237,7 +260,7 @@ nonisolated struct ClaudeCallEventSource {
 
     // MARK: - File discovery
 
-    private func collectJSONLFiles(roots: [String], cutoff: Date?) throws -> [String] {
+    private func collectJSONLFiles(roots: [String]) throws -> [String] {
         var files: [String] = []
         var seen = Set<String>()
         for root in roots {
@@ -257,7 +280,6 @@ nonisolated struct ClaudeCallEventSource {
                     throw CallAnalyticsReadError.unreadable
                 }
                 if values.isRegularFile != true || values.isSymbolicLink == true { continue }
-                if let cutoff, let modified = values.contentModificationDate, modified < cutoff { continue }
                 guard seen.insert(item.path).inserted else { continue }
                 files.append(item.path)
             }

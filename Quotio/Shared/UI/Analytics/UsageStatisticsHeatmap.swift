@@ -42,6 +42,17 @@ struct UsageStatisticsHeatmap: View {
                 .defaultScrollAnchor(.trailing)
                 .frame(height: gridHeight)
                 footer
+                if presentation.hasSelection {
+                    Label("usage.analytics.selectedDates".localized(), systemImage: "circle")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if presentation.metric == .cost {
+                    HStack(spacing: 8) {
+                        Label("usage.records.unknown".localized(), systemImage: "line.diagonal")
+                        Label("usage.analytics.partialEstimate".localized(), systemImage: "minus")
+                    }
+                    .font(.caption2).foregroundStyle(.secondary)
+                }
             }
         }
         .overlay {
@@ -53,7 +64,15 @@ struct UsageStatisticsHeatmap: View {
             UsageHeatmapDetail(day: day, title: title, accent: accent, metric: presentation.metric)
                 .padding(16).frame(width: 360)
         }
+        .onChange(of: presentation.metric) { clearDetails() }
+        .onChange(of: presentation.costIdentity) { clearDetails() }
         .onDisappear { onHover(nil) }
+    }
+
+    private func clearDetails() {
+        selectedDay = nil
+        hoveredDate = nil
+        onHover(nil)
     }
 
     private var cellSide: CGFloat {
@@ -97,9 +116,11 @@ struct UsageStatisticsHeatmap: View {
     }
 
     private func cell(_ day: UsageHeatmapPresentation.Day, side: CGFloat) -> some View {
-        let cellValue = presentation.value(for: day.totals)
-        let intensity = presentation.intensity(cellValue)
+        let intensity = presentation.intensity(day.value(presentation.metric))
         let hovered = hoveredDate == day.date
+        let isMarked = presentation.hasSelection && day.isInSelection && !day.isFuture
+        let isDimmed = presentation.hasSelection && !day.isInSelection
+        let costIndicator = day.cost.amount == nil ? "line.diagonal" : "minus"
         let radius = max(2, min(4, side * 0.24))
         return GeometryReader { geometry in
             Button {
@@ -112,14 +133,30 @@ struct UsageStatisticsHeatmap: View {
                     .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(
                         hovered ? Color.primary : (Calendar.current.isDateInToday(day.date) ? accent : .clear),
                         lineWidth: hovered ? 1.5 : 1.2))
-                    .opacity(day.isFuture || day.isBeforeCollection ? 0.4 : 1)
+                    .opacity(day.isFuture || day.isBeforeCollection || isDimmed ? 0.4 : 1)
+                    // 日期范围用实心点和淡化共同表达；色阶仍只表达日值的大小。
+                    .overlay(alignment: .bottom) {
+                        if isMarked {
+                            Circle().fill(AnalyticsSurface.row(colorScheme))
+                                .overlay { Circle().strokeBorder(Color.primary, lineWidth: 1) }
+                                .frame(width: 4, height: 4).padding(.bottom, 1)
+                        }
+                    }
+                    .overlay(alignment: .top) {
+                        if presentation.metric == .cost, day.cost.isPartial, !day.isFuture {
+                            Image(systemName: costIndicator).font(.system(size: 5, weight: .bold))
+                                .foregroundStyle(.primary).accessibilityHidden(true)
+                                .opacity(isDimmed ? 0.4 : 1)
+                        }
+                    }
                     .scaleEffect(hovered && !reduceMotion ? 1.12 : 1)
                     .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.72), value: hovered)
             }
             .buttonStyle(.plain)
             .disabled(day.isFuture)
             .accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
-            .accessibilityValue(day.isBeforeCollection ? "usage.replica.beforeCollection".localized() : UsageHeatmapDetail.formattedValue(cellValue, metric: presentation.metric))
+            .accessibilityValue(UsageHeatmapDetail.accessibilityValue(day, metric: presentation.metric))
+            .accessibilityAddTraits(isMarked ? .isSelected : [])
             .onHover { inside in
                 guard !day.isFuture else { return }
                 hoveredDate = inside ? day.date : nil
@@ -139,12 +176,14 @@ struct UsageStatisticsHeatmap: View {
         .monospacedDigit()
     }
     @ViewBuilder private var footerValues: some View {
-        Text(UsageHeatmapDetail.formattedValue(presentation.value(for: presentation.totals), metric: presentation.metric))
+        Text(UsageHeatmapDetail.formattedValue(presentation.totals, cost: presentation.cost, metric: presentation.metric))
             .font(.caption.weight(.semibold))
         Text(String(format: "usage.replica.activeDays".localized(), presentation.activeDays))
             .font(.caption2).foregroundStyle(.secondary)
         if let peak = presentation.peak {
-            Text("usage.replica.peak".localized() + " " + presentation.value(for: peak.totals).formatted() + " · " + peak.date.formatted(.dateTime.month().day()))
+            Text("usage.replica.peak".localized() + " "
+                 + UsageHeatmapDetail.formattedValue(peak.totals, cost: peak.cost, metric: presentation.metric)
+                 + " · " + peak.date.formatted(.dateTime.month().day()))
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
@@ -173,7 +212,7 @@ struct UsageStatisticsHeatmap: View {
     }
 }
 
-/// 点击弹层展示全部模型，悬浮层复用同一内容；支持 Tokens 与请求数双口径展示，不引入费用估算。
+/// 点击弹层和悬浮层复用自然日内容；不从日格反推精确时间窗口的用量。
 struct UsageHeatmapDetail: View {
     @Environment(\.colorScheme) private var colorScheme
     let day: UsageHeatmapPresentation.Day
@@ -181,20 +220,35 @@ struct UsageHeatmapDetail: View {
     let accent: Color
     var metric: CPAUsageChartMetric = .tokens
 
-    static func formattedValue(_ value: Int, metric: CPAUsageChartMetric) -> String {
+    static func formattedValue(_ totals: UsageTotals, cost: CPAUsageCostEstimate, metric: CPAUsageChartMetric) -> String {
         switch metric {
-        case .tokens: return value.formatted() + " Tokens"
-        case .requests: return value.formatted() + " " + "usage.cpa.requests.unit".localized()
+        case .tokens: totals.totalTokens.formatted() + " " + "usage.tokens".localized()
+        case .requests: totals.requests.formatted() + " " + "usage.cpa.requests.unit".localized()
+        case .cost: cost.formatted
         }
     }
 
+    static func accessibilityValue(_ day: UsageHeatmapPresentation.Day, metric: CPAUsageChartMetric) -> String {
+        if day.isBeforeCollection { return "usage.replica.beforeCollection".localized() }
+        if metric == .cost {
+            let amount = day.cost.amount == nil ? "usage.records.unknown".localized() : day.cost.formatted
+            return "usage.pricing.estimated".localized() + ": " + amount + ". " + "usage.analytics.calendarDay".localized()
+        }
+        return formattedValue(day.totals, cost: day.cost, metric: metric) + ". " + "usage.analytics.calendarDay".localized()
+    }
+
     var body: some View {
-        let dayValue = metric == .tokens ? day.totals.totalTokens : day.totals.requests
         VStack(alignment: .leading, spacing: 10) {
             HStack { Text(title).foregroundStyle(accent); Spacer(); Text(day.date, format: .dateTime.month().day().weekday()) }
                 .font(.caption.weight(.semibold))
-            Text(day.isBeforeCollection ? "—" : Self.formattedValue(dayValue, metric: metric))
+            Text(day.isBeforeCollection ? "—" : Self.formattedValue(day.totals, cost: day.cost, metric: metric))
                 .font(.title3.weight(.bold)).monospacedDigit()
+                .accessibilityLabel(Self.accessibilityValue(day, metric: metric))
+            Text("usage.analytics.calendarDay".localized())
+                .font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+            if metric == .cost, day.cost.isPartial {
+                Text("usage.pricing.partialNotice".localized()).font(.caption2).foregroundStyle(.secondary)
+            }
             if day.isBeforeCollection {
                 Text("usage.replica.beforeCollection".localized()).font(.caption).foregroundStyle(.secondary)
             } else if day.models.isEmpty || (metric == .requests && day.totals.requests == 0) {
@@ -208,7 +262,9 @@ struct UsageHeatmapDetail: View {
                                 HStack(alignment: .top) {
                                     Text(model.model).font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                                     Spacer()
-                                    Text(metric == .tokens ? model.totals.totalTokens.formatted() : Self.formattedValue(model.totals.requests, metric: .requests))
+                                    let estimate = day.modelCosts[model.id] ?? CPAUsageCostEstimate()
+                                    Text(metric == .tokens ? model.totals.totalTokens.formatted()
+                                         : Self.formattedValue(model.totals, cost: estimate, metric: metric))
                                         .font(.caption).monospacedDigit()
                                 }
                                 if metric == .tokens {
@@ -216,7 +272,7 @@ struct UsageHeatmapDetail: View {
                                         .font(.caption2).foregroundStyle(.secondary)
                                     Text(detailLine("usage.cachedTokens", model.totals.cachedTokens, "usage.reasoningTokens", model.totals.reasoningTokens))
                                         .font(.caption2).foregroundStyle(.secondary)
-                                } else {
+                                } else if metric == .requests {
                                     Text(requestDetailLine(model))
                                         .font(.caption2).foregroundStyle(.secondary)
                                 }

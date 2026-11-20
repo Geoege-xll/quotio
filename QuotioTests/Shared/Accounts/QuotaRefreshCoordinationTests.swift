@@ -17,8 +17,22 @@ final class QuotaRefreshCoordinationTests: XCTestCase {
             menuBarSettings: MenuBarSettingsManager(defaults: defaults),
             refreshSettings: RefreshSettingsManager(defaults: defaults)
         )
+        let proxy = model.proxyManager, initialRunning = proxy.proxyStatus.running, initialSession = proxy.runtimeSessionID
+        proxy.setRuntimeStateForTesting(running: true, sessionID: UUID())
+        let host = UUID().uuidString.lowercased() + ".invalid"
+        let requests = LifecycleHTTPState { _, _ in .fail(.unsupportedURL) }
+        LifecycleHTTPProtocol.register(requests, host: host)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LifecycleHTTPProtocol.self]
+        let client = ManagementAPIClient(baseURL: "https://" + host + ManagementAPIClient.managementPath,
+                                         authKey: "fixture", configuration: configuration)
+        model.setAuthImportClientForTesting(client)
         addTeardownBlock { @MainActor in
             model.stopQuotaAutoRefresh()
+            proxy.setRuntimeStateForTesting(running: initialRunning, sessionID: initialSession)
+            await client.invalidate()
+            LifecycleHTTPProtocol.remove(host: host)
+            XCTAssertEqual(requests.requestCount, 0, "没有取得槽位时，既不读 CPA 目录，也不发起额度请求")
             defaults.removePersistentDomain(forName: suite)
         }
         return model

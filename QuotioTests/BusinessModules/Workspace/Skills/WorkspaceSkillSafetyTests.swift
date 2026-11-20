@@ -81,6 +81,131 @@ final class WorkspaceSkillSafetyTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: independent.appendingPathComponent("SKILL.md")), beforeIndependent)
     }
 
+    func testIgnoresOnlyExactSourceAcrossRestartsAndRejectsStaleImport() async throws {
+        let primary = try writeSkill(".agents/skills/review", body: "新 Codex 目录")
+        let legacy = try writeSkill(".codex/skills/review", body: "旧 Codex 目录")
+        let claude = try writeSkill(".claude/skills/review", body: "Claude 目录")
+        let config = home.appendingPathComponent(".codex/config.toml")
+        let configBefore = Data("model = \"fixture\"\n".utf8)
+        try configBefore.write(to: config)
+        let sourceFile = primary.appendingPathComponent("SKILL.md")
+        let sourceBefore = try Data(contentsOf: sourceFile)
+        let backups = home.appendingPathComponent(".quotio/skill_backups")
+
+        let service = try await service()
+        let first = try await service.loadUnmanagedSkillSnapshot()
+        XCTAssertTrue(first.ignored.isEmpty)
+        XCTAssertEqual(Set(first.candidates.map(\.directoryPath)), [primary.path, legacy.path, claude.path])
+        let stale = try XCTUnwrap(first.candidates.first { $0.directoryPath == primary.path })
+        try await service.ignoreUnmanagedSkill(stale)
+        try await service.ignoreUnmanagedSkill(stale)
+
+        // 重新构造服务和连接验证持久化；同一名称及同一个客户端的另一个根目录仍然独立。
+        let reopened = WorkspaceSkillService(homeDir: home.path)
+        try await reopened.prepareStorage()
+        let snapshot = try await reopened.loadUnmanagedSkillSnapshot()
+        XCTAssertEqual(snapshot.ignored.map(\.id), [stale.id])
+        XCTAssertEqual(Set(snapshot.candidates.map(\.directoryPath)), [legacy.path, claude.path])
+        let raw = try await reopened.scanUnmanagedSkills()
+        XCTAssertEqual(Set(raw.map(\.directoryPath)), [primary.path, legacy.path, claude.path])
+
+        do {
+            try await reopened.importUnmanagedSkill(stale)
+            XCTFail("仍持有旧扫描结果的调用不能纳管已经忽略的来源")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "workspace.skills.ignoredImportError".localizedStatic())
+        }
+        XCTAssertEqual(try Data(contentsOf: sourceFile), sourceBefore)
+        XCTAssertEqual(try Data(contentsOf: config), configBefore)
+        XCTAssertThrowsError(try fm.destinationOfSymbolicLink(atPath: primary.path))
+        XCTAssertFalse(fm.fileExists(atPath: home.appendingPathComponent(".quotio/skills/review").path))
+        XCTAssertTrue(try fm.contentsOfDirectory(atPath: backups.path).isEmpty)
+
+        let restored = try await reopened.unignoreUnmanagedSkill(stale)
+        XCTAssertTrue(restored)
+        let after = try await reopened.loadUnmanagedSkillSnapshot()
+        XCTAssertTrue(after.ignored.isEmpty)
+        XCTAssertEqual(Set(after.candidates.map(\.directoryPath)), [primary.path, legacy.path, claude.path])
+    }
+
+    func testCanRemoveIgnoredRecordAfterSourceDisappears() async throws {
+        let source = try writeSkill(".claude/skills/review")
+        let service = try await service()
+        let before = try await service.loadUnmanagedSkillSnapshot()
+        let candidate = try XCTUnwrap(before.candidates.first)
+        try await service.ignoreUnmanagedSkill(candidate)
+        try fm.removeItem(at: source)
+
+        let missing = try await service.loadUnmanagedSkillSnapshot()
+        XCTAssertTrue(missing.candidates.isEmpty)
+        XCTAssertEqual(missing.ignored.map(\.id), [candidate.id])
+        let restored = try await service.unignoreUnmanagedSkill(candidate)
+        XCTAssertFalse(restored, "目录已不存在时只撤销记录，不产生新的待纳管行")
+        let after = try await service.loadUnmanagedSkillSnapshot()
+        XCTAssertTrue(after.ignored.isEmpty)
+        XCTAssertTrue(after.candidates.isEmpty)
+    }
+
+    func testUnicodeAliasCannotImportIgnoredSourceOrCreateAnotherIgnoreRecord() async throws {
+        let composed = "caf\u{00E9}"
+        let decomposed = "cafe\u{0301}"
+        let source = try writeSkill(".claude/skills/\(composed)")
+        let service = try await service()
+        let before = try await service.loadUnmanagedSkillSnapshot()
+        let scanned = try XCTUnwrap(before.candidates.first)
+        try await service.ignoreUnmanagedSkill(scanned)
+
+        // 采用文件系统枚举未返回的拼写，同时替换 name 和 path。APFS 可能把它解析为同一原目录，
+        // 严格区分规范化的卷上它则不存在，两种环境都只能接受来自实际目录项的身份。
+        let aliasName = scanned.name.utf8.elementsEqual(composed.utf8) ? decomposed : composed
+        let aliasPath = source.deletingLastPathComponent().path + "/" + aliasName
+        let alias = UnmanagedSkill(name: aliasName, agent: scanned.agent, directoryPath: aliasPath)
+        XCTAssertNotEqual(scanned.sourceKey, alias.sourceKey)
+        let sourceFile = source.appendingPathComponent("SKILL.md")
+        let original = try Data(contentsOf: sourceFile)
+        if fm.fileExists(atPath: aliasPath) {
+            XCTAssertTrue(fm.contentsEqual(atPath: scanned.directoryPath + "/SKILL.md", andPath: aliasPath + "/SKILL.md"))
+        }
+
+        do {
+            try await service.importUnmanagedSkill(alias)
+            XCTFail("Unicode 别名不能绕过原来源上的忽略状态")
+        } catch WorkspaceSkillError.invalidPath { }
+        do {
+            try await service.ignoreUnmanagedSkill(alias)
+            XCTFail("Unicode 别名不能对同一目录另写一条忽略记录")
+        } catch WorkspaceSkillError.invalidPath { }
+        let after = try await service.loadUnmanagedSkillSnapshot()
+        XCTAssertTrue(after.candidates.isEmpty)
+        XCTAssertEqual(after.ignored.map(\.sourceKey), [scanned.sourceKey])
+        XCTAssertEqual(try Data(contentsOf: sourceFile), original)
+        XCTAssertThrowsError(try fm.destinationOfSymbolicLink(atPath: scanned.directoryPath))
+        XCTAssertTrue(try fm.contentsOfDirectory(atPath: home.appendingPathComponent(".quotio/skills").path).isEmpty)
+        XCTAssertTrue(try fm.contentsOfDirectory(atPath: home.appendingPathComponent(".quotio/skill_backups").path).isEmpty)
+    }
+
+    func testRejectedIgnoreWritePreservesPendingSkill() async throws {
+        let source = try writeSkill(".claude/skills/review")
+        let service = try await service()
+        let database = try WorkspaceSkillDatabase(path: home.appendingPathComponent(".quotio/quotio.db").path)
+        try database.execute("""
+            CREATE TRIGGER reject_ignored_skill_insert BEFORE INSERT ON ignored_unmanaged_skills
+            BEGIN SELECT RAISE(ABORT, 'fixture ignore write rejected'); END
+            """)
+        let before = try await service.loadUnmanagedSkillSnapshot()
+        let candidate = try XCTUnwrap(before.candidates.first)
+        do {
+            try await service.ignoreUnmanagedSkill(candidate)
+            XCTFail("忽略写入失败必须向调用方报告")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("fixture ignore write rejected"))
+        }
+        let after = try await service.loadUnmanagedSkillSnapshot()
+        XCTAssertEqual(after.candidates.map(\.id), [candidate.id])
+        XCTAssertTrue(after.ignored.isEmpty)
+        XCTAssertTrue(fm.fileExists(atPath: source.appendingPathComponent("SKILL.md").path))
+    }
+
     func testBackupFailurePreventsUninstallAndImportDeletion() async throws {
         let service = try await service()
         let managed = try writeSkill(".quotio/skills/review")

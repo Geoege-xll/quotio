@@ -6,8 +6,10 @@ import Foundation
 /// 等待规则仍由调用方传入，取消时不再预约，也不释放其他批次持有的槽位。
 @MainActor
 enum QuotaRefreshAvailability {
-    static func acquire(wait: Bool, claim: @MainActor () -> Bool) async -> Bool {
-        while !Task.isCancelled {
+    static func acquire(wait: Bool, isCurrent: @MainActor () -> Bool = { true },
+                        claim: @MainActor () -> Bool) async -> Bool {
+        // 会话失效时结束原等待，即使旧刷新仍未释放槽位；不允许旧点击在新运行会话重新预约。
+        while !Task.isCancelled && isCurrent() {
             if claim() { return true }
             guard wait else { return false }
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return false }

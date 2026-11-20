@@ -20,12 +20,25 @@ nonisolated enum ModelCatalogClient {
     /// 测试可传入离线 URLSession；正常调用仍使用原代理工厂逐次构造会话。
     /// 会话不保存为全局或服务状态，外部传入的会话也不会被此方法取消或关闭。
     @concurrent
-    static func fetch(url: URL, apiKey: String, session: URLSession? = nil) async throws -> (Data, URLResponse) {
+    static func fetch(url: URL, apiKey: String, session: URLSession? = nil,
+                      verifiesCredential: Bool = false) async throws -> (Data, URLResponse) {
         var request = URLRequest(url: url)
         request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 10
+        if verifiesCredential {
+            // 保存前必须验证本次密钥，且携带 Bearer 的请求只能发往调用方明确指定的端点。
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+        }
         let activeSession = session ?? URLSession(configuration:
             ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 10))
-        return try await activeSession.data(for: request)
+        return try await activeSession.data(for: request, delegate: verifiesCredential ? NoRedirect() : nil)
+    }
+
+    private final class NoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                        completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
     }
 }

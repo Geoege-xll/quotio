@@ -7,6 +7,10 @@ import Foundation
 import CryptoKit
 import Yams
 
+private nonisolated struct IgnoredUnmanagedSkillImport: LocalizedError {
+    var errorDescription: String? { "workspace.skills.ignoredImportError".localizedStatic() }
+}
+
 public actor WorkspaceSkillService {
     public static let shared = WorkspaceSkillService()
 
@@ -59,6 +63,15 @@ public actor WorkspaceSkillService {
             let hadRepos = try !db.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='skill_repos'").isEmpty
             try db.execute("CREATE TABLE IF NOT EXISTS skill_repos (owner TEXT NOT NULL, name TEXT NOT NULL, branch TEXT NOT NULL DEFAULT 'main', enabled INTEGER NOT NULL DEFAULT 1, source TEXT DEFAULT 'custom', created_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(owner,name))")
             try db.execute("CREATE TABLE IF NOT EXISTS skills_metadata (directory TEXT PRIMARY KEY, name TEXT, description TEXT, repo_owner TEXT, repo_name TEXT, repo_branch TEXT DEFAULT 'main', readme_url TEXT, installed_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, source_updated_at INTEGER, content_hash TEXT, repository_path TEXT)")
+            // 独立保存来源身份；目录改名、另一个客户端或 Codex 的另一个根目录都不会继承该记录。
+            try db.execute("""
+                CREATE TABLE IF NOT EXISTS ignored_unmanaged_skills (
+                    agent TEXT NOT NULL,
+                    directory_path TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    PRIMARY KEY (agent, directory_path)
+                )
+                """)
             let metadataColumns = try db.rows("PRAGMA table_info(skills_metadata)")
             if !metadataColumns.contains(where: { $0["name"] == "repository_path" }) {
                 try db.execute("ALTER TABLE skills_metadata ADD COLUMN repository_path TEXT")
@@ -523,6 +536,50 @@ public actor WorkspaceSkillService {
 
     public func scanUnmanagedSkills() async throws -> [UnmanagedSkill] {
         _ = try database(readOnly: true)
+        return try scanLocalSkillDirectories()
+    }
+
+    public func loadUnmanagedSkillSnapshot() throws -> UnmanagedSkillSnapshot {
+        let db = try database(readOnly: true)
+        // 同一个 actor 调用中没有挂起点。只查一次忽略规则，用同一份结果过滤候选并展示记录。
+        let local = try scanLocalSkillDirectories()
+        let ignored = try db.rows("""
+            SELECT agent, directory_path, name FROM ignored_unmanaged_skills ORDER BY name, agent, directory_path
+            """).compactMap { row -> UnmanagedSkill? in
+            guard let rawAgent = row["agent"], let agent = WorkspaceAgent(rawValue: rawAgent),
+                  let path = row["directory_path"], let name = row["name"] else { return nil }
+            return UnmanagedSkill(name: name, agent: agent, directoryPath: path)
+        }
+        let ignoredSources = Set(ignored.map(\.sourceKey))
+        return UnmanagedSkillSnapshot(
+            candidates: local.filter { !ignoredSources.contains($0.sourceKey) },
+            ignored: ignored
+        )
+    }
+
+    public func ignoreUnmanagedSkill(_ unmanaged: UnmanagedSkill) throws {
+        let db = try database()
+        try db.transaction {
+            // 与纳管争用同一 SQLite 写事务；来源若已变成受管链接，旧的忽略按钮不能再写入记录。
+            guard hasUnmanagedSource(unmanaged) else { throw WorkspaceSkillError.invalidPath(unmanaged.directoryPath) }
+            try db.execute("""
+                INSERT INTO ignored_unmanaged_skills (agent, directory_path, name) VALUES (?, ?, ?)
+                ON CONFLICT(agent, directory_path) DO NOTHING
+                """, [unmanaged.agent.rawValue, unmanaged.directoryPath, unmanaged.name])
+        }
+    }
+
+    public func unignoreUnmanagedSkill(_ ignored: UnmanagedSkill) throws -> Bool {
+        let db = try database()
+        return try db.transaction {
+            // 删除仅依赖已记录的身份；路径失效、技能被用户移走或变为链接时仍可清理记录。
+            try db.execute("DELETE FROM ignored_unmanaged_skills WHERE agent = ? AND directory_path = ?",
+                           [ignored.agent.rawValue, ignored.directoryPath])
+            return hasUnmanagedSource(ignored)
+        }
+    }
+
+    private func scanLocalSkillDirectories() throws -> [UnmanagedSkill] {
         var result: [UnmanagedSkill] = []
         for agent in WorkspaceAgent.allCases {
             for directory in Set(distributionPaths(directory: "placeholder", agent: agent).map { ($0 as NSString).deletingLastPathComponent }) {
@@ -538,40 +595,61 @@ public actor WorkspaceSkillService {
         return result
     }
 
+    private func hasUnmanagedSource(_ unmanaged: UnmanagedSkill) -> Bool {
+        hasExactUnmanagedDirectory(unmanaged) && fileManager.fileExists(atPath: unmanaged.directoryPath + "/SKILL.md")
+    }
+
+    private func hasExactUnmanagedDirectory(_ unmanaged: UnmanagedSkill) -> Bool {
+        let name = unmanaged.name
+        let path = unmanaged.directoryPath
+        // 与扫描页的根目录和 SQLite 键使用同一套字节身份。文件系统可能用 Unicode 等价名称
+        // 命中原目录，因此还要核对父目录枚举的实际名称，防止同时替换 name 和 path 绕过忽略。
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0"),
+              distributionPaths(directory: name, agent: unmanaged.agent).contains(where: {
+                  $0.utf8.elementsEqual(path.utf8)
+              }),
+              isRegularDirectory(path),
+              let entries = try? fileManager.contentsOfDirectory(atPath: (path as NSString).deletingLastPathComponent)
+        else { return false }
+        return entries.contains { $0.utf8.elementsEqual(name.utf8) }
+    }
+
     public func importUnmanagedSkill(_ unmanaged: UnmanagedSkill) throws {
         try requireIdle(unmanaged.name)
         let destination = try managedPath(unmanaged.name)
-        let allowedSources = distributionPaths(directory: unmanaged.name, agent: unmanaged.agent)
-        guard allowedSources.contains(unmanaged.directoryPath), isRegularDirectory(unmanaged.directoryPath) else {
-            throw WorkspaceSkillError.invalidPath(unmanaged.directoryPath)
-        }
         let source = unmanaged.directoryPath
-        try ensureDistributionParent(source, create: false)
-        let parsed = try parseSkill(at: source, defaultName: unmanaged.name)
-        let previous = try loadMetadata()[unmanaged.name]
-        let exists = fileManager.fileExists(atPath: destination)
-        if !exists, previous?.repoOwner != nil {
-            // 旧 lock 以目录名为键，不能把其他客户端碰巧同名的本地技能当成该仓库版本。
-            // 只接受 lock 对应的共享目录本身，或经完整内容（含执行位）校验一致的副本；
-            // 无法证明同源时先报告冲突，保留两份原内容与来源信息，避免未来更新覆盖本地版本。
-            let sharedSource = homeDir + "/.agents/skills/" + unmanaged.name
-            let isRecordedSource = URL(fileURLWithPath: source).standardizedFileURL.path
-                == URL(fileURLWithPath: sharedSource).standardizedFileURL.path
-            if !isRecordedSource {
-                guard isRegularDirectory(sharedSource), try directoryHash(source) == directoryHash(sharedSource) else {
-                    throw WorkspaceSkillError.conflict("\(source) 与旧技能记录 \(sharedSource) 来源不一致")
-                }
-            }
-        }
-        // 同名且内容不同必须保留双方，不以“备份统一库旧版本”代替备份待纳管内容。
-        if exists, try directoryHash(source) != directoryHash(destination) { throw WorkspaceSkillError.conflict(destination) }
-        try backupDirectory(source, name: unmanaged.name)
-        let snapshot = try snapshotDistribution(directory: unmanaged.name, excluding: [source])
         let rollbackSource = (source as NSString).deletingLastPathComponent + "/.quotio-import-" + UUID().uuidString
+        var snapshot: [FileSnapshot]?
         var copied = false
         let db = try database()
         do {
             try db.transaction {
+                // 单项和批量都经过此入口。与忽略写入共用事务边界，陈旧的页面快照不能触发备份、移动或配置写入。
+                let ignored = try db.rows("SELECT 1 FROM ignored_unmanaged_skills WHERE agent = ? AND directory_path = ?",
+                                          [unmanaged.agent.rawValue, source])
+                guard ignored.isEmpty else { throw IgnoredUnmanagedSkillImport() }
+                guard hasExactUnmanagedDirectory(unmanaged) else { throw WorkspaceSkillError.invalidPath(source) }
+                try ensureDistributionParent(source, create: false)
+                let parsed = try parseSkill(at: source, defaultName: unmanaged.name)
+                let previous = try loadMetadata()[unmanaged.name]
+                let exists = fileManager.fileExists(atPath: destination)
+                if !exists, previous?.repoOwner != nil {
+                    // 旧 lock 以目录名为键，不能把其他客户端碰巧同名的本地技能当成该仓库版本。
+                    // 只接受 lock 对应的共享目录本身，或经完整内容（含执行位）校验一致的副本；
+                    // 无法证明同源时先报告冲突，保留两份原内容与来源信息，避免未来更新覆盖本地版本。
+                    let sharedSource = homeDir + "/.agents/skills/" + unmanaged.name
+                    let isRecordedSource = URL(fileURLWithPath: source).standardizedFileURL.path
+                        == URL(fileURLWithPath: sharedSource).standardizedFileURL.path
+                    if !isRecordedSource {
+                        guard isRegularDirectory(sharedSource), try directoryHash(source) == directoryHash(sharedSource) else {
+                            throw WorkspaceSkillError.conflict("\(source) 与旧技能记录 \(sharedSource) 来源不一致")
+                        }
+                    }
+                }
+                // 同名且内容不同必须保留双方，不以“备份统一库旧版本”代替备份待纳管内容。
+                if exists, try directoryHash(source) != directoryHash(destination) { throw WorkspaceSkillError.conflict(destination) }
+                try backupDirectory(source, name: unmanaged.name)
+                snapshot = try snapshotDistribution(directory: unmanaged.name, excluding: [source])
                 if !exists {
                     try fileManager.copyItem(atPath: source, toPath: destination)
                     copied = true
@@ -590,6 +668,8 @@ public actor WorkspaceSkillService {
                 }
             }
         } catch {
+            // 忽略或前置校验失败时尚未修改分发路径，不对来源、链接或配置执行回滚。
+            guard let snapshot else { throw error }
             do {
                 if isOwnedLink(source, target: destination) { try fileManager.removeItem(atPath: source) }
                 if fileManager.fileExists(atPath: rollbackSource) { try fileManager.moveItem(atPath: rollbackSource, toPath: source) }

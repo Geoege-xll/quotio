@@ -248,7 +248,7 @@ final class UsageStatisticsStore {
     func queryDashboard(_ selection: CPAUsageSelection, dimension: CPAUsageDimension,
                         metric: CPAUsageChartMetric, limit: Int, now: Date) async throws -> CPAUsageDashboardReport {
         try await ledger.queryDashboard(selection.query(now: now, page: 1, pageSize: 1),
-                                        dimension: dimension, metric: metric, limit: limit)
+                                        dimension: dimension, metric: metric, limit: limit, now: now)
     }
 
     func queryRuntimeMetrics(windowSeconds: Double = 3600, now: Date = Date()) async -> CPAUsageEventMetrics? {

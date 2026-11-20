@@ -17,6 +17,7 @@ struct AddProviderPopover: View {
     let existingCounts: [AIProvider: Int]  // Number of existing accounts per provider
     var onSelectProvider: (AIProvider) -> Void
     var onScanIDEs: () -> Void
+    var onAddOfficialOpenAI: (() -> Void)? = nil
     var onAddCustomProvider: () -> Void
     var onDismiss: () -> Void
 
@@ -51,9 +52,25 @@ struct AddProviderPopover: View {
             // Provider grid with scroll container for responsive height
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVGrid(columns: columns, spacing: 12) {
+                    // 只在调用方提供官方入口时显示。复用 Codex 已有的 OpenAI 图标与品牌色，
+                    // 卡片使用独立标题和官方表单回调，账号数量也与 Codex 条目分开。
+                    if let onAddOfficialOpenAI {
+                        ProviderButton(
+                            provider: .codex,
+                            title: "OpenAI",
+                            existingCount: 0,
+                            showsKeyboardFocus: true
+                        ) {
+                            // 先登记打开表单的意图，再关闭选择器，由账号页在关闭完成后展示表单。
+                            onAddOfficialOpenAI()
+                            onDismiss()
+                        }
+                    }
+
                     ForEach(providers) { provider in
                         ProviderButton(
                             provider: provider,
+                            title: provider.displayName,
                             existingCount: existingCounts[provider] ?? 0
                         ) {
                             onSelectProvider(provider)
@@ -129,7 +146,6 @@ struct AddProviderPopover: View {
         .padding(16)
         .background(QuotioTheme.Colors.cardBackground(for: colorScheme))
         .frame(width: 320)
-        .focusEffectDisabled()
     }
 }
 
@@ -138,10 +154,13 @@ struct AddProviderPopover: View {
 private struct ProviderButton: View {
     @Environment(\.colorScheme) private var colorScheme
     let provider: AIProvider
+    let title: String
     let existingCount: Int  // Number of existing accounts for this provider
+    var showsKeyboardFocus = false
     let action: () -> Void
 
     @State private var isHovered = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         Button(action: action) {
@@ -161,7 +180,7 @@ private struct ProviderButton: View {
                     }
                 }
 
-                Text(provider.displayName)
+                Text(title)
                     .font(.caption)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -178,9 +197,20 @@ private struct ProviderButton: View {
                         lineWidth: 0.5
                     )
             )
+            // 网格样式关闭了系统焦点特效。官方入口保留原生 Button 的键盘激活，
+            // 获得焦点时用系统强调色绘制清晰的内边框，避免与悬停提示混淆。
+            .overlay {
+                if showsKeyboardFocus && isFocused {
+                    RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
         }
         .buttonStyle(.gridItem(hoverColor: provider.color.opacity(0.1)))
         .focusEffectDisabled()
+        .focused($isFocused)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovered = hovering
@@ -201,6 +231,7 @@ private struct ProviderButton: View {
         onScanIDEs: {
             print("Scan IDEs")
         },
+        onAddOfficialOpenAI: {},
         onAddCustomProvider: {
             print("Add Custom Provider")
         },

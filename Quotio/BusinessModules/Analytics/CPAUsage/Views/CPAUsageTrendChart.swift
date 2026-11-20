@@ -6,7 +6,12 @@ import Charts
 struct CPAUsageTrendChart: View {
     let points: [CPAUsageTrendPoint]
     let hourly: Bool
-    let metric: CPAUsageChartMetric
+    /// 这张折线保留 Token 分量和请求数；费用专用图是按自然日聚合的热力图。
+    let metric: CountMetric
+    enum CountMetric {
+        case tokens, requests
+        var titleKey: String { self == .tokens ? "usage.tokens" : "usage.cpa.requests" }
+    }
     @State private var visibleTokens = Set(CPAUsageTrendSeries.tokenSeries)
 
     private var series: [CPAUsageTrendSeries] {

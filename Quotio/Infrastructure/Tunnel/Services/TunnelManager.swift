@@ -20,6 +20,7 @@ final class TunnelManager {
     
     private let service = CloudflaredService()
     private var monitorTask: Task<Void, Never>?
+    private var isShuttingDown = false
     private var tunnelRequestId: UInt64 = 0
     private var startTimeoutTask: Task<Void, Never>?
     private let startTimeoutSeconds: TimeInterval = 30
@@ -35,23 +36,27 @@ final class TunnelManager {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         Task {
             await refreshInstallation()
-            Self.cleanupOrphans()
         }
     }
     
     // MARK: - Public API
     
     func refreshInstallation() async {
-        installation = service.detectInstallation()
+        // 安装检查会等待 cloudflared --version，离开 MainActor 以便 AppKit 仍能处理退出。
+        let service = service
+        installation = await Task.detached(priority: .utility) {
+            service.detectInstallation()
+        }.value
     }
     
     func startTunnel(port: UInt16) async {
+        guard !isShuttingDown else { return }
         guard tunnelState.status == .idle || tunnelState.status == .error else {
             NSLog("[TunnelManager] Cannot start tunnel: status is %@", tunnelState.status.rawValue)
             return
         }
         
-        guard installation.isInstalled else {
+        guard installation.isInstalled, let binaryPath = installation.path else {
             tunnelState.status = .error
             tunnelState.errorMessage = "tunnel.error.notInstalled".localized()
             return
@@ -68,7 +73,7 @@ final class TunnelManager {
         do {
             CLIProxyManager.shared.updateConfigAllowRemote(true)
 
-            try await service.start(port: port) { [weak self] url in
+            try await service.start(port: port, binaryPath: binaryPath) { [weak self] url in
                 Task { @MainActor in
                     guard let self = self else { return }
                     guard self.tunnelRequestId == currentRequestId else {
@@ -86,6 +91,8 @@ final class TunnelManager {
                 }
             }
 
+            // 启动挂起期间可能已收到停止或退出请求，旧任务不重新注册监测或计时器。
+            guard tunnelRequestId == currentRequestId else { return }
             scheduleStartTimeout(requestId: currentRequestId)
             startMonitoring()
             
@@ -107,11 +114,10 @@ final class TunnelManager {
     }
     
     func stopTunnel() async {
-        guard tunnelState.status == .active || tunnelState.status == .starting else {
-            return
-        }
-        
+        guard !isShuttingDown, tunnelState.status == .active || tunnelState.status == .starting else { return }
+
         tunnelRequestId &+= 1
+        let currentRequestId = tunnelRequestId
         cancelStartTimeout()
         cancelAutoRestart()
         
@@ -119,6 +125,7 @@ final class TunnelManager {
         stopMonitoring()
         
         await service.stop()
+        guard tunnelRequestId == currentRequestId else { return }
         CLIProxyManager.shared.updateConfigAllowRemote(false)
 
         tunnelState.reset()
@@ -139,14 +146,23 @@ final class TunnelManager {
         NSPasteboard.general.setString(url, forType: .string)
     }
     
-    func cleanupOrphans() {
-        Self.cleanupOrphans()
+    /// 退出同时关闭两层启动入口，主动取消排期，仅等待本实例的 Cloudflared Process。
+    func shutdownForApplicationExit() async {
+        isShuttingDown = true
+        tunnelRequestId &+= 1
+        cancelStartTimeout()
+        cancelAutoRestart()
+        stopMonitoring()
+
+        let wasUsingRemoteAccess = tunnelState.status == .active || tunnelState.status == .starting
+            || tunnelState.status == .stopping
+        await service.shutdownForApplicationExit()
+        if wasUsingRemoteAccess {
+            CLIProxyManager.shared.updateConfigAllowRemote(false)
+        }
+        tunnelState.reset()
     }
 
-    nonisolated static func cleanupOrphans() {
-        CloudflaredService.killOrphanProcesses()
-    }
-    
     // MARK: - Process Monitoring
     
     private func startMonitoring() {
@@ -163,6 +179,7 @@ final class TunnelManager {
                 guard let self = self else { break }
                 
                 let isRunning = await self.service.isRunning
+                guard !Task.isCancelled, !self.isShuttingDown else { return }
                 let currentStatus = self.tunnelState.status
                 
                 if !isRunning && (currentStatus == .active || currentStatus == .starting) {
@@ -210,6 +227,7 @@ final class TunnelManager {
     
     private func scheduleAutoRestart() {
         cancelAutoRestart()
+        guard !isShuttingDown else { return }
         
         let autoRestartEnabled = UserDefaults.standard.bool(forKey: "autoRestartTunnel")
         guard autoRestartEnabled, lastPort > 0 else { return }

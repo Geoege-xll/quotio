@@ -90,30 +90,32 @@ private struct CPAUsageDashboardContent: View {
     }
 
     var body: some View {
-        @Bindable var controls = model
-        VStack(alignment: .leading, spacing: 20) {
-            if let result = model.result {
+        let current = query
+        return VStack(alignment: .leading, spacing: 20) {
+            if let result = model.result(matching: current) {
                 CPAUsageOverviewSection(metrics: result.summary.metrics,
                                         totalAccounts: totalAccounts, readyAccounts: readyAccounts,
                                         isIncomplete: result.omittedHistoricalRequests > 0,
-                                        historicalRequests: result.historicalRequests, showsDetails: !isCompact)
+                                        historicalRequests: result.historicalRequests, showsDetails: !isCompact,
+                                        cost: !isCompact && current.metric == .cost ? result.estimatedCost : nil,
+                                        detailDestination: isCompact ? nil : current.metric.detailDestination(for: current.selection))
                 if !isCompact {
-                    // 用量趋势采用 CPA 账本自身的 52 周热力图，随顶部 Tokens / 请求数口径及非时间筛选联动；
-                    // 仪表盘不再构造完整图表，也不查询无须展示的大量排行项目。
+                    // 日期标记使用生成报表时的精确上下界；日桶自身不随摘要范围裁剪。
                     UsageStatisticsHeatmap(
                         title: "usage.dashboard.trend".localized(),
                         presentation: UsageHeatmapPresentation(
                             buckets: result.heatmapBuckets,
-                            now: Date(),
+                            now: result.heatmapToday,
                             firstCollectedAt: result.summary.collectionStartedAt,
-                            metric: model.metric
+                            metric: current.metric, costs: result.heatmapCosts, partialDays: result.heatmapPartialDays,
+                            selectedStart: result.selectedStart, selectedEnd: result.selectedEnd
                         ),
                         accent: QuotioTheme.Colors.info,
                         availableWidth: availableWidth,
                         onHover: onHeatmapHover
                     )
-                    CPAUsageDistributionChart(report: result, selection: selection, dimension: model.dimension,
-                                              metric: model.metric, limit: $limit)
+                    CPAUsageDistributionChart(report: result, selection: current.selection, dimension: current.dimension,
+                                              metric: current.metric, limit: $limit)
                 }
                 if !isCompact, let date = result.summary.collectionStartedAt {
                     Text("usage.records.startedAt".localized() + " " + date.formatted(date: .abbreviated, time: .shortened))
@@ -128,17 +130,19 @@ private struct CPAUsageDashboardContent: View {
                     .font(.caption).foregroundStyle(QuotioTheme.Colors.warning)
             }
         }
-        .task(id: query) {
-            let request = query
+        .task(id: current) {
+            let request = current
             guard request.active else { return }
             var lastRevision: Int?
             var lastMinute: Int?
+            var lastPriceRevision: Int?
             while !Task.isCancelled {
                 let revision = store.statisticsRevision
+                let priceRevision = request.metric == .cost ? store.priceRevision : 0
                 let minute = Int(Date().timeIntervalSince1970 / 60)
-                if revision != lastRevision || minute != lastMinute {
+                if revision != lastRevision || minute != lastMinute || priceRevision != lastPriceRevision {
                     if await model.load(request, store: store) {
-                        lastRevision = revision; lastMinute = minute
+                        lastRevision = revision; lastMinute = minute; lastPriceRevision = priceRevision
                     }
                 }
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
@@ -146,6 +150,7 @@ private struct CPAUsageDashboardContent: View {
         }
         .onChange(of: selection) { _, _ in limit = 8 }
         .onChange(of: model.dimension) { _, _ in limit = 8 }
+        .onChange(of: model.metric) { _, _ in limit = 8 }
     }
 }
 
@@ -158,8 +163,16 @@ private struct CPAUsageDistributionChart: View {
     @Binding var limit: Int
     @Environment(\.colorScheme) private var colorScheme
 
-    private var total: Int { metric == .tokens ? report.summary.metrics.tokens : report.summary.metrics.requests }
-    private var maximum: Int { report.categories.first?.value(metric) ?? 0 }
+    private var maximum: Double { report.categories.first?.value(metric) ?? 0 }
+
+    private var total: Double? {
+        guard report.omittedHistoricalRequests == 0 else { return nil }
+        switch metric {
+        case .tokens: return Double(report.summary.metrics.tokens)
+        case .requests: return Double(report.summary.metrics.requests)
+        case .cost: return report.estimatedCost.isPartial ? nil : report.estimatedCost.amount
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -192,7 +205,7 @@ private struct CPAUsageDistributionChart: View {
                 LazyVStack(spacing: 10) {
                     ForEach(report.categories) { item in
                         NavigationLink(value: CPAUsageDestination.records(item.selection(from: selection, dimension: dimension))) {
-                            CPAUsageDistributionRow(item: item, value: item.value(metric), maximum: maximum,
+                            CPAUsageDistributionRow(item: item, metric: metric, maximum: maximum,
                                                     total: total, tint: tint(item))
                         }.buttonStyle(.plain)
                     }
@@ -207,9 +220,6 @@ private struct CPAUsageDistributionChart: View {
                     Button("usage.dashboard.topEight".localized()) { limit = 8 }.buttonStyle(.quotioMicroCapsule)
                 }
                 Spacer()
-                NavigationLink(value: CPAUsageDestination.records(selection)) {
-                    Label("usage.dashboard.records".localized(), systemImage: "chevron.right")
-                }.buttonStyle(.quotioMicroCapsule)
             }
         }.quotioCard()
     }
@@ -227,13 +237,16 @@ private struct CPAUsageDistributionChart: View {
 
 private struct CPAUsageDistributionRow: View {
     let item: CPAUsageCategory
-    let value: Int
-    let maximum: Int
-    let total: Int
+    let metric: CPAUsageChartMetric
+    let maximum: Double
+    let total: Double?
     let tint: Color
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let value = item.value(metric)
+        let count = metric == .requests ? item.requests : item.tokens
+        let share = total.flatMap { amount in amount > 0 ? value.map { $0 / amount } : nil }
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title.isEmpty ? "usage.records.unknown".localized() : item.title)
@@ -244,12 +257,17 @@ private struct CPAUsageDistributionRow: View {
                 Capsule().fill(QuotioTheme.Colors.cardInset(for: colorScheme))
                     .overlay(alignment: .leading) {
                         Capsule().fill(tint)
-                            .frame(width: maximum > 0 ? geometry.size.width * min(1, Double(value) / Double(maximum)) : 0)
+                            .frame(width: maximum > 0 ? geometry.size.width * min(1, (value ?? 0) / maximum) : 0)
                     }
             }.frame(minWidth: 50, maxWidth: .infinity).frame(height: 8).accessibilityHidden(true)
-            Text(value.formattedCompact).font(.callout.monospacedDigit()).frame(width: 76, alignment: .trailing)
-                .help(value.formatted())
-            Text(total > 0 ? Double(value) / Double(total) : 0, format: .percent.precision(.fractionLength(1)))
+            Text(metric == .cost ? item.cost.formatted : count.formattedCompact)
+                .font(.callout.monospacedDigit()).frame(width: metric == .cost ? 140 : 76, alignment: .trailing)
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .help(metric == .cost ? item.cost.formatted : count.formatted())
+                .accessibilityLabel(metric == .cost && value == nil ? "usage.records.unknown".localized()
+                                    : metric == .cost ? item.cost.formatted : count.formatted())
+            // 缺失价格/历史时，已知费用不是精确分母，故不显示百分比。
+            Text(share?.formatted(.percent.precision(.fractionLength(1))) ?? "—")
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 52, alignment: .trailing)
         }
         .padding(.vertical, 3).contentShape(Rectangle()).accessibilityElement(children: .combine)

@@ -157,6 +157,119 @@ final class CallAnalyticsMigrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: dbURL), before)
     }
 
+    /// 同一个毫秒内的前、等、后边界均来自声明；迟到结果和文件修改时间都不能补发起时间。
+    func testClaudeResetFiltersDeclarationsAndDoesNotRestartOldAgents() throws {
+        let home = try temporaryHome()
+        let zone = TimeZone(secondsFromGMT: 0)!
+        let clock = CallAnalyticsClock(timeZone: zone)
+        let reset = try XCTUnwrap(clock.invocationDate(fromISO: "2026-09-04T12:00:00.123500Z", cutoff: .distantPast))
+        func call(_ id: String, _ fraction: String?) -> [String: Any] {
+            var event = claudeCall(id: id, name: id)
+            event["timestamp"] = fraction.map { "2026-09-04T12:00:00.\($0)Z" }
+            event["sessionId"] = "same-session"
+            return event
+        }
+        func result(_ id: String) -> [String: Any] {
+            ["type": "user", "timestamp": "2026-09-04T12:00:01Z",
+             "message": ["content": [["type": "tool_result", "tool_use_id": id]]]]
+        }
+        try writeLines([call("old", "123400"), call("equal", "123500"), call("undated", nil),
+                        result("old"), result("undated"), call("new", "123600"), result("new")],
+                       path: ".claude/projects/p/session.jsonl", home: home)
+        try writeLines([result("missing-declaration")], path: ".claude/projects/p/subagents/agent-orphan.jsonl", home: home)
+        try writeLines([["type": "assistant", "timestamp": "2026-09-04T12:01:00Z",
+                         "message": ["content": "new text-only agent"]]],
+                       path: ".claude/projects/p/subagents/agent-new.jsonl", home: home)
+        let scan = try ClaudeCallEventSource(homeDirectory: home.path, timeZone: zone, environment: [:]).collect(cutoff: reset)
+        XCTAssertEqual(scan.entries.map(\.name), ["new"])
+        XCTAssertEqual(scan.entries.first?.successCount, 1)
+        XCTAssertEqual(scan.status.eventCount, 1)
+        let started = scan.agentInvocationsByDay["2026-09-04", default: []]
+        XCTAssertEqual(started.map(\.agent), ["subagent"])
+        XCTAssertEqual(started.map(\.count), [1])
+    }
+
+    /// MCP 结果先读到也只能补全同 ID 的新声明；跨午夜的完成时间不能重分发起日。
+    func testCodexResetRejectsOldOrMissingDeclarationsAndPreservesInvocationDay() throws {
+        let home = try temporaryHome()
+        let zone = TimeZone(secondsFromGMT: 0)!
+        let reset = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-04T23:59:58Z"))
+        func call(_ id: String, _ timestamp: String?, type: String = "function_call", name: String = "mcp__demo__search") -> [String: Any] {
+            var event: [String: Any] = ["type": "response_item", "payload": ["type": type, "call_id": id,
+                "name": name, "input": "read /tmp/skills/review/SKILL.md"]]
+            event["timestamp"] = timestamp
+            return event
+        }
+        func end(_ id: String) -> [String: Any] {
+            ["type": "event_msg", "timestamp": "2026-09-05T00:00:01Z", "payload": ["type": "mcp_tool_call_end", "call_id": id,
+             "invocation": ["server": "demo", "tool": "search"], "result": ["Ok": [:]], "duration": ["secs": 2]]]
+        }
+        let new = call("new", "2026-09-04T23:59:59Z")
+        let file = try writeLines([end("new"), call("old", "2026-09-04T23:59:57Z"), end("old"),
+            call("equal", "2026-09-04T23:59:58Z"), end("equal"), call("undated", nil), end("undated"), end("orphan"), new,
+            call("skill", "2026-09-04T23:59:59Z", type: "custom_tool_call", name: "exec_command")],
+            path: ".codex/sessions/s.jsonl", home: home)
+        try writeLines([new], path: ".codex/archived_sessions/s.jsonl", home: home)
+        try FileManager.default.setAttributes([.modificationDate: reset.addingTimeInterval(-60)], ofItemAtPath: file.path)
+        let scan = try CodexCallEventSource(homeDirectory: home.path, timeZone: zone, environment: [:]).collect(cutoff: reset)
+        XCTAssertNil(scan.status.errorCode)
+        XCTAssertEqual(scan.status.eventCount, 3, "一个通用执行调用、一个技能使用信号和一个 MCP 调用")
+        XCTAssertEqual(Set(scan.entries.map(\.dayKey)), ["2026-09-04"])
+        let mcp = try XCTUnwrap(scan.entries.first { $0.kind == .mcp })
+        XCTAssertEqual(mcp.count, 1)
+        XCTAssertEqual(mcp.successRate, 1)
+        XCTAssertEqual(mcp.avgDurationMs, 2_000)
+        XCTAssertEqual(scan.entries.first { $0.kind == .skill }?.name, "review")
+    }
+
+    func testOpenCodeResetUsesStrictPartCreationTimeNotStateTime() throws {
+        let home = try temporaryHome()
+        let url = home.appendingPathComponent(".local/share/opencode/opencode.db")
+        let database = AnalyticsDatabase(url: url)
+        try database.execute("CREATE TABLE part (time_created INTEGER, data TEXT)")
+        let resetMillis: Int64 = 1_788_523_200_123
+        let reset = Date(timeIntervalSince1970: Double(resetMillis) / 1000)
+        for (created, name) in [(resetMillis - 1, "write"), (resetMillis, "bash"), (resetMillis + 1, "read")] {
+            // 所有 part 的 state 都在水位之后完成；资格仍只看创建列。
+            let part = #"{"type":"tool","tool":"\#(name)","state":{"status":"completed","time":{"start":\#(resetMillis+1),"end":\#(resetMillis+501)}}}"#
+            try database.execute("INSERT INTO part VALUES (?,?)", [.integer(created), .text(part)])
+        }
+        let scan = try OpenCodeCallEventSource(homeDirectory: home.path, timeZone: TimeZone(secondsFromGMT: 0)!, environment: [:]).collect(cutoff: reset)
+        XCTAssertNil(scan.status.errorCode)
+        XCTAssertEqual(scan.status.eventCount, 1)
+        XCTAssertEqual(scan.entries.map(\.name), ["read"])
+        XCTAssertEqual(scan.entries.first?.successRate, 1)
+        XCTAssertEqual(scan.entries.first?.avgDurationMs, 500)
+    }
+
+    /// 验证 Pi 原有的 ISO 条目优先级和消息毫秒回退，不从 toolResult 产生新调用。
+    func testPiResetUsesAssistantInvocationAndKeepsMatchingResult() throws {
+        let home = try temporaryHome()
+        let zone = TimeZone(secondsFromGMT: 0)!
+        let resetMillis: Int64 = 1_788_523_200_123
+        let reset = Date(timeIntervalSince1970: Double(resetMillis) / 1000)
+        func call(_ id: String, iso: String? = nil, millis: Int64) -> [String: Any] {
+            var event: [String: Any] = ["type": "message", "id": "entry-\(id)", "message": ["role": "assistant", "timestamp": millis,
+                "content": [["type": "toolCall", "id": id, "name": id]]]]
+            event["timestamp"] = iso
+            return event
+        }
+        func result(_ id: String, failed: Bool) -> [String: Any] {
+            ["type": "message", "timestamp": "2026-09-04T12:01:00Z", "message": ["role": "toolResult", "toolCallId": id, "isError": failed]]
+        }
+        try writeLines([call("old-iso", iso: "2026-09-04T12:00:00.122Z", millis: resetMillis + 1), result("old-iso", failed: false),
+                        call("equal", millis: resetMillis), result("equal", failed: false), result("orphan", failed: false),
+                        call("new-ms", millis: resetMillis + 1), result("new-ms", failed: true),
+                        call("new-iso", iso: "2026-09-04T12:00:00.123600Z", millis: resetMillis - 1)],
+                       path: ".pi/agent/sessions/p/session.jsonl", home: home)
+        let scan = try PiCallEventSource(homeDirectory: home.path, timeZone: zone, environment: [:]).collect(cutoff: reset)
+        XCTAssertNil(scan.status.errorCode)
+        XCTAssertEqual(scan.status.eventCount, 2)
+        XCTAssertEqual(Set(scan.entries.map(\.name)), ["new-ms", "new-iso"])
+        XCTAssertEqual(scan.entries.first { $0.name == "new-ms" }?.successRate, 0)
+        XCTAssertNil(scan.entries.first { $0.name == "new-iso" }?.successRate)
+    }
+
     func testInvalidDatabaseReportsFailureInsteadOfEmptySuccess() throws {
         let home = try temporaryHome()
         let url = home.appendingPathComponent(".local/share/opencode/opencode.db")
@@ -199,6 +312,124 @@ final class CallAnalyticsMigrationTests: XCTestCase {
         XCTAssertEqual(try archive.merge(snapshot(2)).totalCalls, 2)
         XCTAssertEqual(try archive.merge(snapshot(2)).totalCalls, 2)
         XCTAssertEqual(try archive.merge(snapshot(0)).totalCalls, 2)
+    }
+
+    /// 冷库清理先发布边界和迁移墓碑，首次引擎初始化同时拒绝旧 JSON 和会话中的旧调用。
+    func testColdCallClearPreventsLegacyAndSourceLogReimport() async throws {
+        let home = try temporaryHome()
+        let log = try writeLines([claudeCall(id: "old", name: "Read")], path: ".claude/projects/p/session.jsonl", home: home)
+        let logsBefore = try Data(contentsOf: log)
+        let legacy = CallAnalyticsSnapshot(generatedAt: Date(), rangeKey: "all",
+            entries: [CallAnalyticsEntry(source: .claude, kind: .builtin, name: "Read", server: nil, dayKey: "2026-09-04", count: 9)],
+            installedSkills: [], installedMCPServers: [], sources: [])
+        let legacyURL = home.appendingPathComponent("Library/Application Support/Quotio/CallAnalytics/summary-v1.json")
+        try FileManager.default.createDirectory(at: legacyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let legacyBytes = try JSONEncoder().encode(legacy)
+        try legacyBytes.write(to: legacyURL)
+        let url = AnalyticsDatabase.defaultURL(homeDirectory: home.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        _ = try await StorageMaintenanceStore(databaseURL: url).clearStatistics([.callAnalytics])
+        // 在首次引擎初始化之前，冷库中的提交边界已经可供独立连接读取。
+        XCTAssertGreaterThan(try XCTUnwrap(CallAnalyticsArchiveStore(homeDirectory: home.path).lastReset()).generation, 0)
+        let engine = CallAnalyticsEngine(homeDirectory: home.path, environment: [:])
+        let cached = try await engine.cachedSnapshot()
+        let refreshed = try await engine.refresh()
+        XCTAssertEqual(cached.generatedAt, .distantPast)
+        XCTAssertEqual(cached.totalCalls, 0)
+        XCTAssertEqual(refreshed.totalCalls, 0)
+        XCTAssertTrue(refreshed.agentInvocations.isEmpty)
+        XCTAssertEqual(refreshed.sources.first { $0.source == .claude }?.filesScanned, 1)
+        XCTAssertEqual(try Data(contentsOf: log), logsBefore)
+        XCTAssertEqual(try Data(contentsOf: legacyURL), legacyBytes)
+    }
+
+    /// 模拟清理前已开始但清理后才写入的扫描，旧汇总和成功指纹都不能重新提交。
+    func testArchiveRejectsMergeFromBeforeCommittedReset() async throws {
+        let home = try temporaryHome()
+        let archive = CallAnalyticsArchiveStore(homeDirectory: home.path)
+        let fresh = CallAnalyticsSnapshot(generatedAt: Date(), rangeKey: "all",
+            entries: [CallAnalyticsEntry(source: .claude, kind: .builtin, name: "Read", server: nil, dayKey: "2026-09-04", count: 1)],
+            installedSkills: [], installedMCPServers: [], sources: [])
+        let before = try archive.lastReset()
+        XCTAssertNil(before)
+        XCTAssertEqual(try archive.merge(fresh, observedReset: before).totalCalls, 1)
+        _ = try await StorageMaintenanceStore(databaseURL: AnalyticsDatabase.defaultURL(homeDirectory: home.path)).clearStatistics([.callAnalytics])
+        XCTAssertThrowsError(try archive.merge(fresh, scannedSources: [.claude],
+                                               successfulFingerprints: [.claude: "stale"], observedReset: before)) {
+            guard case CallAnalyticsReadError.resetDuringScan = $0 else { return XCTFail("应拒绝使用旧重置边界的扫描") }
+        }
+        XCTAssertEqual(try archive.load().totalCalls, 0)
+        XCTAssertNil(try archive.successfulFingerprint(for: .claude))
+    }
+
+    /// 两个维护连接固定在同一墙钟时刻；重新打开归档也必须读到新代次，而不是复用相同时间。
+    func testEqualTimeClearsRejectStalePublicationAcrossConnections() async throws {
+        let home = try temporaryHome()
+        let url = AnalyticsDatabase.defaultURL(homeDirectory: home.path)
+        let cutoff = Date(timeIntervalSince1970: 200)
+        var declaration = claudeCall(id: "between", name: "Read")
+        declaration["timestamp"] = "1970-01-01T00:03:21Z"
+        let log = try writeLines([declaration], path: ".claude/projects/p/session.jsonl", home: home)
+        let originalLog = try Data(contentsOf: log)
+
+        _ = try await StorageMaintenanceStore(databaseURL: url, callResetClock: { cutoff }).clearStatistics([.callAnalytics])
+        let archive = CallAnalyticsArchiveStore(homeDirectory: home.path)
+        let first = try XCTUnwrap(archive.lastReset())
+        let scan = try await CallAnalyticsEngine(homeDirectory: home.path, environment: [:]).refresh()
+        XCTAssertEqual(scan.totalCalls, 1)
+        XCTAssertEqual(scan.sources.first { $0.source == .claude }?.eventCount, 1)
+        let fingerprint = try XCTUnwrap(archive.successfulFingerprint(for: .claude))
+
+        _ = try await StorageMaintenanceStore(databaseURL: url, callResetClock: { cutoff }).clearStatistics([.callAnalytics])
+        let reopened = CallAnalyticsArchiveStore(homeDirectory: home.path)
+        let second = try XCTUnwrap(reopened.lastReset())
+        XCTAssertEqual(first.clearedAt, cutoff)
+        XCTAssertEqual(second.clearedAt, first.clearedAt)
+        XCTAssertGreaterThan(second.generation, first.generation)
+        XCTAssertEqual(try archive.lastReset(), second)
+
+        XCTAssertThrowsError(try archive.merge(scan, scannedSources: [.claude],
+                                               successfulFingerprints: [.claude: fingerprint], observedReset: first)) {
+            guard case CallAnalyticsReadError.resetDuringScan = $0 else { return XCTFail("同一时间戳不能让旧代次提交") }
+        }
+        let cached = try reopened.load()
+        XCTAssertEqual(cached.totalCalls, 0)
+        XCTAssertTrue(cached.agentInvocations.isEmpty)
+        XCTAssertTrue(cached.sources.isEmpty)
+        XCTAssertEqual(cached.generatedAt, .distantPast)
+        XCTAssertNil(try reopened.successfulFingerprint(for: .claude))
+        XCTAssertEqual(try Data(contentsOf: log), originalLog)
+    }
+
+    /// 旧版只有 cleared_at：读取不迁移，首次清理在原事务中升级同一行，且时间相同也会拒绝旧扫描。
+    func testTimestampOnlyResetRetainsCutoffUntilNextClear() async throws {
+        let home = try temporaryHome()
+        let url = AnalyticsDatabase.defaultURL(homeDirectory: home.path)
+        let database = AnalyticsDatabase(url: url)
+        try database.execute("CREATE TABLE call_analytics_reset(id INTEGER PRIMARY KEY CHECK(id=1), cleared_at REAL NOT NULL)")
+        let cutoff = Date(timeIntervalSince1970: 200)
+        try database.execute("INSERT INTO call_analytics_reset VALUES(1,?)", [.real(cutoff.timeIntervalSince1970)])
+        var old = claudeCall(id: "old", name: "old")
+        old["timestamp"] = "1970-01-01T00:03:10Z"
+        var new = claudeCall(id: "new", name: "new")
+        new["timestamp"] = "1970-01-01T00:03:21Z"
+        try writeLines([old, new], path: ".claude/projects/p/session.jsonl", home: home)
+
+        let archive = CallAnalyticsArchiveStore(homeDirectory: home.path)
+        let legacy = try XCTUnwrap(archive.lastReset())
+        XCTAssertEqual(legacy.clearedAt, cutoff)
+        let scan = try await CallAnalyticsEngine(homeDirectory: home.path, environment: [:]).refresh()
+        XCTAssertEqual(scan.entries.map(\.name), ["new"])
+        XCTAssertNil(try database.scalarInt("SELECT 1 FROM pragma_table_info('call_analytics_reset') WHERE name='generation'"))
+
+        _ = try await StorageMaintenanceStore(databaseURL: url, callResetClock: { cutoff }).clearStatistics([.callAnalytics])
+        let upgraded = try XCTUnwrap(archive.lastReset())
+        XCTAssertEqual(upgraded.clearedAt, cutoff)
+        XCTAssertGreaterThan(upgraded.generation, legacy.generation)
+        XCTAssertThrowsError(try archive.merge(scan, observedReset: legacy)) {
+            guard case CallAnalyticsReadError.resetDuringScan = $0 else { return XCTFail("旧时间表生成的扫描不能跨升级清理提交") }
+        }
+        XCTAssertEqual(try archive.load().totalCalls, 0)
     }
 
     func testCalendarRangesAndReversedCustomDates() throws {

@@ -11,6 +11,7 @@ import SwiftUI
 struct AgentSessionsView: View {
     @Bindable var viewModel: WorkspaceViewModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -276,143 +277,94 @@ struct AgentSessionsView: View {
         .background(QuotioTheme.Colors.canvasBackground(for: colorScheme))
     }
 
-    // MARK: - Session Item Container with Hierarchical Subagents
+    // MARK: - Session Branches
 
-    @ViewBuilder
     private func sessionItemContainer(session: WorkspaceSession, isSplit: Bool) -> some View {
-        let subagents = viewModel.descendantRows(for: session)
-        let isExpanded = viewModel.isSubagentExpanded(session.id)
+        let descendants = viewModel.descendantRows(for: session)
+        let searchExpanded = viewModel.isSessionExpandedBySearch(session)
+        let isExpanded = viewModel.isSessionBranchExpanded(session)
 
-        VStack(alignment: .leading, spacing: 4) {
-            sessionRowCard(session: session, subagentCount: subagents.count, isSplit: isSplit)
+        return VStack(alignment: .leading, spacing: 4) {
+            sessionRowCard(session: session, relatedCount: descendants.count, isExpanded: isExpanded,
+                           searchExpanded: searchExpanded, isSplit: isSplit)
 
-            if !subagents.isEmpty && isExpanded {
+            if isExpanded, !descendants.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
-                    // 复用已定稿的子任务行，只补齐原先不可达的孙级及更深层级。
-                    ForEach(subagents, id: \.session.id) { row in
-                        subagentRowCard(subagent: row.session, parent: session, isSplit: isSplit)
+                    ForEach(descendants, id: \.session.id) { row in
+                        relatedSessionRow(row.session)
                             .padding(.leading, CGFloat(min(row.depth - 1, 6)) * 12)
                     }
                 }
                 .padding(.leading, 18)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
         }
     }
 
-    // MARK: - Session Row Card
-
-    private func sessionRowCard(session: WorkspaceSession, subagentCount: Int = 0, isSplit: Bool = false) -> some View {
+    private func sessionRowCard(session: WorkspaceSession, relatedCount: Int, isExpanded: Bool,
+                                searchExpanded: Bool, isSplit: Bool) -> some View {
         let isSelected = viewModel.selectedSession?.id == session.id
 
-        return Button {
-            Task { await viewModel.selectSession(session) }
-        } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                // Top Row: Title (Left) + Time (Top Right)
-                HStack(alignment: .center, spacing: 6) {
-                    if viewModel.batchDeleteMode {
-                        Toggle("", isOn: Binding(
-                            get: { viewModel.selectedSessionIDs.contains(session.id) },
-                            set: { selected in
-                                if selected { viewModel.selectedSessionIDs.insert(session.id) }
-                                else { viewModel.selectedSessionIDs.remove(session.id) }
-                            }
-                        ))
-                        .toggleStyle(.checkbox)
+        return HStack(alignment: .center, spacing: 6) {
+            if viewModel.batchDeleteMode {
+                Toggle(isOn: Binding(
+                    get: { viewModel.selectedSessionIDs.contains(session.id) },
+                    set: { selected in
+                        if selected { viewModel.selectedSessionIDs.insert(session.id) }
+                        else { viewModel.selectedSessionIDs.remove(session.id) }
                     }
-
+                )) {
                     Text(session.title)
-                        .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
-                        .foregroundStyle(isSelected ? Color.white : Color.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    Spacer(minLength: 8)
-
-                    Text(relativeDate(session.lastActiveAt))
-                        .font(.system(size: 10))
-                        .monospacedDigit()
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
-                        .fixedSize()
                 }
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+            }
 
-                // Bottom Row: Agent + Project (Left) + Subagent Expand Button (Bottom Right)
-                HStack(alignment: .center, spacing: 5) {
-                    Text(session.agent.displayName)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(session.agent.color)
-
-                    Text("•")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-
-                    Text(session.projectName)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    Spacer(minLength: 8)
-
-                    if subagentCount > 0 {
-                        Button {
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.76)) {
-                                viewModel.toggleSubagentExpansion(session.id)
-                            }
-                        } label: {
-                            HStack(spacing: 3) {
-                                Image(systemName: "arrow.triangle.branch")
-                                    .font(.system(size: 8.5, weight: .semibold))
-                                Text("\(subagentCount)")
-                                    .font(.system(size: 9.5, weight: .bold))
-                                    .monospacedDigit()
-                                Image(systemName: viewModel.isSubagentExpanded(session.id) ? "chevron.down" : "chevron.right")
-                                    .font(.system(size: 7.5, weight: .bold))
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2.5)
-                            .background(
-                                Capsule().fill(
-                                    isSelected
-                                        ? Color.white.opacity(0.22)
-                                        : (viewModel.isSubagentExpanded(session.id)
-                                            ? Color.accentColor.opacity(0.18)
-                                            : QuotioTheme.Colors.cardTag(for: colorScheme))
-                                )
-                            )
-                            .overlay(
-                                Capsule().strokeBorder(
-                                    isSelected
-                                        ? Color.white.opacity(0.32)
-                                        : (viewModel.isSubagentExpanded(session.id)
-                                            ? Color.accentColor.opacity(0.4)
-                                            : QuotioTheme.Colors.sidebarBorder(for: colorScheme)),
-                                    lineWidth: 0.5
-                                )
-                            )
-                            .foregroundStyle(
-                                isSelected
-                                    ? Color.white
-                                    : (viewModel.isSubagentExpanded(session.id) ? Color.accentColor : Color.secondary)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .fixedSize()
-                        .contentShape(Capsule())
-                        .help(viewModel.isSubagentExpanded(session.id) ? "收起 \(subagentCount) 个子任务" : "展开 \(subagentCount) 个子任务")
-                    } else if !isSplit {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
+            Button {
+                Task { await viewModel.selectSession(session) }
+            } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 8) {
+                        Text(session.title)
+                            .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(relativeDate(session.lastActiveAt))
+                            .font(.system(size: 10)).monospacedDigit().fixedSize()
                             .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
                     }
+                    HStack(spacing: 5) {
+                        relationshipBadge(for: session, isSelected: isSelected)
+                        Text(session.agent.displayName)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .lineLimit(1)
+                        Text(session.projectName)
+                            .font(.caption2)
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
+                            .lineLimit(1)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(session.title)
+
+            // 展开与打开会话是两个独立操作，作为并列控件保留各自的键盘焦点与可读名称。
+            if relatedCount > 0 {
+                branchDisclosure(parentID: session.id, count: relatedCount, isExpanded: isExpanded,
+                                 searchExpanded: searchExpanded, isSelected: isSelected)
+            } else if !isSplit {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
+                    .accessibilityHidden(true)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: QuotioTheme.Radius.md, style: .continuous)
                 .fill(isSelected ? Color.accentColor : QuotioTheme.Colors.cardBackground(for: colorScheme))
@@ -455,46 +407,92 @@ struct AgentSessionsView: View {
         }
     }
 
-    // MARK: - Subagent Row Card (Indented Child)
+    @ViewBuilder
+    private func branchDisclosure(parentID: String, count: Int, isExpanded: Bool,
+                                  searchExpanded: Bool, isSelected: Bool) -> some View {
+        if searchExpanded {
+            // 搜索自动展开时展示状态而不是无效开关；不触碰用户清空搜索后要恢复的手动状态。
+            let description = String(format: "workspace.sessions.branch.searchExpanded".localized(), count)
+            branchIndicator(count: count, systemImage: "magnifyingglass")
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .background(isSelected ? Color.white.opacity(0.2) : QuotioTheme.Colors.cardTag(for: colorScheme),
+                            in: Capsule())
+                .help(description)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(description)
+        } else {
+            let key = isExpanded ? "workspace.sessions.branch.collapse" : "workspace.sessions.branch.expand"
+            let title = String(format: key.localized(), count)
+            Button {
+                withAnimation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.76)) {
+                    viewModel.toggleSubagentExpansion(parentID)
+                }
+            } label: {
+                branchIndicator(count: count, systemImage: isExpanded ? "chevron.down" : "chevron.right")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .fixedSize()
+            .help(title)
+            .accessibilityLabel(title)
+        }
+    }
 
-    private func subagentRowCard(subagent: WorkspaceSession, parent: WorkspaceSession, isSplit: Bool) -> some View {
-        let isSelected = viewModel.selectedSession?.id == subagent.id
+    private func branchIndicator(count: Int, systemImage: String) -> some View {
+        HStack(spacing: 4) {
+            Text(count.formatted()).monospacedDigit()
+            Image(systemName: systemImage).accessibilityHidden(true)
+        }
+        .font(.caption2.weight(.semibold))
+    }
+
+    private func relationshipBadge(for session: WorkspaceSession, isSelected: Bool = false) -> some View {
+        // 只消费已识别的关系：缩进或父 ID 不能把内部旁支改判成子代理。
+        let key = session.relationship.kind.presentationTitleKey
+        return Text(key.localized())
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .background(isSelected ? Color.white.opacity(0.2) : QuotioTheme.Colors.cardTag(for: colorScheme), in: Capsule())
+            .fixedSize()
+    }
+
+    // MARK: - Related Session Row
+
+    private func relatedSessionRow(_ session: WorkspaceSession) -> some View {
+        let isSelected = viewModel.selectedSession?.id == session.id
 
         return Button {
-            Task { await viewModel.selectSession(subagent) }
+            Task { await viewModel.selectSession(session) }
         } label: {
             HStack(spacing: 8) {
                 // Branch connector icon
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.white : subagent.agent.color)
+                    .foregroundStyle(isSelected ? Color.white : session.agent.color)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        Text(subagent.title)
+                        Text(session.title)
                             .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
                             .foregroundStyle(isSelected ? Color.white : Color.primary)
                             .lineLimit(1)
 
                         Spacer()
 
-                        Text(relativeDate(subagent.lastActiveAt))
+                        Text(relativeDate(session.lastActiveAt))
                             .font(.system(size: 9.5))
                             .monospacedDigit()
                             .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
                     }
 
                     HStack(spacing: 5) {
-                        Text("子任务")
-                            .font(.system(size: 9, weight: .semibold))
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(
-                                Capsule().fill(isSelected ? Color.white.opacity(0.2) : subagent.agent.color.opacity(0.12))
-                            )
-                            .foregroundStyle(isSelected ? Color.white : subagent.agent.color)
+                        relationshipBadge(for: session, isSelected: isSelected)
 
-                        if let summary = subagent.summary, !summary.isEmpty, summary != subagent.title {
+                        if let summary = session.summary, !summary.isEmpty, summary != session.title {
                             Text(summary)
                                 .font(.system(size: 10))
                                 .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
@@ -519,21 +517,22 @@ struct AgentSessionsView: View {
             .contentShape(RoundedRectangle(cornerRadius: QuotioTheme.Radius.sm, style: .continuous))
         }
         .buttonStyle(.plain)
+        .help(session.title)
         .contextMenu {
             Button {
-                Task { await viewModel.resumeSession(subagent) }
+                Task { await viewModel.resumeSession(session) }
             } label: {
-                Label("在独立终端恢复此子任务", systemImage: "terminal.fill")
+                Label("在终端中继续", systemImage: "terminal.fill")
             }
 
             Button {
-                viewModel.copyResumeCommand(session: subagent)
+                viewModel.copyResumeCommand(session: session)
             } label: {
                 Label("复制恢复命令", systemImage: "doc.on.doc")
             }
 
             Button {
-                viewModel.revealInFinder(session: subagent)
+                viewModel.revealInFinder(session: session)
             } label: {
                 Label("在访达中显示", systemImage: "folder")
             }
@@ -541,9 +540,9 @@ struct AgentSessionsView: View {
             Divider()
 
             Button(role: .destructive) {
-                Task { await viewModel.deleteSession(subagent) }
+                Task { await viewModel.deleteSession(session) }
             } label: {
-                Label("删除子任务", systemImage: "trash")
+                Label("删除会话", systemImage: "trash")
             }
             .disabled(viewModel.isDeletingSessions)
         }
@@ -638,6 +637,9 @@ struct AgentSessionsView: View {
                         .help("关闭详情")
                     }
                 }
+
+                // 身份独立占行，不让长项目名或右侧操作挤走身份标签。
+                relationshipBadge(for: session)
 
                 // Full-width Session Title (with vertical spacing from top bar, extending all the way to the right)
                 Text(session.title)

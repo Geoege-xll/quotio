@@ -225,54 +225,21 @@ final class CopilotQuotaFetcherTests: XCTestCase {
         XCTAssertEqual(parsed.legacyIdentityKeys, ["marcos-legacy"])
     }
 
-    // MARK: - Provider-Scoped Monitor Refresh
-
-    // Refreshing ONLY Copilot goes through MonitorRefreshCoordinator.refresh,
-    // which merges `previous` into the fetcher output. Reconciling the fetcher
-    // output alone is not enough — the merged dictionary is what gets stored, so
-    // the stale filename key would survive and #404 would come back for anyone
-    // who uses the per-provider refresh button.
-    func testScopedMonitorRefreshCollapsesStaleKeyFromCoordinatorMerge() async throws {
+    /// 唯一凭据的规范键优先于旧文件名缓存，避免同一凭据在停机直读时出现两个额度桶。
+    func testScopedLegacyAliasPreservesCanonicalQuota() async throws {
         let directory = try Self.makeTemporaryAuthDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
-        try Self.writeCopilotAuthFile(
-            named: "github-copilot-marcosvrs.json",
-            in: directory,
-            fields: ["username": "marcosvrs"]
-        )
+        try Self.writeCopilotAuthFile(named: "github-copilot-marcosvrs.json", in: directory,
+            fields: ["username": "marcosvrs"])
 
-        let staleDate = Date(timeIntervalSince1970: 1_000)
-        let freshDate = Date(timeIntervalSince1970: 2_000)
-        // Snapshot written by an older release, keyed by the full filename.
-        let previous = [
-            "github-copilot-marcosvrs.json": ProviderQuotaData(models: [], lastUpdated: staleDate),
-        ]
-        let fetched = ["marcosvrs": ProviderQuotaData(models: [], lastUpdated: freshDate)]
+        let stale = ProviderQuotaData(models: [], lastUpdated: Date(timeIntervalSince1970: 1_000))
+        let fresh = ProviderQuotaData(models: [], lastUpdated: Date(timeIntervalSince1970: 2_000))
+        let result = await CopilotQuotaFetcher().reconcileLegacyAliases(in: [
+            "github-copilot-marcosvrs.json": stale, "marcosvrs": fresh,
+        ], authDir: directory)
 
-        // Counterfactual: the coordinator merge on its own keeps BOTH keys.
-        let merged = await MonitorRefreshCoordinator().refresh(
-            provider: .copilot,
-            force: true,
-            previous: previous,
-            credentialAvailability: .present
-        ) {
-            fetched
-        }
-        XCTAssertEqual(Set(merged.keys), ["github-copilot-marcosvrs.json", "marcosvrs"])
-
-        // The production scoped-refresh path reconciles that merged result.
-        let scoped = await QuotaViewModel.refreshCopilotThroughCoordinator(
-            coordinator: MonitorRefreshCoordinator(),
-            fetcher: CopilotQuotaFetcher(),
-            previous: previous,
-            credentialAvailability: .present,
-            authDir: directory
-        ) {
-            fetched
-        }
-
-        XCTAssertEqual(Set(scoped.keys), ["marcosvrs"])
-        XCTAssertEqual(scoped["marcosvrs"]?.lastUpdated, freshDate)
+        XCTAssertEqual(Set(result.keys), ["marcosvrs"])
+        XCTAssertEqual(result["marcosvrs"]?.lastUpdated, fresh.lastUpdated)
     }
 
     // MARK: - Keychain Account & Token Hardening

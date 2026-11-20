@@ -3,20 +3,22 @@ import SwiftUI
 /// 本地代理的固定运行入口。进程生命周期和下载在服务层执行，卡片只呈现真实状态。
 struct ProxyRuntimeCard: View {
     @Environment(QuotaViewModel.self) private var viewModel
-    @Environment(\.colorScheme) private var colorScheme
     @State private var copyFeedback: String?
 
     private var manager: CLIProxyManager { viewModel.proxyManager }
-    private var isBusy: Bool { manager.isStarting || manager.isStopping || manager.isDownloading }
+    private var isBusy: Bool {
+        viewModel.isRestartingProxy || manager.isStarting || manager.isStopping || manager.isDownloading
+    }
     private var statusKey: String {
         if manager.isDownloading { return "runtime.installing" }
+        if viewModel.isRestartingProxy { return "runtime.restarting" }
         if manager.isStopping { return "runtime.stopping" }
         if manager.isStarting { return "runtime.starting" }
         if !manager.isBinaryInstalled { return "dashboard.cliNotInstalled" }
         return manager.proxyStatus.running ? "runtime.running" : "runtime.stopped"
     }
 
-    // 恢复原有完整运行卡：启停、地址、刷新与诊断操作直接保留在仪表盘顶部。
+    // 运行卡保留地址与诊断，已安装时统一走同一个重启入口。
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             // 顶部：服务器标识 + 状态胶囊与带图标的操作按钮
@@ -147,11 +149,11 @@ struct ProxyRuntimeCard: View {
                 in: Capsule()
             )
 
-            // 带醒目操作图标的启停控制按钮
+            // 已安装时由同一个 ViewModel 调度重启，服务停止时同样用它重试启动。
             Button {
                 Task {
                     if manager.isBinaryInstalled {
-                        await viewModel.toggleProxy()
+                        await viewModel.restartProxy()
                     } else {
                         await viewModel.installDashboardProxy()
                     }
@@ -161,22 +163,17 @@ struct ProxyRuntimeCard: View {
                     if !manager.isBinaryInstalled {
                         Image(systemName: "arrow.down.circle.fill")
                         Text("dashboard.installCLI".localized())
-                    } else if manager.proxyStatus.running {
-                        Image(systemName: "stop.fill")
-                        Text("runtime.stop".localized())
                     } else {
-                        Image(systemName: "play.fill")
-                        Text("runtime.start".localized())
+                        Image(systemName: "arrow.clockwise")
+                        Text("runtime.restart".localized())
                     }
                 }
                 .font(.callout.weight(.medium))
             }
             .buttonStyle(.borderedProminent)
-            .tint(
-                !manager.isBinaryInstalled ? .blue :
-                manager.proxyStatus.running ? Color(red: 0.88, green: 0.25, blue: 0.25) : .blue
-            )
+            .tint(.blue)
             .disabled(isBusy)
+            .accessibilityIdentifier(manager.isBinaryInstalled ? "dashboard.proxy.restart" : "dashboard.proxy.install")
         }
     }
 

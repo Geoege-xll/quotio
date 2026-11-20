@@ -54,6 +54,7 @@ final class QuotaHistoryTests: XCTestCase {
         let preferences = try defaults(), store = QuotaHistoryStore(databaseURL: try location())
         preferences.set(OperatingMode.monitor.rawValue, forKey: "operatingMode")
         let mode = OperatingModeManager(defaults: preferences)
+        mode.setMode(.monitor)
         let vm = QuotaViewModel(startsBackgroundServices: false, modeManager: mode,
             menuBarSettings: MenuBarSettingsManager(defaults: preferences))
         vm.customProvidersForTesting = []
@@ -194,6 +195,37 @@ final class QuotaHistoryTests: XCTestCase {
         XCTAssertEqual(local.map(\.value), [70]); XCTAssertEqual(monitor.map(\.value), [20]); XCTAssertEqual(another.map(\.value), [30])
         let unchanged = try await store.record([old], generation: 0, now: date.addingTimeInterval(5))
         XCTAssertFalse(unchanged)
+    }
+
+    func testLegacyCatalogUsesExactModeProviderAndKeyWithinRetentionPeriod() async throws {
+        let store = QuotaHistoryStore(databaseURL: try location())
+        let monitor = OperatingMode.monitor.rawValue
+        let sameKey = "saved-identity@example.invalid"
+        let legacy = account(sameKey, mode: monitor)
+        let secondProvider = QuotaHistoryAccount(mode: monitor, provider: .codex, accountKey: sameKey)
+        let expired = account("expired-only", mode: monitor)
+        let cutoff = now.addingTimeInterval(-QuotaHistoryStore.retention)
+        // 让过期样本仍真实存在于库里：写入时保存有效，读取时已刚刚超出三十天。
+        let writeTime = now.addingTimeInterval(-30)
+        let samples = [
+            QuotaHistorySample(account: legacy, point: point(16, date: cutoff)),
+            QuotaHistorySample(account: legacy, point: point(17, date: now.addingTimeInterval(-120))),
+            QuotaHistorySample(account: secondProvider, point: point(23, date: writeTime)),
+            QuotaHistorySample(account: account(sameKey), point: point(83, date: writeTime)),
+            QuotaHistorySample(account: account("current-only"), point: point(67, date: writeTime)),
+            QuotaHistorySample(account: expired, point: point(44, date: cutoff.addingTimeInterval(-1))),
+            QuotaHistorySample(account: account("future-only", mode: monitor),
+                point: point(37, date: now.addingTimeInterval(10)))
+        ]
+        _ = try await store.record(samples, generation: 0, now: writeTime)
+        let previouslyVisible = try await store.metrics(account: expired, now: writeTime)
+        XCTAssertEqual(previouslyVisible.map(\.value), [44], "验证过期样本仍保存在原库中")
+
+        let legacyAccounts = try await store.accounts(mode: monitor, now: now)
+        XCTAssertEqual(legacyAccounts.count, 2, "同一精确身份的多个采样只能形成一个选择项")
+        XCTAssertEqual(Set(legacyAccounts), [legacy, secondProvider])
+        let chart = try await store.points(account: legacy, metricID: "fixture", range: .month, now: now)
+        XCTAssertEqual(chart.map(\.point.value), [16, 17], "保留期限边界包含在内，且图表不混入同键的本地代理或其他提供商观测")
     }
 
     func testClearRejectsLateGenerationAndFutureToleranceReplay() async throws {

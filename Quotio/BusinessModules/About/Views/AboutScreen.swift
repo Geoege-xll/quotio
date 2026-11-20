@@ -264,9 +264,7 @@ struct AboutScreen: View {
             VStack(spacing: 12) {
                 AboutUpdateCard()
 
-                if OperatingModeManager.shared.isLocalProxyMode {
-                    AboutProxyUpdateCard()
-                }
+                AboutProxyUpdateCard()
             }
         }
     }
@@ -402,20 +400,6 @@ struct AboutUpdateCard: View {
                         .onChange(of: autoCheckUpdates) { _, newValue in
                             updaterService.automaticallyChecksForUpdates = newValue
                         }
-                }
-
-                HStack {
-                    Text("settings.updateChannel.receiveBeta".localized())
-                        .font(.subheadline)
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { updaterService.updateChannel == .beta },
-                        set: { newValue in
-                            updaterService.updateChannel = newValue ? .beta : .stable
-                        }
-                    ))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
                 }
             }
 

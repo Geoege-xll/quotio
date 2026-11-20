@@ -58,7 +58,8 @@ extension QuotaViewModel {
         accountKey: String,
         availableModels: [WarmupModelInfo],
         authIndex: String,
-        apiClient: ManagementAPIClient
+        apiClient: ManagementAPIClient,
+        isCurrent: () -> Bool = { true }
     ) async {
         guard provider == .antigravity else {
             // Warmup not supported for this provider; no log.
@@ -84,7 +85,7 @@ extension QuotaViewModel {
         }
         
         for model in models {
-            if Task.isCancelled { break }
+            if Task.isCancelled || !isCurrent() { break }
             do {
                 updateWarmupStatus(for: account) { status in
                     status.currentModel = model
@@ -95,11 +96,13 @@ extension QuotaViewModel {
                     authIndex: authIndex,
                     model: model
                 )
+                guard isCurrent() else { break }
                 updateWarmupStatus(for: account) { status in
                     status.progressCompleted += 1
                     status.modelStates[model] = .succeeded
                 }
             } catch {
+                guard isCurrent() else { break }
                 updateWarmupStatus(for: account) { status in
                     status.progressCompleted += 1
                     status.modelStates[model] = .failed
@@ -110,14 +113,14 @@ extension QuotaViewModel {
         updateWarmupStatus(for: account) { status in
             status.isRunning = false
             status.currentModel = nil
-            status.lastRun = Date()
+            if isCurrent() { status.lastRun = Date() }
         }
     }
 
     /// 仍按原账号身份寻找凭据并复用主类缓存入口，排序只影响返回展示，不改缓存内容。
     func warmupAvailableModels(provider: AIProvider, accountKey: String) async -> [String] {
-        guard provider == .antigravity else { return [] }
-        guard let apiClient else { return [] }
+        guard provider == .antigravity, hasCurrentCPAAccountDirectory, let apiClient else { return [] }
+        let source = refreshContext()
         guard let authInfo = warmupAuthInfo(provider: provider, accountKey: accountKey) else { return [] }
         let models = await fetchWarmupModels(
             provider: provider,
@@ -125,6 +128,7 @@ extension QuotaViewModel {
             authFileName: authInfo.authFileName,
             apiClient: apiClient
         )
+        guard canCommitQuotaRefresh(source, client: apiClient) else { return [] }
         return models.map(\.id).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 

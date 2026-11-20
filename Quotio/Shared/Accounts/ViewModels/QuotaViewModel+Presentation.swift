@@ -26,13 +26,13 @@ extension QuotaViewModel {
         refreshingAccounts.contains(account) || refreshingProviders.contains(account.provider)
     }
 
-    /// 保持原提供商能力规则，主类槽位申请与界面继续调用同一方法，不另设能力列表。
+    /// 以实际部署的主查询、精确补查及显式配置能力决定额度按钮。没有合法路径的提供商仍可展示目录。
     func supportsScopedRefresh(for provider: AIProvider) -> Bool {
+        if CPAQuotaFetcher.supports(provider) || CPAQuotaFetcher.supportsSupplemental(provider)
+            || provider.isImportedFromLocalIDE { return true }
         switch provider {
-        case .qwen, .iflow, .vertex, .minimax:
-            return false
-        default:
-            return true
+        case .glm, .deepseek, .moonshot, .warp, .clinePass: return true
+        default: return false
         }
     }
 
@@ -48,7 +48,12 @@ extension QuotaViewModel {
            updated == nil || updated! <= issue.occurredAt {
             return ("outdated", issue.message)
         }
-        guard let updated else { return (nil, nil) }
+        guard let updated else {
+            if !supportsScopedRefresh(for: account.provider) {
+                return ("outdated", "accounts.quota.refresh.unsupported".localized())
+            }
+            return (nil, nil)
+        }
         let staleAfter = refreshSettings.refreshCadence.intervalSeconds ?? 600
         if Date().timeIntervalSince(updated) > staleAfter {
             return (

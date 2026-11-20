@@ -14,7 +14,8 @@ struct MenuAccountCardView: View {
     @Environment(QuotaViewModel.self) private var viewModel
     let accountKey: String
     let email: String
-    let data: ProviderQuotaData
+    // 目录确认的身份可能尚未取得额度；可选值避免为这种账号伪造更新时间或成功状态。
+    let data: ProviderQuotaData?
     let provider: AIProvider
     let subscriptionInfo: SubscriptionInfo?
     let isActiveInIDE: Bool
@@ -53,12 +54,12 @@ struct MenuAccountCardView: View {
             return (info.tierDisplayName, .secondary.opacity(0.1), .secondary)
         }
         
-        if provider == .codex, let planName = codexPlanDisplayName(data.planType) {
+        if provider == .codex, let planName = codexPlanDisplayName(data?.planType) {
             let config = planConfig(for: planName)
             return (planName, config.bgColor, config.textColor)
         }
 
-        guard let planName = data.planDisplayName else { return nil }
+        guard let planName = data?.planDisplayName else { return nil }
         return planConfig(for: planName)
     }
 
@@ -126,13 +127,31 @@ struct MenuAccountCardView: View {
     }
     
     private var isAntigravity: Bool {
-        provider == .antigravity && !data.models.isEmpty
+        provider == .antigravity && data?.models.isEmpty == false
     }
     
     /// 页面与状态栏共用完整明细，百分比及重置时间均来自同一个上游额度桶。
     private var antigravityGroups: [AntigravityDisplayGroup] {
-        guard isAntigravity else { return [] }
+        guard isAntigravity, let data else { return [] }
         return AntigravityDisplayGroup.make(from: data.models)
+    }
+
+    private var quotaIssue: String? {
+        // 失败后仍展示上次成功额度；只有比该快照更新的错误才是当前提示。
+        let updated = data?.lastUpdated ?? .distantPast
+        if let issue = viewModel.monitorAccountIssues[accountID], issue.occurredAt >= updated {
+            return issue.message
+        }
+        if let issue = viewModel.monitorIssues[provider], issue.occurredAt >= updated {
+            return issue.message
+        }
+        if let file = viewModel.authFiles.first(where: {
+            $0.providerType == provider && $0.menuBarAccountKey == accountKey && $0.status == "error"
+        }) {
+            return file.humanReadableStatus ?? "status.error".localized()
+        }
+        guard !viewModel.supportsScopedRefresh(for: provider) else { return nil }
+        return "accounts.quota.refresh.unsupported".localized()
     }
     
     var body: some View {
@@ -140,6 +159,15 @@ struct MenuAccountCardView: View {
             headerSection
             
             quotaContentSection
+
+            if let issue = quotaIssue {
+                Label(issue, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+                    .help(issue)
+                    .accessibilityElement(children: .combine)
+            }
             
             footerSection
         }
@@ -191,7 +219,7 @@ struct MenuAccountCardView: View {
             Button {
                 Task { await viewModel.refreshQuota(for: accountID) }
             } label: {
-                if viewModel.isRefreshing(account: accountID) {
+                if viewModel.canRefreshAccountQuotas && viewModel.isRefreshing(account: accountID) {
                     ProgressView()
                         .controlSize(.mini)
                         .frame(width: 20, height: 20)
@@ -204,10 +232,11 @@ struct MenuAccountCardView: View {
             }
             .buttonStyle(.plain)
             .disabled(
-                viewModel.isRefreshBlocked(for: accountID)
+                !viewModel.canRefreshAccountQuotas || viewModel.isRefreshBlocked(for: accountID)
                     || !viewModel.supportsScopedRefresh(for: provider)
             )
             .help("action.refreshQuota".localized())
+            .accessibilityLabel("action.refreshQuota".localized())
             .accessibilityIdentifier("menubar.account.refresh")
             
             Image(systemName: "chevron.right")
@@ -270,23 +299,24 @@ struct MenuAccountCardView: View {
     
     private var quotaContentSection: some View {
         let isCardStyle = displayStyle == .card
+        let quotaModels = data?.models ?? []
         let models: [ModelBadgeData] = {
             if isAntigravity {
                 return antigravityGroups.map { ModelBadgeData(name: $0.name, percentage: $0.percentage, resetTime: $0.resetTime, sourceID: $0.id) }
             } else {
-                let meterModels = data.models.filter { !$0.isStandaloneMetric }.map {
+                let meterModels = quotaModels.filter { !$0.isStandaloneMetric }.map {
                     ModelBadgeData(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime, sourceID: $0.id)
                 }
                 guard isCardStyle else { return meterModels }
-                let standaloneModels = data.models.filter(\.isStandaloneMetric).map {
+                let standaloneModels = quotaModels.filter(\.isStandaloneMetric).map {
                     ModelBadgeData(name: $0.displayName, percentage: $0.percentage, resetTime: $0.resetTime, usage: $0.formattedUsage, sourceID: $0.id)
                 }
                 return meterModels + standaloneModels
             }
         }()
-        let standaloneModels = isAntigravity || isCardStyle ? [] : data.models.filter(\.isStandaloneMetric)
+        let standaloneModels = isAntigravity || isCardStyle ? [] : quotaModels.filter(\.isStandaloneMetric)
         let factorySections = provider == .factoryDroid
-            ? FactoryDroidQuotaSection.sections(from: data.models.filter { !$0.isStandaloneMetric })
+            ? FactoryDroidQuotaSection.sections(from: quotaModels.filter { !$0.isStandaloneMetric })
             : []
         
         return VStack(spacing: 6) {
@@ -340,39 +370,31 @@ struct MenuAccountCardView: View {
     
     // MARK: - Footer
 
+    @ViewBuilder
     private var footerSection: some View {
-        HStack(spacing: 6) {
-            ideControl
-            Spacer(minLength: 4)
+        if data != nil || isActiveInIDE || onUseAccount != nil {
+            HStack(spacing: 6) {
+                ideControl
+                Spacer(minLength: 4)
 
-            // Last Update
-            Text(data.lastUpdated.formatted(.relative(presentation: .named)))
-                .font(.system(size: 9, design: .rounded))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                if let data {
+                    HStack(spacing: 4) {
+                        if let source = data.refreshSource {
+                            Text(source.localizationKey.localized())
+                            Text("·").accessibilityHidden(true)
+                        }
+                        Text(data.lastUpdated.formatted(.relative(presentation: .named)))
+                    }
+                    .font(.system(size: 9, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .accessibilityElement(children: .combine)
+                }
+            }
         }
     }
     
     private var displayStyle: QuotaDisplayStyle { settings.quotaDisplayStyle }
-    
-    private var primaryResetModel: ModelQuota? {
-        let formatter = ISO8601DateFormatter()
-        let now = Date()
-        
-        let validModels = data.models.filter { model in
-            guard let date = formatter.date(from: model.resetTime) else { return false }
-            return date > now
-        }
-        
-        return validModels.sorted { m1, m2 in
-            if abs(m1.percentage - m2.percentage) > 0.1 {
-                return m1.percentage < m2.percentage
-            }
-            let d1 = formatter.date(from: m1.resetTime) ?? Date.distantFuture
-            let d2 = formatter.date(from: m2.resetTime) ?? Date.distantFuture
-            return d1 < d2
-        }.first
-    }
     
     private func formatLocalTime(_ isoString: String) -> String {
         // Try parsing with fractional seconds first, then standard format
