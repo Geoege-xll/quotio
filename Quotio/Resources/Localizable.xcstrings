@@ -32114,18 +32114,18 @@
       }
     },
     "settings.navigation.general.subtitle" : {
-      "extractionState" : "stale",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Operating mode, startup, language, appearance, menu bar and Dock."
+            "value" : "Startup, language, appearance, menu bar, Dock and terminal."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "运行模式、登录启动、界面语言、外观与菜单栏 Dock。"
+            "value" : "登录启动、界面语言、外观、菜单栏、程序坞与终端。"
           }
         }
       }
