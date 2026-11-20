@@ -22,16 +22,9 @@ final class WorkspaceSessionPerformanceTests: XCTestCase {
 
         let locked = expectation(description: "独立连接已持有 SQLite 写锁")
         let probe = DeletionHeartbeatProbe()
-        let holding = Task.detached {
-            try Self.withDatabase(database) { handle in
-                try Self.execute(handle, "BEGIN IMMEDIATE")
-                probe.setLocked(true)
-                locked.fulfill()
-                // 固定的锁占用模拟真实客户端写入；计时只制造阻塞，不用毫秒阈值断言机器性能。
-                Thread.sleep(forTimeInterval: 0.4)
-                probe.setLocked(false)
-                try Self.execute(handle, "COMMIT")
-            }
+        // 显式传入 Sendable 值；将 SQLite 句柄和同步闭包留在非隔离辅助方法内，避免 Swift 6.2 从嵌套闭包推断隔离。
+        let holding = Task.detached { @Sendable [database, probe, locked] in
+            try WorkspaceSessionPerformanceTests.holdDatabaseWriteLock(at: database, probe: probe, locked: locked)
         }
         await fulfillment(of: [locked], timeout: 3)
         let heartbeat = Task { @MainActor in
@@ -79,6 +72,18 @@ final class WorkspaceSessionPerformanceTests: XCTestCase {
     private nonisolated static func session(_ id: String, path: String = "/fixture.jsonl", parent: String? = nil) -> WorkspaceSession {
         WorkspaceSession(id: id, agent: .codex, title: id, projectName: "agent_workflow", lastActiveAt: .distantPast,
                          filePath: path, fileSizeBytes: 0, messageCount: 0, resumeCommand: "", parentSessionID: parent)
+    }
+
+    private nonisolated static func holdDatabaseWriteLock(at path: String, probe: DeletionHeartbeatProbe, locked: XCTestExpectation) throws {
+        try withDatabase(path) { handle in
+            try execute(handle, "BEGIN IMMEDIATE")
+            probe.setLocked(true)
+            locked.fulfill()
+            // 固定的锁占用模拟真实客户端写入；计时只制造阻塞，不用毫秒阈值断言机器性能。
+            Thread.sleep(forTimeInterval: 0.4)
+            probe.setLocked(false)
+            try execute(handle, "COMMIT")
+        }
     }
 
     private nonisolated static func withDatabase(_ path: String, body: (OpaquePointer) throws -> Void) throws {
